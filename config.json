@@ -1,0 +1,26 @@
+{
+  "common": {
+    "bids_folder": "/data/local/Study/rawdata",
+    "output_folder": "/data/local/Study/derivatives",
+    "tmp_folder": "/data/local/Study/code",
+    "container": "/data/local/container/fmriprep/fmriprep-24.0.0.sif",
+    "optional_folder": "/data/local/Study/", 
+    "jobs": 1,
+    "pilottest": false
+  },
+  "app": {
+    "analysis_level": "participant",
+    "options": [
+      "--fs-license-file", "/fs/license.txt",
+      "--output-spaces", "MNI152NLin2009cAsym:res-2", "fsaverage:den-10k",
+      "--skip_bids_validation"
+    ],
+    "mounts": [
+      { "source": "/usr/local/freesurfer", "target": "/fs" }
+    ],
+    "output_check": {
+      "directory": "derivatives",
+      "pattern": "sub-{subject}_report.html"
+    }
+  }
+}
