@@ -144,7 +144,7 @@ case "$pipeline" in
       done
     done
     ;;
-  freesurfer)
+   freesurfer)
     echo "Running check for freesurfer pipeline..."
     # Loop over subjects in the BIDS directory
     for subj_dir in "$BIDS_DIR"/sub-*; do
@@ -193,7 +193,6 @@ case "$pipeline" in
       fi
       
       # Find all directories in the freesurfer output directory starting with the subject id.
-      # (Assuming that freesurfer output folders are directly under OUT_DIR.)
       fs_dirs=( "$OUT_DIR"/${subj}* )
       
       # Filter only those entries that are directories.
@@ -218,6 +217,36 @@ case "$pipeline" in
         else
           echo "  [FOUND] recon-all.done in folder: $fsd"
         fi
+
+        # --- New check: hippocampal subfield segmentation files ---
+        # For multi-session subjects, we assume that the cross-sectional freesurfer outputs
+        # (i.e. those corresponding to a BIDS session) have "ses-" in the folder name.
+        # For single-session subjects, check the only output folder.
+        if [ $fs_count -eq 1 ] || [[ "$fsd" == *ses-* ]]; then
+          mri_dir="$fsd/mri"
+          if [ -d "$mri_dir" ]; then
+            # Check for the hippoSfVolumes file
+            hippoSf=( "$mri_dir/"*hippoSfVolumes-T1-T2.*.txt )
+            if [ ${#hippoSf[@]} -eq 0 ]; then
+              echo "  [MISSING] HippoSfVolumes-T1-T2 .txt file not found in $mri_dir"
+              missing_items+=( "$fsd/mri: hippoSfVolumes-T1-T2 file not found" )
+            else
+              echo "  [FOUND] HippoSfVolumes-T1-T2 .txt file in $mri_dir"
+            fi
+
+            # Check for the hippoAmygLabels file
+            hippoAmyg=( "$mri_dir/"*hippoAmygLabels-T1-T2.*.txt )
+            if [ ${#hippoAmyg[@]} -eq 0 ]; then
+              echo "  [MISSING] HippoAmygLabels-T1-T2 .txt file not found in $mri_dir"
+              missing_items+=( "$fsd/mri: hippoAmygLabels-T1-T2 file not found" )
+            else
+              echo "  [FOUND] HippoAmygLabels-T1-T2 .txt file in $mri_dir"
+            fi
+          else
+            echo "  [WARNING] No mri directory in $fsd, skipping hippocampal segmentation check."
+          fi
+        fi
+        # --- End new check ---
       done
       
     done
