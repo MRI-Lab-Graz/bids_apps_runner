@@ -1,5 +1,18 @@
 # BIDS App Runner Documentation
 
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [Recommended: Using a Dedicated Python Environment](#recommended-using-a-dedicated-python-environment)
+- [Configuration File](#configuration-file)
+	- [Configuration Details](#configuration-details)
+- [Usage](#usage)
+- [What Happens When You Run the Script](#what-happens-when-you-run-the-script)
+- [Example Scenario](#example-scenario)
+- [Troubleshooting](#troubleshooting)
+
+## General
+
 This Python script allows you to run a BIDS App container (such as fmriprep, mriqc, etc.) using a single JSON configuration file. The configuration file contains two main sections:
 
 - **common**: General settings (paths to data, output directories, container image, parallel processing options, etc.)
@@ -15,8 +28,32 @@ Before running the script, ensure that:
 
 - You have **Python 3** installed.
 - [Apptainer](https://apptainer.org/) (or Singularity, if applicable) is installed on your system.
-- The container image specified in your configuration file exists.
+- The container image specified in your configuration file exists. If not, see [Create apptainer container](#Create apptainer container)
 - Your BIDS dataset is organized correctly in the specified bids folder.
+
+### Create apptainer container
+
+#### Download apptainer script
+
+```bash
+sudo bash build_apptainer.sh -o /data/local/container/mriqc/ -t /data/local/container/tmp/
+```
+
+Options:
+
+-o: output for container
+-t:  TMP folder
+
+**_NOTE:_** if version == latest => container_name = latest (CAVE!)
+
+Enter Docker image repository (e.g., 'pennbbl/qsiprep'):
+
+- Go to Docker Hub
+- Search for version
+- Select for example "nipreps/mriqc"
+- Choose version (not latest and not latest release candidate-25.0.0rc0)
+
+"Wait until done"
 
 ------
 
@@ -26,19 +63,19 @@ It is advisable to run this script in a dedicated Python environment. This pract
 
 1. **Create a virtual environment:**
 
-   ```bash
+```bash
    python3 -m venv bidsapp_env
-   ```
+```
 
 2. **Activate the virtual environment:**
 
-   - On Unix or MacOS:
+- On Unix or MacOS:
 
-     ```bash
-     source bidsapp_env/bin/activate
-     ```
+```bash
+source bidsapp_env/bin/activate
+```
 
-   - On Windows:
+- On Windows:
 
      ```bash
      bidsapp_env\Scripts\activate
@@ -46,21 +83,21 @@ It is advisable to run this script in a dedicated Python environment. This pract
 
 3. **Install required dependencies:**
 
-   If your script requires additional packages, install them using `pip`. For example:
+If your script requires additional packages, install them using `pip`. For example:
 
-   ```bash
-   pip install argparse concurrent.futures
-   ```
+```bash
+pip install argparse concurrent.futures
+```
 
-   *(Note: Many of the modules used in this script are part of Python's standard library, so you might not need extra packages unless you extend the script.)*
+*(Note: Many of the modules used in this script are part of Python's standard library, so you might not need extra packages unless you extend the script.)*
 
-4. **Run the script within the virtual environment:**
+1. **Run the script within the virtual environment:**
 
    ```bash
    python run_bidsapp.py -x config.json
    ```
 
-5. **Deactivate the environment when done:**
+2. **Deactivate the environment when done:**
 
    ```bash
    deactivate
@@ -88,26 +125,26 @@ Create a JSON configuration file (e.g., `config.json`) with the following struct
   "app": {
     "analysis_level": "participant",
     "options": [
-      "--fs-license-file", "/fs/license.txt",
-      "--output-spaces", "MNI152NLin2009cAsym:res-2", "fsaverage:den-10k",
-      "--skip_bids_validation"
+"--fs-license-file", "/fs/license.txt",
+"--output-spaces", "MNI152NLin2009cAsym:res-2", "fsaverage:den-10k",
+"--skip_bids_validation"
     ],
     "mounts": [
-      { "source": "/usr/local/freesurfer", "target": "/fs" }
+{ "source": "/usr/local/freesurfer", "target": "/fs" }
     ],
     "output_check": {
-      "directory": "derivatives",
-      "pattern": "sub-{subject}_report.html"
+"directory": "derivatives",
+"pattern": "sub-{subject}_report.html"
     }
   }
 }
 ```
 
->Note: It is important to prepare each argument in quotes. Is is alos true for multiple arguments like --output-spaces. You can see that each output space is in quotes and comma seperated. **Do not use** "MNI152NLin2009cAsym:res-2 fsaverage:den-10k" !
+>Note: It is important to prepare each argument in quotes. It is also true for multiple arguments like `--output-spaces`. You can see that each output space is in quotes and comma-separated. **Do not use** "MNI152NLin2009cAsym:res-2 fsaverage:den-10k"!
 
 ### Configuration Details
 
-- common
+- **common**
   - `bids_folder`: Path to your BIDS-formatted dataset.
   - `output_folder`: Directory where the container should write its output.
   - `tmp_folder`: Temporary folder used during processing.
@@ -115,7 +152,7 @@ Create a JSON configuration file (e.g., `config.json`) with the following struct
   - `optional_folder`: An optional directory (if needed by your container) that will be mounted.
   - `jobs`: Number of parallel jobs to run (default is the number of CPUs if not specified).
   - `pilottest`: If set to `true`, the script will process only one randomly chosen subject.
-- app
+- **app**
   - `analysis_level`: Analysis type. For subject-level analysis use `"participant"`; for group-level, set it to another value.
   - `options`: A list of additional command-line options to pass to the container.
   - `mounts`: A list of additional directory mounts. Each mount should specify a `source` (local folder) and a `target` (mount point inside the container).
