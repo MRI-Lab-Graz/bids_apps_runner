@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# check_pipeline.sh
+# check_app_output.sh
 #
 # This script compares the (gold-standard) BIDS folder to the outputs
 # of a given processing pipeline. Use the -p flag to select the pipeline:
@@ -34,13 +34,13 @@
 #         and that it contains at least one .nii.gz file.
 #
 # Usage:
-#   ./check_pipeline.sh -p <pipeline> <BIDS_directory> <pipeline_output_directory>
+#   ./check_app_output.sh -p <pipeline> <BIDS_directory> <pipeline_output_directory>
 #
 # Examples:
-#   ./check_pipeline.sh -p fmriprep    /path/to/BIDS /path/to/fmriprep
-#   ./check_pipeline.sh -p freesurfer  /path/to/BIDS /path/to/freesurfer
-#   ./check_pipeline.sh -p qsiprep     /path/to/BIDS /path/to/qsiprep
-#   ./check_pipeline.sh -p qsirecon    /path/to/BIDS /path/to/qsiprep_outputs
+#   ./check_app_output.sh -p fmriprep    /path/to/BIDS /path/to/fmriprep
+#   ./check_app_output.sh -p freesurfer  /path/to/BIDS /path/to/freesurfer
+#   ./check_app_output.sh -p qsiprep     /path/to/BIDS /path/to/qsiprep
+#   ./check_app_output.sh -p qsirecon    /path/to/BIDS /path/to/qsiprep_outputs
 #
 
 # Display usage message
@@ -92,83 +92,138 @@ fi
 missing_items=()
 
 case "$pipeline" in
-  fmriprep)
-    echo "Running check for fmriprep pipeline..."
-    # Loop over subjects in the BIDS directory
-    for subj_dir in "$BIDS_DIR"/sub-*; do
-      [ -d "$subj_dir" ] || continue
-      subj=$(basename "$subj_dir")
-      echo "Checking $subj ..."
-      
-      # Check for session folders (if any)
-      if compgen -G "$subj_dir/ses-*" > /dev/null; then
-        sessions=( "$subj_dir"/ses-* )
-      else
-        sessions=( "$subj_dir" )
-      fi
-      
-      # Loop over each session (or subject-level folder)
-      for sess_dir in "${sessions[@]}"; do
-        func_dir="$sess_dir/func"
-        if [ ! -d "$func_dir" ]; then
-          echo "  [WARNING] No 'func' directory in $(basename "$sess_dir")"
-          continue
-        fi
+fmriprep)
+  echo "Running check for fmriprep pipeline..."
 
-        # Process each BIDS functional file
-        for bids_func in "$func_dir"/*_bold.nii*; do
-          [ -e "$bids_func" ] || continue
-          bids_base=$(basename "$bids_func")
-          
-          # Extract a prefix (everything before _bold)
-          prefix=$(echo "$bids_base" | sed 's/_bold.*//')
-          
-          # Build the expected fmriprep path: assume similar subject and session structure
-          fmriprep_subj_dir="$OUT_DIR/$subj"
-          sess_basename=$(basename "$sess_dir")
-          if [[ "$sess_basename" == ses-* ]]; then
-            fmriprep_subj_dir="$fmriprep_subj_dir/$sess_basename"
-          fi
-          fmriprep_func_dir="$fmriprep_subj_dir/func"
-          
-          # Look for any file that starts with the prefix and contains "desc-preproc_bold"
-          search_pattern="$fmriprep_func_dir/${prefix}*desc-preproc_bold.nii*"
-          matches=( $search_pattern )
-          if [ ${#matches[@]} -eq 0 ]; then
-            echo "  [MISSING] fmriprep file for: $bids_func"
-            missing_items+=( "$bids_func" )
-          else
-            echo "  [FOUND]   fmriprep file for: $bids_func"
-          fi
-        done
+  # For later cross-subject consistency check of the surface-based outputs
+  declare -A has_surface_output
+  all_subjects=()
+  surface_found_global=0
+
+  # Loop over subjects in the BIDS directory
+  for subj_dir in "$BIDS_DIR"/sub-*; do
+    [ -d "$subj_dir" ] || continue
+    subj=$(basename "$subj_dir")
+    echo "Checking $subj ..."
+    all_subjects+=( "$subj" )
+    surface_found_for_subject=0
+
+    # Check for session folders (if any)
+    if compgen -G "$subj_dir/ses-*" > /dev/null; then
+      sessions=( "$subj_dir"/ses-* )
+    else
+      sessions=( "$subj_dir" )
+    fi
+
+    # Loop over each session (or subject-level folder)
+    for sess_dir in "${sessions[@]}"; do
+      func_dir="$sess_dir/func"
+      if [ ! -d "$func_dir" ]; then
+        echo "  [WARNING] No 'func' directory in $(basename "$sess_dir")"
+        continue
+      fi
+
+      # Process each BIDS functional file for volumetric (preprocessed) data
+      for bids_func in "$func_dir"/*_bold.nii*; do
+        [ -e "$bids_func" ] || continue
+        bids_base=$(basename "$bids_func")
+        # Get the part before "_bold" to match subject, session, and task info
+        prefix=$(echo "$bids_base" | sed 's/_bold.*//')
+
+        # Build the expected fmriprep path (assumes similar subject/session structure)
+        fmriprep_subj_dir="$OUT_DIR/$subj"
+        sess_basename=$(basename "$sess_dir")
+        if [[ "$sess_basename" == ses-* ]]; then
+          fmriprep_subj_dir="$fmriprep_subj_dir/$sess_basename"
+        fi
+        fmriprep_func_dir="$fmriprep_subj_dir/func"
+
+        # Look for any file that starts with the prefix and contains "desc-preproc_bold"
+        search_pattern="$fmriprep_func_dir/${prefix}*desc-preproc_bold.nii*"
+        matches=( $search_pattern )
+        if [ ${#matches[@]} -eq 0 ]; then
+          echo "  [MISSING] fmriprep file for: $bids_func"
+          missing_items+=( "$bids_func" )
+        fi
       done
+
+      # --- New: Check for surface-based outputs in this session ---
+      # These files are named like: sub-<ID>_ses-<X>_task-*_hemi-<L or R>_space-<...>_bold.func.gii
+      if [ -d "$fmriprep_func_dir" ]; then
+         surface_files=( "$fmriprep_func_dir"/*_hemi-*_bold.func.gii )
+         if [ ${#surface_files[@]} -gt 0 ]; then
+            surface_found_for_subject=1
+            surface_found_global=1
+            # For each surface file, ensure that the corresponding hemisphere pair exists
+            for file in "${surface_files[@]}"; do
+               if [[ "$file" == *"hemi-L"* ]]; then
+                  expected_r="${file/hemi-L/hemi-R}"
+                  if [ ! -f "$expected_r" ]; then
+                     echo "  [MISSING] Corresponding hemi-R file for: $file"
+                     missing_items+=( "$file: corresponding hemi-R file not found" )
+                  fi
+               elif [[ "$file" == *"hemi-R"* ]]; then
+                  expected_l="${file/hemi-R/hemi-L}"
+                  if [ ! -f "$expected_l" ]; then
+                     echo "  [MISSING] Corresponding hemi-L file for: $file"
+                     missing_items+=( "$file: corresponding hemi-L file not found" )
+                  fi
+               fi
+            done
+         fi
+      fi
+      # --- End new check for surface outputs ---
     done
-    ;;
-   freesurfer)
+
+    # Record for this subject whether any surface file was found (in any session)
+    has_surface_output[$subj]=$surface_found_for_subject
+  done
+
+  # --- Global check: if any subject has surface-based outputs, then all subjects must have them ---
+  if [ "$surface_found_global" -eq 1 ]; then
+    for s in "${all_subjects[@]}"; do
+      if [ "${has_surface_output[$s]}" != "1" ]; then
+         echo "  [MISSING] Surface-based outputs missing for subject $s, but present in others."
+         missing_items+=( "$s: Missing surface-based outputs" )
+      fi
+    done
+  fi
+  ;;
+
+  freesurfer)
     echo "Running check for freesurfer pipeline..."
+    # Prepare to track hippocampal segmentation files per subject.
+    declare -A subject_cross_hippoSf
+    declare -A subject_cross_amyg
+    declare -A subject_long_hippoSf
+    declare -A subject_long_amyg
+    declare -A subject_is_multisession
+    all_subjects=()
+
     # Loop over subjects in the BIDS directory
     for subj_dir in "$BIDS_DIR"/sub-*; do
       [ -d "$subj_dir" ] || continue
       subj=$(basename "$subj_dir")
       echo "Checking freesurfer outputs for subject: $subj"
-      
+      all_subjects+=( "$subj" )
+      # Initialize flags for this subject.
+      subject_cross_hippoSf[$subj]=0
+      subject_cross_amyg[$subj]=0
+      subject_long_hippoSf[$subj]=0
+      subject_long_amyg[$subj]=0
+
       # Count sessions with anatomical data.
       anat_sessions=0
-      
-      # First, check if the subject directory has session subfolders.
       if compgen -G "$subj_dir/ses-*" > /dev/null; then
-        # Loop over session folders
         for sess_dir in "$subj_dir"/ses-*; do
           anat_dir="$sess_dir/anat"
           if [ -d "$anat_dir" ]; then
-            # Look for any T1w file (supports nii or nii.gz)
             if compgen -G "$anat_dir"/*_T1w.nii* > /dev/null; then
               anat_sessions=$((anat_sessions+1))
             fi
           fi
         done
       else
-        # No sessions; check the subject folder directly.
         anat_dir="$subj_dir/anat"
         if [ -d "$anat_dir" ]; then
           if compgen -G "$anat_dir"/*_T1w.nii* > /dev/null; then
@@ -176,39 +231,42 @@ case "$pipeline" in
           fi
         fi
       fi
-      
+
       if [ "$anat_sessions" -eq 0 ]; then
         echo "  [SKIP] No anatomical T1w files found for subject $subj; skipping freesurfer check."
         continue
       fi
-      
-      # Now, determine what folders are expected in the freesurfer output directory.
+
+      # Mark subject as multi-session if more than one anatomical session was found.
+      if [ "$anat_sessions" -gt 1 ]; then
+          subject_is_multisession[$subj]=1
+      else
+          subject_is_multisession[$subj]=0
+      fi
+
+      # Determine expected freesurfer folder count.
       if [ "$anat_sessions" -eq 1 ]; then
         expected_count=1
         echo "  Expected freesurfer outputs: 1 (single cross-sectional analysis)."
       else
-        # For N sessions: expect N cross-sectional + 1 base folder + N longitudinal = 2N + 1
         expected_count=$((2 * anat_sessions + 1))
         echo "  Expected freesurfer outputs: $expected_count (for $anat_sessions sessions: $anat_sessions cross-sectional, 1 base, and $anat_sessions longitudinal)."
       fi
-      
-      # Find all directories in the freesurfer output directory starting with the subject id.
+
+      # Find all freesurfer output directories for this subject.
       fs_dirs=( "$OUT_DIR"/${subj}* )
-      
-      # Filter only those entries that are directories.
       fs_dirs_filtered=()
       for d in "${fs_dirs[@]}"; do
         [ -d "$d" ] && fs_dirs_filtered+=( "$d" )
       done
-      
+
       fs_count=${#fs_dirs_filtered[@]}
-      
       if [ "$fs_count" -ne "$expected_count" ]; then
         echo "  [MISSING] For subject $subj: expected $expected_count freesurfer folders, but found $fs_count."
         missing_items+=( "$subj: expected $expected_count freesurfer folders, found $fs_count" )
       fi
-      
-      # Now check each found freesurfer folder for the recon-all.done file.
+
+      # Check each freesurfer directory.
       for fsd in "${fs_dirs_filtered[@]}"; do
         recon_done="$fsd/scripts/recon-all.done"
         if [ ! -f "$recon_done" ]; then
@@ -218,39 +276,76 @@ case "$pipeline" in
           echo "  [FOUND] recon-all.done in folder: $fsd"
         fi
 
-        # --- New check: hippocampal subfield segmentation files ---
-        # For multi-session subjects, we assume that the cross-sectional freesurfer outputs
-        # (i.e. those corresponding to a BIDS session) have "ses-" in the folder name.
-        # For single-session subjects, check the only output folder.
-        if [ $fs_count -eq 1 ] || [[ "$fsd" == *ses-* ]]; then
-          mri_dir="$fsd/mri"
-          if [ -d "$mri_dir" ]; then
-            # Check for the hippoSfVolumes file
-            hippoSf=( "$mri_dir/"*hippoSfVolumes-T1-T2.*.txt )
-            if [ ${#hippoSf[@]} -eq 0 ]; then
-              echo "  [MISSING] HippoSfVolumes-T1-T2 .txt file not found in $mri_dir"
-              missing_items+=( "$fsd/mri: hippoSfVolumes-T1-T2 file not found" )
+        # Determine folder type by checking if its name contains ".long"
+        if [[ "$fsd" == *".long"* ]]; then
+          folder_type="long"
+        else
+          folder_type="cross"
+        fi
+
+        mri_dir="$fsd/mri"
+        if [ -d "$mri_dir" ]; then
+          if [ "$folder_type" == "long" ]; then
+            # In longitudinal folders, expect files that include ".long" in their filename.
+            if compgen -G "$mri_dir/"*hippoSfVolumes*.long*.txt > /dev/null; then
+              echo "  [FOUND] Longitudinal hippocampal subfield volumes file in $mri_dir"
+              subject_long_hippoSf[$subj]=1
             else
-              echo "  [FOUND] HippoSfVolumes-T1-T2 .txt file in $mri_dir"
+              echo "  [INFO] No longitudinal hippocampal subfield volumes file found in $mri_dir"
             fi
 
-            # Check for the hippoAmygLabels file
-            hippoAmyg=( "$mri_dir/"*hippoAmygLabels-T1-T2.*.txt )
-            if [ ${#hippoAmyg[@]} -eq 0 ]; then
-              echo "  [MISSING] HippoAmygLabels-T1-T2 .txt file not found in $mri_dir"
-              missing_items+=( "$fsd/mri: hippoAmygLabels-T1-T2 file not found" )
+            # For amygdala files, accept either pattern:
+            if compgen -G "$mri_dir/"*hippoAmygLabels*.long*.txt > /dev/null || \
+               compgen -G "$mri_dir/"*amygNucVolumes*.long*.txt > /dev/null; then
+              echo "  [FOUND] Longitudinal hippocampal/amygdala file in $mri_dir"
+              subject_long_amyg[$subj]=1
             else
-              echo "  [FOUND] HippoAmygLabels-T1-T2 .txt file in $mri_dir"
+              echo "  [INFO] No longitudinal hippocampal/amygdala file found in $mri_dir"
             fi
           else
-            echo "  [WARNING] No mri directory in $fsd, skipping hippocampal segmentation check."
+            # In cross-sectional folders, ensure that no file contains ".long" in its name.
+            if compgen -G "$mri_dir/"*hippoSfVolumes*.long*.txt > /dev/null; then
+              echo "  [ERROR] Found longitudinal hippocampal subfield volumes file in cross-sectional folder $mri_dir"
+              missing_items+=( "$fsd/mri: longitudinal hippocampal subfield volumes file found in cross-sectional folder" )
+            fi
+            if compgen -G "$mri_dir/"*hippoAmygLabels*.long*.txt > /dev/null || \
+               compgen -G "$mri_dir/"*amygNucVolumes*.long*.txt > /dev/null; then
+              echo "  [ERROR] Found longitudinal hippocampal/amygdala file in cross-sectional folder $mri_dir"
+              missing_items+=( "$fsd/mri: longitudinal hippocampal/amygdala file found in cross-sectional folder" )
+            fi
+            # Record cross-sectional files (ensuring they do not include ".long")
+            cs_hippoSf=$(find "$mri_dir" -maxdepth 1 -type f -name "*hippoSfVolumes*.txt" ! -name "*long*")
+            if [ -n "$cs_hippoSf" ]; then
+              echo "  [FOUND] Cross-sectional hippocampal subfield volumes file in $mri_dir"
+              subject_cross_hippoSf[$subj]=1
+            fi
+            cs_amyg=$(find "$mri_dir" -maxdepth 1 -type f \( -name "*hippoAmygLabels*.txt" -o -name "*amygNucVolumes*.txt" \) ! -name "*long*")
+            if [ -n "$cs_amyg" ]; then
+              echo "  [FOUND] Cross-sectional hippocampal/amygdala file in $mri_dir"
+              subject_cross_amyg[$subj]=1
+            fi
           fi
+        else
+          echo "  [WARNING] No mri directory in $fsd, skipping hippocampal segmentation check."
         fi
-        # --- End new check ---
       done
-      
+    done
+
+    # --- Global consistency check for multi-session subjects ---
+    for s in "${all_subjects[@]}"; do
+      if [ "${subject_is_multisession[$s]}" -eq 1 ]; then
+        if [ "${subject_long_hippoSf[$s]}" -ne 1 ]; then
+          echo "  [MISSING] Subject $s is missing longitudinal hippocampal subfield volumes file"
+          missing_items+=( "$s: missing longitudinal hippocampal subfield volumes file" )
+        fi
+        if [ "${subject_long_amyg[$s]}" -ne 1 ]; then
+          echo "  [MISSING] Subject $s is missing longitudinal hippocampal/amygdala file"
+          missing_items+=( "$s: missing longitudinal hippocampal/amygdala file" )
+        fi
+      fi
     done
     ;;
+
   qsiprep)
     echo "Running check for qsiprep pipeline..."
     # Loop over subjects in the BIDS directory
