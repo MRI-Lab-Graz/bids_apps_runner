@@ -1,4 +1,5 @@
 #!/bin/bash
+shopt -s nullglob
 #
 # check_app_output.sh
 #
