@@ -10,6 +10,7 @@
   },
   "app": {
     "analysis_level": "participant",
+    "participant_labels": ["001"],
     "options": [
       "--fs-license-file", "/fs/license.txt",
       "--output-spaces", "MNI152NLin2009cAsym:res-2", "fsaverage:den-10k",
