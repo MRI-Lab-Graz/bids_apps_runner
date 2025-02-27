@@ -167,8 +167,15 @@ def main():
     analysis_level = app.get("analysis_level", "participant")
     if analysis_level == "participant":
         # Find subject directories (those starting with "sub-") in the BIDS folder.
-        subjects = [d for d in os.listdir(common["bids_folder"])
+        if "participant_labels" in app and app["participant_labels"]:
+            subjects = [
+            label if label.startswith("sub-") else f"sub-{label}"
+            for label in app["participant_labels"]
+        ]
+        else:
+            subjects = [d for d in os.listdir(common["bids_folder"])
                     if d.startswith("sub-") and os.path.isdir(os.path.join(common["bids_folder"], d))]
+    
         if not subjects:
             sys.exit("Error: No subjects found in the BIDS folder.")
         print(f"Found {len(subjects)} subjects.")
