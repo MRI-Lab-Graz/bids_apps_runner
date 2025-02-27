@@ -124,6 +124,7 @@ Create a JSON configuration file (e.g., `config.json`) with the following struct
   },
   "app": {
     "analysis_level": "participant",
+    "participant_labels": ["001"],
     "options": [
 "--fs-license-file", "/fs/license.txt",
 "--output-spaces", "MNI152NLin2009cAsym:res-2", "fsaverage:den-10k",
@@ -157,6 +158,7 @@ Create a JSON configuration file (e.g., `config.json`) with the following struct
   - `options`: A list of additional command-line options to pass to the container.
   - `mounts`: A list of additional directory mounts. Each mount should specify a `source` (local folder) and a `target` (mount point inside the container).
   - `output_check`: Used to verify successful processing. Define the `directory` (relative to the output folder) and a filename `pattern` that includes a `{subject}` placeholder.
+  - `participant_labels`: Specify single (or singel-picked) subjects. "sub-" prefixed should be skipped. sub-001 should be stated as "001
 
 ------
 
