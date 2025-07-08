@@ -394,19 +394,25 @@ fmriprep)
           bids_base=$(basename "$bids_dwi")
           
           # Extract the prefix up to "_dwi" (this removes run/acq info)
-          prefix=$(echo "$bids_base" | sed 's/_dwi.*//')
+          # Strip optional fields like _run-*, _acq-*, _dir-*
+          base_prefix=$(echo "$bids_base" | sed -E 's/(_acq-[^_]+|_run-[^_]+|_dir-[^_]+)//g' | sed 's/_dwi.*//')
+
           
           # Build the expected qsiprep path: assume a similar subject/session structure.
           # The qsiprep dwi file should include "desc-preproc_dwi" in its name.
           qsiprep_dwi_dir="$qsiprep_subj_dir/$sess/dwi"
-          search_pattern="$qsiprep_dwi_dir/${prefix}*desc-preproc_dwi.nii*"
+          search_pattern="$qsiprep_dwi_dir/${base_prefix}*_desc-preproc_dwi.nii*"
+
           matches=( $search_pattern )
           if [ ${#matches[@]} -eq 0 ]; then
             echo "  [MISSING] qsiprep DWI file for: $bids_dwi"
             missing_items+=( "$bids_dwi" )
+          elif [ ${#matches[@]} -gt 1 ]; then
+            echo "  [WARNING] Multiple matches for: $bids_dwi → ${matches[*]}"
           else
             echo "  [FOUND] qsiprep DWI file for: $bids_dwi"
           fi
+
         done
       done
     done
