@@ -1,27 +1,33 @@
 {
-  "common": {
-    "bids_folder": "/data/local/Study/rawdata",
-    "output_folder": "/data/local/Study/derivatives",
-    "tmp_folder": "/data/local/Study/code",
-    "container": "/data/local/container/fmriprep/fmriprep-24.0.0.sif",
-    "optional_folder": "/data/local/Study/", 
-    "jobs": 1,
+"common": {
+    "bids_folder": "/data/local/129_PK01/derivatives/qsiprep/",
+    "output_folder": "/data/local/129_PK01/derivatives/qsirecon",
+    "tmp_folder": "/data/local/129_PK01/derivative/sqsirecon_temp",
+    "templateflow_dir": "/data/local/templateflow",
+    "container": "/data/local/container/qsirecon/qsirecon_1.0.0.sif",
+    "optional_folder": "/data/local/129_PK01/", 
+    "jobs": 4,
     "pilottest": false
-  },
-  "app": {
+},
+"app": {
     "analysis_level": "participant",
-    "participant_labels": ["001"],
-    "options": [
+	"apptainer_args": [
+		"--containall",
+		"--writable-tmpfs"
+	],
+ "options": [
       "--fs-license-file", "/fs/license.txt",
-      "--output-spaces", "MNI152NLin2009cAsym:res-2", "fsaverage:den-10k",
-      "--skip_bids_validation"
+      "--fs-subjects-dir", "/base/derivatives/freesurfer",
+      "--recon-spec", "mrtrix_multishell_msmt_ACT-hsvs",
+      "--nprocs", "6",
+      "--atlases", "Brainnetome246Ext"
     ],
-    "mounts": [
-      { "source": "/usr/local/freesurfer", "target": "/fs" }
-    ],
-    "output_check": {
-      "directory": "derivatives",
-      "pattern": "sub-{subject}_report.html"
-    }
-  }
+"mounts": [
+	{ "source": "/usr/local/freesurfer", "target": "/fs" }
+	],
+"output_check": {
+	"directory": "derivatives",
+	"pattern": "sub-{subject}.html"
+	}
+	}
 }
