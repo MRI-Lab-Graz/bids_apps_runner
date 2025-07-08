@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""
-run_bidsapp.py
-
-This script runs a BIDS App container (such as fmriprep, mriqc, etc.) based entirely
-on a JSON configuration file that defines both the common parameters (paths, parallel
-processing options, etc.) and app-specific settings (analysis level, container options,
-additional mounts, and output-checking).
-
-Usage:
-    run_bidsapp.py -x config.json
-
-The JSON file should have two sections: "common" and "app". See the example above.
-"""
-
 import os
 import sys
 import json
@@ -25,179 +11,150 @@ import multiprocessing
 import concurrent.futures
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Run a BIDS App container with all parameters defined in a JSON config file.")
-    parser.add_argument("-x", "--config", required=True,
-                        help="Path to the configuration JSON file")
+    parser = argparse.ArgumentParser(description="Run a BIDS App using a JSON config.")
+    parser.add_argument("-x", "--config", required=True, help="Path to JSON config file.")
     return parser.parse_args()
 
-def read_config(config_file):
+def read_config(path):
     try:
-        with open(config_file, 'r') as f:
-            config = json.load(f)
+        with open(path, "r") as f:
+            return json.load(f)
     except Exception as e:
-        sys.exit(f"Error reading config file: {e}")
-    return config
+        sys.exit(f"Error reading config: {e}")
 
-def validate_common_config(common):
-    required_keys = ["bids_folder", "output_folder", "tmp_folder", "container"]
-    for key in required_keys:
-        if key not in common:
-            sys.exit(f"Error: '{key}' is required in the 'common' section of the config file.")
-    # Check that the BIDS folder exists.
-    if not os.path.isdir(common["bids_folder"]):
-        sys.exit(f"Error: BIDS folder '{common['bids_folder']}' does not exist.")
-    # Create output and tmp directories if they don't exist.
-    os.makedirs(common["output_folder"], exist_ok=True)
-    os.makedirs(common["tmp_folder"], exist_ok=True)
-    # Check that the container file exists.
-    if not os.path.isfile(common["container"]):
-        sys.exit(f"Error: Container file '{common['container']}' does not exist.")
-    # If optional_folder is provided, verify that it exists.
-    if "optional_folder" in common and common["optional_folder"]:
-        if not os.path.isdir(common["optional_folder"]):
-            sys.exit(f"Error: Optional folder '{common['optional_folder']}' does not exist.")
-
-def validate_app_config(app):
-    # Provide defaults for optional app-specific settings.
-    app.setdefault("analysis_level", "participant")
-    app.setdefault("options", [])
-    app.setdefault("mounts", [])
-    app.setdefault("output_check", {})
+def validate_common_config(cfg):
+    required = ["bids_folder", "output_folder", "tmp_folder", "container", "templateflow_dir"]
+    for key in required:
+        if key not in cfg:
+            sys.exit(f"Missing required 'common' config: {key}")
+    for path in [cfg["bids_folder"], cfg["templateflow_dir"]]:
+        if not os.path.isdir(path):
+            sys.exit(f"Missing directory: {path}")
+    for path in [cfg["output_folder"], cfg["tmp_folder"]]:
+        os.makedirs(path, exist_ok=True)
+    if not os.path.isfile(cfg["container"]):
+        sys.exit(f"Missing container: {cfg['container']}")
+    if "optional_folder" in cfg and cfg["optional_folder"]:
+        if not os.path.isdir(cfg["optional_folder"]):
+            sys.exit(f"Missing optional_folder: {cfg['optional_folder']}")
 
 def subject_processed(subject, common, app):
-    """Determine if a subject has already been processed using the output_check settings.
-    
-    If output_check defines a directory and a filename pattern (with a {subject} placeholder),
-    then this function returns True if a matching file is found.
-    """
-    output_check = app.get("output_check", {})
-    pattern = output_check.get("pattern", "")
+    pattern = app.get("output_check", {}).get("pattern", "")
     if not pattern:
         return False
-    check_dir = os.path.join(common["output_folder"], output_check.get("directory", ""))
-    file_pattern = pattern.replace("{subject}", subject)
-    full_pattern = os.path.join(check_dir, file_pattern)
-    matches = glob.glob(full_pattern)
-    return len(matches) > 0
+    check_dir = os.path.join(common["output_folder"], app["output_check"].get("directory", ""))
+    full_pattern = os.path.join(check_dir, pattern.replace("{subject}", subject))
+    return bool(glob.glob(full_pattern))
 
-def run_container(cmd):
-    """Run the container command and print it."""
+def build_common_mounts(common, tmp_dir):
+    mounts = [
+        f"{tmp_dir}:/tmp",
+        f"{common['templateflow_dir']}:/templateflow",
+        f"{common['output_folder']}:/output",
+        f"{common['bids_folder']}:/bids"
+    ]
+    if common.get("optional_folder"):
+        mounts.append(f"{common['optional_folder']}:/base")
+    return mounts
+
+def run_container(cmd, env=None):
     try:
         print("Running command:", " ".join(cmd))
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=env or os.environ.copy())
     except subprocess.CalledProcessError as e:
-        print(f"Error running container command: {e}")
+        print(f"Container execution failed: {e}")
 
 def process_subject(subject, common, app):
-    # Ensure the parent temporary folder exists.
-    os.makedirs(common["tmp_folder"], exist_ok=True)
+    tmp_dir = os.path.join(common["tmp_folder"], subject)
+    os.makedirs(tmp_dir, exist_ok=True)
 
-    """Process a single subject: build and run the container command for that subject."""
-    tmp_subject = os.path.join(common["tmp_folder"], subject)
-    os.makedirs(tmp_subject, exist_ok=True)
     if subject_processed(subject, common, app):
-        print(f"Skipping subject '{subject}': output already exists.")
-        shutil.rmtree(tmp_subject)
+        print(f"Skipping subject '{subject}', already processed.")
+        shutil.rmtree(tmp_dir)
         return
+
     print(f"Processing subject: {subject}")
-    cmd = ["apptainer", "run", "--containall", "--writable-tmpfs"]
-    cmd.extend(["-B", f"{tmp_subject}:/tmp"])
-    cmd.extend(["-B", f"{common['output_folder']}:/output"])
-    cmd.extend(["-B", f"{common['bids_folder']}:/bids"])
-    if "optional_folder" in common and common["optional_folder"]:
-        cmd.extend(["-B", f"{common['optional_folder']}:/base"])
-    # Process extra mounts from the app configuration.
+    cmd = ["apptainer", "run", "--containall"]
+    for mnt in build_common_mounts(common, tmp_dir):
+        cmd.extend(["-B", mnt])
     for mount in app.get("mounts", []):
-        src = mount.get("source")
-        tgt = mount.get("target")
-        if src and tgt:
-            cmd.extend(["-B", f"{src}:{tgt}"])
-    cmd.append(common["container"])
-    container_options = app.get("options", [])
-    analysis_level = app.get("analysis_level", "participant")
-    cmd.extend(["/bids", "/output", analysis_level])
-    cmd.extend(container_options)
-    if analysis_level == "participant":
-        cmd.extend(["--participant-label", subject])
-    cmd.extend(["-w", "/tmp"])
+        if mount.get("source") and mount.get("target"):
+            cmd.extend(["-B", f"{mount['source']}:{mount['target']}"])
+    cmd.extend([
+        "--env", f"TEMPLATEFLOW_HOME=/templateflow",
+        common["container"],
+        "/bids", "/output", app.get("analysis_level", "participant")
+    ])
+    cmd.extend(app.get("options", []))
+    cmd.extend(["--participant-label", subject, "-w", "/tmp"])
+
     run_container(cmd)
-# After processing, check for the expected output file.
+
     if subject_processed(subject, common, app):
-        print(f"Subject {subject} processed successfully. Removing temporary folder.")
-        shutil.rmtree(tmp_subject)
+        print(f"Subject {subject} completed. Cleaning up.")
+        shutil.rmtree(tmp_dir)
     else:
-        print(f"Subject {subject} did not produce the expected output. Temporary folder '{tmp_subject}' is preserved for inspection.")
+        print(f"Output missing for {subject}, temp dir preserved at {tmp_dir}")
 
 def process_group(common, app):
-    """Process group-level analysis (non-participant): run the container once."""
-    tmp_group = os.path.join(common["tmp_folder"], "group_analysis")
-    os.makedirs(tmp_group, exist_ok=True)
-    cmd = ["apptainer", "run", "--containall", "--writable-tmpfs"]
-    cmd.extend(["-B", f"{tmp_group}:/tmp"])
-    cmd.extend(["-B", f"{common['output_folder']}:/output"])
-    cmd.extend(["-B", f"{common['bids_folder']}:/bids"])
-    if "optional_folder" in common and common["optional_folder"]:
-        cmd.extend(["-B", f"{common['optional_folder']}:/base"])
+    tmp_dir = os.path.join(common["tmp_folder"], "group")
+    os.makedirs(tmp_dir, exist_ok=True)
+    cmd = ["apptainer", "run", "--containall"]
+    for mnt in build_common_mounts(common, tmp_dir):
+        cmd.extend(["-B", mnt])
     for mount in app.get("mounts", []):
-        src = mount.get("source")
-        tgt = mount.get("target")
-        if src and tgt:
-            cmd.extend(["-B", f"{src}:{tgt}"])
-    cmd.append(common["container"])
-    container_options = app.get("options", [])
-    analysis_level = app.get("analysis_level", "participant")
-    cmd.extend(["/bids", "/output", analysis_level])
-    cmd.extend(container_options)
-    cmd.extend(["-w", "/tmp"])
+        if mount.get("source") and mount.get("target"):
+            cmd.extend(["-B", f"{mount['source']}:{mount['target']}"])
+    cmd.extend([
+        "--env", f"TEMPLATEFLOW_HOME=/templateflow",
+        common["container"],
+        "/bids", "/output", app.get("analysis_level", "group"),
+        "-w", "/tmp"
+    ])
+    cmd.extend(app.get("options", []))
     run_container(cmd)
-    shutil.rmtree(tmp_group)
+    shutil.rmtree(tmp_dir)
 
 def main():
     args = parse_args()
     config = read_config(args.config)
-    # The config must have both "common" and "app" sections.
+
     if "common" not in config or "app" not in config:
-        sys.exit("Error: Config file must contain both 'common' and 'app' sections.")
-    common = config["common"]
-    app = config["app"]
+        sys.exit("Config must contain 'common' and 'app' sections.")
+
+    common, app = config["common"], config["app"]
     validate_common_config(common)
-    validate_app_config(app)
-    
-    analysis_level = app.get("analysis_level", "participant")
-    if analysis_level == "participant":
-        # Find subject directories (those starting with "sub-") in the BIDS folder.
+
+    subjects = []
+    level = app.get("analysis_level", "participant")
+
+    if level == "participant":
         if "participant_labels" in app and app["participant_labels"]:
-            subjects = [
-            label if label.startswith("sub-") else f"sub-{label}"
-            for label in app["participant_labels"]
-        ]
+            subjects = [s if s.startswith("sub-") else f"sub-{s}" for s in app["participant_labels"]]
         else:
             subjects = [d for d in os.listdir(common["bids_folder"])
-                    if d.startswith("sub-") and os.path.isdir(os.path.join(common["bids_folder"], d))]
-    
+                        if d.startswith("sub-") and os.path.isdir(os.path.join(common["bids_folder"], d))]
+
         if not subjects:
-            sys.exit("Error: No subjects found in the BIDS folder.")
-        print(f"Found {len(subjects)} subjects.")
-        jobs = common.get("jobs", multiprocessing.cpu_count())
-        pilottest = common.get("pilottest", False)
-        if pilottest:
+            sys.exit("No subjects found.")
+
+        if common.get("pilottest", False):
             subject = random.choice(subjects)
-            print(f"Pilot test mode: processing subject '{subject}' only.")
+            print(f"Pilot mode: running one subject ({subject})")
             process_subject(subject, common, app)
         else:
-            print(f"Processing subjects in parallel using {jobs} jobs.")
+            jobs = common.get("jobs", multiprocessing.cpu_count())
+            print(f"Processing {len(subjects)} subjects with {jobs} parallel jobs.")
             with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as executor:
-                futures = [executor.submit(process_subject, subject, common, app) for subject in subjects]
-                for future in concurrent.futures.as_completed(futures):
+                futures = [executor.submit(process_subject, sub, common, app) for sub in subjects]
+                for f in concurrent.futures.as_completed(futures):
                     try:
-                        future.result()
+                        f.result()
                     except Exception as e:
-                        print(f"Error processing subject: {e}")
+                        print(f"Error: {e}")
     else:
-        # Group-level analysis: run the container once.
-        print(f"Running group-level analysis (analysis_level: {analysis_level})")
+        print(f"Running {level} level analysis.")
         process_group(common, app)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
