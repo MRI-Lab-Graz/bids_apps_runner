@@ -113,32 +113,39 @@ Create a JSON configuration file (e.g., `config.json`) with the following struct
 
 ```json
 {
-  "common": {
-    "bids_folder": "/data/local/theo/Theo_fmriprep/rawdata",
-    "output_folder": "/data/local/theo/Theo_fmriprep/derivatives",
-    "tmp_folder": "/data/local/theo/Theo_fmriprep/code",
-    "container": "/data/local/container/fmriprep/fmriprep-24.0.0.sif",
-    "optional_folder": "/data/local/theo/Theo_fmriprep/",
-    "jobs": 1,
+"common": {
+    "bids_folder": "/data/local/study_01/derivatives/qsiprep/",
+    "output_folder": "/data/local/study_01/derivatives/qsirecon",
+    "tmp_folder": "/data/local/study_01/derivative/sqsirecon_temp",
+    "templateflow_dir": "/data/local/templateflow",
+    "container": "/data/local/container/qsirecon/qsirecon_1.0.0.sif",
+    "optional_folder": "/data/local/study_01/", 
+    "jobs": 4,
     "pilottest": false
-  },
-  "app": {
+},
+"app": {
     "analysis_level": "participant",
-    "participant_labels": ["001"],
-    "options": [
-"--fs-license-file", "/fs/license.txt",
-"--output-spaces", "MNI152NLin2009cAsym:res-2", "fsaverage:den-10k",
-"--skip_bids_validation"
+	"apptainer_args": [
+		"--containall",
+		"--writable-tmpfs"
+	],
+ "options": [
+      "--fs-license-file", "/fs/license.txt",
+      "--fs-subjects-dir", "/base/derivatives/freesurfer",
+      "--recon-spec", "mrtrix_multishell_msmt_ACT-hsvs",
+      "--nprocs", "6",
+      "--atlases", "Brainnetome246Ext"
     ],
-    "mounts": [
-{ "source": "/usr/local/freesurfer", "target": "/fs" }
-    ],
-    "output_check": {
-"directory": "derivatives",
-"pattern": "sub-{subject}_report.html"
-    }
-  }
+"mounts": [
+	{ "source": "/usr/local/freesurfer", "target": "/fs" }
+	],
+"output_check": {
+	"directory": "derivatives",
+	"pattern": "sub-{subject}.html"
+	}
+	}
 }
+
 ```
 
 >Note: It is important to prepare each argument in quotes. It is also true for multiple arguments like `--output-spaces`. You can see that each output space is in quotes and comma-separated. **Do not use** "MNI152NLin2009cAsym:res-2 fsaverage:den-10k"!
