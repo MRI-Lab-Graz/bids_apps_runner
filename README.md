@@ -1,24 +1,56 @@
-# BIDS App Runner Documentation
+# BIDS App Runner Documentation - Version 2.0.0
 
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
-- [Recommended: Using a Dedicated Python Environment](#recommended-using-a-dedicated-python-environment)
+- [New Features in Version 2.0.0](#new-features-in-version-200)
 - [Configuration File](#configuration-file)
-	- [Configuration Details](#configuration-details)
 - [Usage](#usage)
+- [Advanced Features](#advanced-features)
 - [What Happens When You Run the Script](#what-happens-when-you-run-the-script)
 - [Example Scenario](#example-scenario)
 - [Troubleshooting](#troubleshooting)
 
 ## General
 
-This Python script allows you to run a BIDS App container (such as fmriprep, mriqc, etc.) using a single JSON configuration file. The configuration file contains two main sections:
+This Python script allows you to run a BIDS App container (such as fmriprep, mriqc, qsiprep, etc.) using a single JSON configuration file. The script is designed to be production-ready with comprehensive error handling, logging, and user-friendly features.
 
-- **common**: General settings (paths to data, output directories, container image, parallel processing options, etc.)
-- **app**: Application-specific settings (analysis level, extra container options, additional mounts, and output-checking)
+**Key Features:**
+- **Robust Configuration**: Comprehensive validation of all settings
+- **Flexible Processing**: Support for participant and group-level analysis
+- **Smart Output Checking**: Automatic detection of completed subjects
+- **Comprehensive Logging**: Detailed logs with customizable levels
+- **Dry-Run Mode**: Test configurations without running containers
+- **Parallel Processing**: Multi-core support for faster processing
+- **Production Ready**: Bullet-proof error handling and recovery
 
-The script automatically discovers subjects in your BIDS directory (folders starting with `sub-`) and will run the container for each subject (or a single subject in pilot mode). Alternatively, if you set the analysis level to something other than `participant`, the container will run once for a group-level analysis.
+------
+
+## New Features in Version 2.0.0
+
+### 🚀 Enhanced User Experience
+- **Comprehensive Help**: Detailed command-line help with examples
+- **Better Error Messages**: Clear, actionable error messages
+- **Processing Summary**: Detailed summary of completed and failed subjects
+- **Progress Tracking**: Real-time logging of processing status
+
+### 🔧 Improved Configuration
+- **Validation**: Thorough validation of all configuration parameters
+- **Flexible Paths**: Support for both absolute and relative paths
+- **Smart Defaults**: Intelligent default values for optional parameters
+- **Custom Mounts**: Flexible container mount configuration
+
+### 📊 Advanced Processing Features
+- **Force Reprocessing**: `--force` flag to reprocess existing subjects
+- **Subject Selection**: `--subjects` flag to process specific subjects
+- **Dry-Run Mode**: `--dry-run` to preview commands without execution
+- **Pilot Mode**: Test with a single random subject
+
+### 🛡️ Production-Ready Features
+- **Signal Handling**: Graceful shutdown on interrupts
+- **Resource Management**: Automatic cleanup of temporary directories
+- **Error Recovery**: Preserve debugging information on failures
+- **Comprehensive Logging**: Structured logs with timestamps
 
 ------
 
@@ -171,13 +203,122 @@ Create a JSON configuration file (e.g., `config.json`) with the following struct
 
 ## Usage
 
-Run the script from the command line by passing the path to your configuration file. For example:
+### Basic Usage
 
 ```bash
-python run_bidsapp.py -x config.json
+# Run with default settings
+python run_bids_apps.py -x config.json
+
+# Run with debug logging
+python run_bids_apps.py -x config.json --log-level DEBUG
+
+# Preview commands without execution
+python run_bids_apps.py -x config.json --dry-run
+
+# Process specific subjects only
+python run_bids_apps.py -x config.json --subjects sub-001 sub-002
+
+# Force reprocessing of existing subjects
+python run_bids_apps.py -x config.json --force
+
+# Show help
+python run_bids_apps.py --help
 ```
 
-### What Happens When You Run the Script
+### Advanced Usage
+
+```bash
+# Pilot mode (set in config.json: "pilottest": true)
+python run_bids_apps.py -x config.json
+
+# Group-level analysis (set in config.json: "analysis_level": "group")
+python run_bids_apps.py -x config.json
+
+# Combination of flags
+python run_bids_apps.py -x config.json --subjects sub-001 sub-002 --force --log-level DEBUG
+```
+
+### Command-Line Options
+
+- `-x, --config`: Path to JSON configuration file (required)
+- `--log-level`: Set logging level (DEBUG, INFO, WARNING, ERROR)
+- `--dry-run`: Show commands without executing them
+- `--subjects`: Process only specified subjects
+- `--force`: Force reprocessing even if output exists
+- `--version`: Show version information
+- `--help`: Show help message
+
+## Advanced Features
+
+### 1. Output Checking
+The script can automatically detect if a subject has already been processed:
+
+```json
+{
+  "app": {
+    "output_check": {
+      "directory": "derivatives",
+      "pattern": "sub-{subject}.html"
+    }
+  }
+}
+```
+
+### 2. Custom Container Arguments
+Configure Apptainer/Singularity arguments:
+
+```json
+{
+  "app": {
+    "apptainer_args": [
+      "--containall",
+      "--writable-tmpfs",
+      "--cleanenv"
+    ]
+  }
+}
+```
+
+### 3. Custom Mount Points
+Add additional bind mounts:
+
+```json
+{
+  "app": {
+    "mounts": [
+      {
+        "source": "/usr/local/freesurfer",
+        "target": "/fs"
+      },
+      {
+        "source": "/data/shared/atlases",
+        "target": "/atlases"
+      }
+    ]
+  }
+}
+```
+
+### 4. Parallel Processing
+Configure the number of parallel jobs:
+
+```json
+{
+  "common": {
+    "jobs": 8
+  }
+}
+```
+
+### 5. Logging and Monitoring
+- All runs create timestamped log files in the `logs/` directory
+- Use `--log-level DEBUG` for detailed troubleshooting
+- Processing summaries show success/failure counts
+- Failed subjects preserve temp directories for debugging
+
+------
+
+## What Happens When You Run the Script
 
 1. **Configuration Parsing and Validation:**
    The script reads your JSON configuration file and validates that all required paths and parameters are provided.

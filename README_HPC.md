@@ -1,4 +1,24 @@
-# BIDS App Runner - HPC Version with DataLad
+# BIDS App Runner - HPC Version 2.0.0 with DataLad
+
+Diese erweiterte Version des BIDS App Runners ist speziell für High Performance Computing (HPC) Umgebungen mit SLURM und DataLad-Integration entwickelt.
+
+## Neue Features in Version 2.0.0
+
+### 🚀 Produktionsreife Verbesserungen
+
+- **Robuste Fehlerbehandlung**: Comprehensive exception handling mit detaillierten Fehlermeldungen
+- **Signal-Handling**: Graceful shutdown bei Interrupts (CTRL+C)
+- **Erweiterte Validierung**: Vollständige Überprüfung aller Konfigurationsparameter
+- **Logging-System**: Strukturierte Logs mit Zeitstempel und verschiedenen Log-Levels
+- **Verarbeitungsstatistiken**: Detaillierte Zusammenfassung der Job-Submissions
+- **Dry-Run Modus**: Sicheres Testen der Konfiguration ohne tatsächliche Ausführung
+
+### 🔧 Erweiterte Konfiguration
+
+- **Flexible Pfade**: Unterstützung für verschiedene HPC-Umgebungen
+- **Validierung**: Automatische Überprüfung von SLURM-Parametern
+- **Intelligente Defaults**: Fallback-Werte für optionale Parameter
+- **Umgebungsvariablen**: Flexible Konfiguration von Container-UmgebungenIDS App Runner - HPC Version with DataLad
 
 Diese erweiterte Version des BIDS App Runners ist speziell für High Performance Computing (HPC) Umgebungen mit SLURM und DataLad-Integration entwickelt.
 

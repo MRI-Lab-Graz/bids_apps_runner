@@ -2,8 +2,8 @@
   "common": {
     "templateflow_dir": "/data/shared/templateflow",
     "container": "/data/containers/qsirecon/qsirecon_1.0.0.sif",
-    "work_dir": "/scratch/$USER/bids_work",
-    "log_dir": "/scratch/$USER/bids_logs",
+    "work_dir": "/tmp/bids_work",
+    "log_dir": "/tmp/bids_logs",
     "pilottest": false
   },
   "app": {
@@ -33,21 +33,21 @@
     "mem": "32G",
     "cpus": 8,
     "job_name": "qsirecon",
-    "output_pattern": "logs/slurm-%j.out",
-    "error_pattern": "logs/slurm-%j.err",
+    "output_pattern": "slurm-%j.out",
+    "error_pattern": "slurm-%j.err",
     "modules": [
       "apptainer/1.2.0",
       "datalad/0.19.0"
     ],
     "environment": {
       "TEMPLATEFLOW_HOME": "/data/shared/templateflow",
-      "APPTAINER_CACHEDIR": "/scratch/$USER/.apptainer"
+      "APPTAINER_CACHEDIR": "/tmp/.apptainer"
     },
     "monitor_jobs": true
   },
   "datalad": {
-    "input_repo": "git@github.com:your-lab/bids-dataset.git",
-    "output_repo": "git@github.com:your-lab/qsirecon-outputs.git",
+    "input_repo": "https://github.com/your-lab/bids-dataset.git",
+    "output_repo": "https://github.com/your-lab/qsirecon-outputs.git",
     "clone_method": "clone",
     "get_data": true,
     "branch_per_subject": true,
