@@ -1,0 +1,39 @@
+{
+  "common": {
+    "templateflow_dir": "/tmp/templateflow_test",
+    "container": "/tmp/test_container.sif",
+    "work_dir": "/tmp/bids_work_test",
+    "log_dir": "/tmp/bids_logs_test",
+    "pilottest": true
+  },
+  "app": {
+    "analysis_level": "participant",
+    "apptainer_args": [
+      "--containall",
+      "--writable-tmpfs"
+    ],
+    "options": [
+      "--nprocs", "4"
+    ],
+    "output_check": {
+      "directory": "derivatives/test",
+      "pattern": "sub-{subject}.html"
+    }
+  },
+  "hpc": {
+    "partition": "test",
+    "time": "02:00:00",
+    "mem": "8G",
+    "cpus": 4,
+    "job_name": "test_job",
+    "monitor_jobs": false
+  },
+  "datalad": {
+    "input_repo": "https://github.com/test/test-dataset.git",
+    "output_repo": "https://github.com/test/test-outputs.git",
+    "clone_method": "clone",
+    "get_data": true,
+    "branch_per_subject": true,
+    "output_branch": "results"
+  }
+}

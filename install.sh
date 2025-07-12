@@ -77,10 +77,11 @@ check_python() {
     for cmd in python3 python python3.8 python3.9 python3.10 python3.11 python3.12; do
         if command_exists "$cmd"; then
             local version
-            version=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-            if [ "$(printf '%s\n' "$PYTHON_VERSION" "$version" | sort -V | head -n1)" = "$PYTHON_VERSION" ]; then
+            version=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+            if [ $? -eq 0 ] && [ "$(printf '%s\n' "$PYTHON_VERSION" "$version" | sort -V | head -n1)" = "$PYTHON_VERSION" ]; then
                 python_cmd="$cmd"
-                print_success "Found suitable Python: $cmd (version $version)"
+                # Print to stderr to avoid mixing with return value
+                print_success "Found suitable Python: $cmd (version $version)" >&2
                 break
             fi
         fi
@@ -91,6 +92,7 @@ check_python() {
         exit 1
     fi
     
+    # Return only the command name
     echo "$python_cmd"
 }
 
@@ -106,10 +108,26 @@ create_venv() {
         rm -rf "$VENV_NAME"
     fi
     
-    # Create new virtual environment with UV
-    uv venv "$VENV_NAME" --python "$python_cmd"
+    # Get full path to Python executable
+    local python_path
+    python_path=$(which "$python_cmd")
     
-    print_success "Virtual environment created successfully"
+    if [ -z "$python_path" ]; then
+        print_error "Could not find path for Python command: $python_cmd"
+        exit 1
+    fi
+    
+    print_info "Using Python at: $python_path"
+    
+    # Create new virtual environment with UV using full path
+    uv venv "$VENV_NAME" --python "$python_path"
+    
+    if [ $? -eq 0 ]; then
+        print_success "Virtual environment created successfully"
+    else
+        print_error "Failed to create virtual environment"
+        exit 1
+    fi
 }
 
 # Function to install packages
@@ -125,16 +143,24 @@ install_packages() {
         print_info "Installing full requirements (including development tools)..."
     fi
     
-    # Install packages using UV
+    # Check if requirements file exists
+    if [ ! -f "$req_file" ]; then
+        print_error "Requirements file not found: $req_file"
+        exit 1
+    fi
+    
+    # Install packages using UV with the virtual environment
     print_info "Installing packages from $req_file..."
     
-    # Activate the virtual environment first
-    source "$VENV_NAME/bin/activate"
+    # Use UV to install directly into the virtual environment
+    uv pip install --python "$VENV_NAME/bin/python" -r "$req_file"
     
-    # Install packages
-    uv pip install -r "$req_file"
-    
-    print_success "All packages installed successfully"
+    if [ $? -eq 0 ]; then
+        print_success "All packages installed successfully"
+    else
+        print_error "Failed to install packages"
+        exit 1
+    fi
     
     # Print system dependencies note
     print_warning "Note: Some dependencies require system installation:"
@@ -182,17 +208,39 @@ EOF
 verify_installation() {
     print_info "Verifying installation..."
     
-    # Activate environment and test imports
-    source "$VENV_NAME/bin/activate"
+    # Check if virtual environment exists
+    if [ ! -d "$VENV_NAME" ]; then
+        print_error "Virtual environment not found: $VENV_NAME"
+        exit 1
+    fi
     
-    # Test basic Python functionality
-    python -c "import sys; print(f'Python version: {sys.version}')"
+    # Test basic Python functionality using the venv Python directly
+    local venv_python="$VENV_NAME/bin/python"
+    
+    if [ ! -f "$venv_python" ]; then
+        print_error "Python executable not found in virtual environment"
+        exit 1
+    fi
+    
+    print_info "Testing Python installation..."
+    "$venv_python" -c "import sys; print(f'Python version: {sys.version}')"
+    
+    if [ $? -ne 0 ]; then
+        print_error "Python test failed"
+        exit 1
+    fi
     
     # Test script syntax
-    python -m py_compile run_bids_apps.py
-    python -m py_compile run_bids_apps_hpc.py
+    print_info "Testing script syntax..."
+    "$venv_python" -m py_compile run_bids_apps.py
+    "$venv_python" -m py_compile run_bids_apps_hpc.py
     
-    print_success "Installation verification completed"
+    if [ $? -eq 0 ]; then
+        print_success "Installation verification completed"
+    else
+        print_error "Script syntax check failed"
+        exit 1
+    fi
 }
 
 # Function to print usage instructions
