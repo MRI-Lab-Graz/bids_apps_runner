@@ -1,0 +1,23 @@
+# Minimal requirements for BIDS App Runner
+# Core functionality only - system dependencies noted below
+
+# For enhanced logging and user experience
+colorlog>=6.0.0
+tqdm>=4.60.0
+
+# For system process monitoring
+psutil>=5.8.0
+
+# For JSON configuration validation
+jsonschema>=4.0.0
+
+# For DataLad integration (HPC version only)
+# Requires system installation of git, git-annex, and DataLad
+# datalad>=0.16.0
+
+# System Dependencies (not installable via pip):
+# - Python 3.8+ (required)
+# - apptainer or singularity (required for container execution)
+# - SLURM tools: sbatch, squeue, scancel (required for HPC version)
+# - git and git-annex (required for DataLad/HPC version)
+# - DataLad (can be installed via conda: conda install -c conda-forge datalad)

@@ -1,0 +1,120 @@
+# .bidsignore - Exclude files/directories from BIDS validation and processing
+
+# System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.appsrunner/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+logs/
+temp/
+tmp/
+
+# Configuration and documentation
+README.md
+README_*.md
+*.txt
+*.rst
+config*.json
+install.sh
+requirements.txt
+pyproject.toml
+setup.py
+setup.cfg
+
+# Scripts and utilities
+run_bids_apps.py
+run_bids_apps_hpc.py
+build_apptainer.sh
+check_app_output.sh
+manage_datalad_repos.sh
+*.sh
+
+# SLURM and HPC files
+slurm-*.out
+slurm-*.err
+job_*.sh
+*.sbatch
+
+# DataLad and Git-annex
+.datalad/
+.git/
+.gitannex/
+
+# Container files
+*.sif
+*.simg
+*.img
+
+# Test and example files
+test_*/
+example_*/
+*_test.*
+*_example.*
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Archive files
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tgz
+*.rar
+*.7z

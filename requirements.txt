@@ -1,0 +1,54 @@
+# Core dependencies for BIDS App Runner
+# These are the minimal required packages for both scripts to function
+
+# Standard library backports for older Python versions
+pathlib2>=2.3.0; python_version<"3.4"
+
+# For JSON schema validation
+jsonschema>=4.0.0
+
+# For system monitoring and process management
+psutil>=5.8.0
+
+# For DataLad integration (HPC version)
+# Note: DataLad requires system-level git and git-annex
+datalad>=0.16.0; sys_platform!="win32"
+
+# For enhanced logging with colors
+colorlog>=6.0.0
+
+# For better CLI experience and progress indication
+tqdm>=4.60.0
+click>=8.0.0
+
+# For YAML configuration support (optional enhancement)
+PyYAML>=6.0
+
+# For better error handling and debugging
+rich>=12.0.0
+
+# For file operations with better cross-platform support
+send2trash>=1.8.0
+
+# Development and testing dependencies (optional)
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.0.0
+
+# Code quality tools (optional)
+black>=22.0.0
+flake8>=5.0.0
+isort>=5.0.0
+
+# Type checking (optional)
+mypy>=0.991
+
+# Documentation (optional)
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.0.0
+
+# Note: The following system dependencies are required but not installable via pip:
+# - apptainer/singularity (for container execution)
+# - SLURM tools (sbatch, squeue, etc.) for HPC functionality
+# - git and git-annex (for DataLad functionality)
+# - DataLad system installation (may require conda or system package manager)
