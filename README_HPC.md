@@ -5,6 +5,7 @@
 ## Overview
 
 The HPC BIDS App Runner (`run_bids_apps_hpc.py`) is designed for High Performance Computing environments with:
+
 - **SLURM job scheduling** instead of multiprocessing
 - **DataLad integration** for BIDS dataset management
 - **Git/Git-annex** for data versioning
@@ -14,6 +15,7 @@ The HPC BIDS App Runner (`run_bids_apps_hpc.py`) is designed for High Performanc
 ## Quick Start
 
 ### 1. Installation on HPC
+
 ```bash
 # Install with UV (recommended)
 ./install.sh
@@ -25,6 +27,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. Basic Usage
+
 ```bash
 # Submit SLURM jobs for all subjects
 ./run_bids_apps_hpc.py -x config_hpc.json
@@ -87,6 +90,7 @@ HPC configuration requires additional sections for SLURM and DataLad:
 The HPC script is built around DataLad for reproducible data management:
 
 ### Workflow Steps
+
 1. **Setup**: Clones input and output DataLad datasets
 2. **Job Creation**: Generates SLURM job scripts for each subject
 3. **Data Retrieval**: Each job gets subject data via `datalad get`
@@ -94,6 +98,7 @@ The HPC script is built around DataLad for reproducible data management:
 5. **Result Saving**: Saves outputs to DataLad dataset with versioning
 
 ### Branch Management
+
 - **Input branches**: `processing-{subject}` for each subject
 - **Output branch**: Configurable (default: `results`)
 - **Automatic cleanup**: Temporary branches cleaned after successful processing
@@ -127,12 +132,14 @@ Debug mode in HPC environments provides detailed container logging within SLURM 
 ```
 
 **Debug features:**
+
 - Container stdout/stderr saved to dedicated log files
 - Real-time log streaming during execution
 - Log files stored in `work_dir/container_logs/`
 - Integrates with SLURM job logging
 
 **Log structure:**
+
 ```
 work_dir/
 ├── logs/                    # SLURM job logs

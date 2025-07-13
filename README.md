@@ -1,102 +1,105 @@
 # BIDS App Runner
 
-**Version 2.0.0** - Production-ready BIDS App execution with DataLad support
+**Version 2.0.0** - Production-ready BIDS App execution with advanced features
 
-## Overview
+Ein flexibles Python-Tool zur Ausführung von BIDS Apps mit JSON-Konfiguration, DataLad-Unterstützung und erweiterten Features.
 
-The BIDS App Runner provides two scripts for flexible BIDS App execution:
+## 🎯 Features
 
-### 🖥️ Standard Script (`run_bids_apps.py`)
-- **Automatic DataLad detection** - Works with both standard BIDS folders and DataLad datasets
-- **Local parallel processing** with multiprocessing
-- **Debug mode** with detailed container logs
-- **Comprehensive error handling**
+- **🔄 Automatische DataLad-Erkennung** - Unterstützt sowohl Standard-BIDS-Ordner als auch DataLad-Datasets
+- **⚡ Parallele Verarbeitung** - Multithreading für effiziente Batch-Verarbeitung  
+- **🐛 Debug-Modus** - Detaillierte Container-Logs für Troubleshooting
+- **🎛️ HPC-Integration** - SLURM-Job-Scheduling für Cluster-Umgebungen
+- **✅ Robuste Validierung** - Umfassende Fehlerbehandlung und Konfigurationsprüfung
+- **📊 Ausführliche Berichte** - Zusammenfassungen mit Timing und Erfolgsraten
 
-### 🚀 HPC Script (`run_bids_apps_hpc.py`)
-- **SLURM job scheduling** for HPC environments
-- **DataLad integration** for data management
-- **Debug mode** with container logs in SLURM jobs
-- **Git/Git-annex support** for version control
-
-## Quick Start
+## 🚀 Schnellstart
 
 ### Installation
+
 ```bash
-# One-command setup with UV
+# Automatische Installation mit UV
 ./install.sh
 
-# Or manually
+# Oder manuell
 python -m venv .appsrunner
 source .appsrunner/bin/activate
 pip install -r requirements.txt
 ```
 
-### Usage Examples
+### Beispielkonfiguration
 
-#### Standard Script
 ```bash
-# Standard BIDS folder or DataLad dataset (auto-detected)
-./run_bids_apps.py -x config.json
-
-# Debug mode with detailed container logs
-./run_bids_apps.py -x config.json --debug --subjects sub-001
-
-# Process specific subjects
-./run_bids_apps.py -x config.json --subjects sub-001 sub-002
+# Beispielkonfiguration kopieren und anpassen
+cp config_example.json my_config.json
 ```
 
-#### HPC Script
+## 📚 Dokumentation
+
+### Standard-Script (Lokale Ausführung)
+
+**Datei:** `run_bids_apps.py`  
+**Dokumentation:** [README_STANDARD.md](README_STANDARD.md)
+
 ```bash
-# Submit SLURM jobs for all subjects
+# Einfache Ausführung
+./run_bids_apps.py -x config.json
+
+# Mit spezifischen Subjects
+./run_bids_apps.py -x config.json --subjects sub-001 sub-002
+
+# Debug-Modus für Troubleshooting  
+./run_bids_apps.py -x config.json --debug
+```
+
+### HPC-Script (SLURM-Cluster)
+
+**Datei:** `run_bids_apps_hpc.py`  
+**Dokumentation:** [README_HPC.md](README_HPC.md)
+
+```bash
+# SLURM-Jobs für alle Subjects einreichen
 ./run_bids_apps_hpc.py -x config_hpc.json
 
-# Debug mode with container logs in SLURM jobs
-./run_bids_apps_hpc.py -x config_hpc.json --debug --subjects sub-001
+# Mit Debug-Logs in SLURM-Jobs
+./run_bids_apps_hpc.py -x config_hpc.json --debug
 
-# Create job scripts only (no submission)
+# Nur Job-Scripts erstellen (ohne Einreichung)
 ./run_bids_apps_hpc.py -x config_hpc.json --slurm-only
 ```
 
-## Documentation
-
-📖 **[README_STANDARD.md](README_STANDARD.md)** - Complete guide for the standard script
-- DataLad auto-detection and integration
-- Configuration options
-- Debug mode usage
-- Troubleshooting
-
-📖 **[README_HPC.md](README_HPC.md)** - Complete guide for the HPC script
-- SLURM configuration
-- DataLad workflow
-- Job management
-- Performance optimization
-
-## Key Features
+## 🔧 Wichtige Features
 
 ### DataLad Integration
-Both scripts automatically detect DataLad datasets and provide:
-- **Automatic data retrieval** with `datalad get`
-- **Result versioning** with `datalad save`
-- **Seamless fallback** to standard BIDS folders
-- **No configuration changes required**
 
-### Debug Mode
-Enhanced debugging capabilities:
-- **Real-time container output** streaming
-- **Detailed log files** per subject
-- **Error context** with last 20 lines of stderr
-- **Performance timing** information
+Beide Scripts erkennen automatisch DataLad-Datasets und bieten:
+
+- **Automatische Datenabfrage** mit `datalad get`
+- **Ergebnis-Versionierung** mit `datalad save`
+- **Nahtloser Fallback** auf Standard-BIDS-Ordner
+- **Keine Konfigurationsänderungen erforderlich**
+
+### Debug-Modus
+
+Erweiterte Debugging-Funktionen:
+
+- **Echtzeit-Container-Output** Streaming
+- **Detaillierte Log-Dateien** pro Subject
+- **Fehler-Kontext** mit letzten 20 Zeilen von stderr
+- **Performance-Timing** Informationen
 
 ### Production-Ready Features
-- **Comprehensive error handling** with detailed messages
-- **Signal handling** for graceful shutdown
-- **Configuration validation** with helpful error messages
-- **Structured logging** with timestamps and levels
-- **Performance monitoring** and statistics
 
-## Configuration
+- **Umfassende Fehlerbehandlung** mit detaillierten Nachrichten
+- **Signal-Handling** für graceful shutdown
+- **Konfigurationsvalidierung** mit hilfreichen Fehlermeldungen
+- **Strukturiertes Logging** mit Timestamps und Levels
+- **Performance-Monitoring** und Statistiken
 
-### Basic Configuration
+## ⚙️ Konfiguration
+
+### Basis-Konfiguration
+
 ```json
 {
   "common": {
@@ -113,7 +116,8 @@ Enhanced debugging capabilities:
 }
 ```
 
-### HPC Configuration (additional sections)
+### HPC-Konfiguration (zusätzliche Abschnitte)
+
 ```json
 {
   "hpc": {
@@ -130,23 +134,38 @@ Enhanced debugging capabilities:
 }
 ```
 
-## Requirements
+## 🔄 Workflow-Auswahl
+
+**Wählen Sie das passende Script für Ihre Umgebung:**
+
+- **Local/Workstation**: Verwenden Sie `run_bids_apps.py` (siehe [README_STANDARD.md](README_STANDARD.md))
+- **HPC/Cluster**: Verwenden Sie `run_bids_apps_hpc.py` (siehe [README_HPC.md](README_HPC.md))
+
+## 📋 Systemanforderungen
 
 - **Python 3.8+**
 - **Apptainer/Singularity**
-- **DataLad** (optional, for enhanced features)
-- **SLURM** (for HPC script)
+- **DataLad** (optional, für erweiterte Features)
+- **SLURM** (für HPC-Script)
 
-## Files
+## 📁 Dateien
 
-- `run_bids_apps.py` - Standard script with DataLad auto-detection
-- `run_bids_apps_hpc.py` - HPC script with SLURM integration
-- `install.sh` - Automated environment setup
-- `requirements.txt` - Python dependencies
-- `.bidsignore` - BIDS validation exclusions
+- `run_bids_apps.py` - Standard-Script mit DataLad Auto-Erkennung
+- `run_bids_apps_hpc.py` - HPC-Script für SLURM-Cluster
+- `config.json` - Beispielkonfiguration
+- `install.sh` - Automatische Installation
+- `README_STANDARD.md` - Vollständige Dokumentation für Standard-Script
+- `README_HPC.md` - Vollständige Dokumentation für HPC-Script
+
+## 🆘 Support
+
+Bei Problemen:
+
+1. Verwenden Sie den **Debug-Modus** (`--debug`)
+2. Prüfen Sie die **Log-Dateien** im `logs/` Verzeichnis
+3. Konsultieren Sie die entsprechende Dokumentation
+4. Prüfen Sie die **Konfigurationsvalidierung**
 
 ---
 
-**Choose your script based on your environment:**
-- **Local/workstation**: Use `run_bids_apps.py` (see [README_STANDARD.md](README_STANDARD.md))
-- **HPC/cluster**: Use `run_bids_apps_hpc.py` (see [README_HPC.md](README_HPC.md))
+**Entwickelt für robuste, production-ready BIDS App-Ausführung mit erweiterten Features.**

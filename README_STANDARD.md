@@ -4,18 +4,19 @@
 
 ## Overview
 
-The standard BIDS App Runner (`run_bids_apps.py`) is a robust tool for executing BIDS Apps with:
-- **Automatic DataLad detection** - Works with both standard BIDS folders and DataLad datasets
-- **Comprehensive error handling** and logging
+The standard BIDS App Runner (`run_bids_apps.py`) is a robust tool for executing BIDS Apps on local machines or workstations with:
+
+- **Automatic DataLad detection** - Works seamlessly with both standard BIDS folders and DataLad datasets
+- **Local parallel processing** with configurable job counts
 - **Debug mode** with detailed container execution logs
-- **Parallel processing** support
-- **Flexible configuration** via JSON
+- **Comprehensive error handling** and logging
+- **Production-ready features** for reliable processing
 
 ## Quick Start
 
-### 1. Installation
+### Installation
 ```bash
-# Install with UV (recommended)
+# One-command setup with UV (recommended)
 ./install.sh
 
 # Or manually create environment
@@ -24,24 +25,27 @@ source .appsrunner/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Basic Usage
+### Basic Usage
 ```bash
-# Standard BIDS folder
+# Process all subjects (standard BIDS folder or DataLad dataset - auto-detected)
 ./run_bids_apps.py -x config.json
 
-# DataLad dataset (auto-detected)
-./run_bids_apps.py -x config.json
+# Process specific subjects (space-separated)
+./run_bids_apps.py -x config.json --subjects sub-001 sub-002 sub-003
 
-# Debug mode with detailed logs
-./run_bids_apps.py -x config.json --debug
+# Debug mode with detailed container logs
+./run_bids_apps.py -x config.json --debug --subjects sub-001
 
-# Process specific subjects
-./run_bids_apps.py -x config.json --subjects sub-001 sub-002
+# Test configuration without running
+./run_bids_apps.py -x config.json --dry-run
+
+# Force reprocessing even if output exists
+./run_bids_apps.py -x config.json --force --subjects sub-001
 ```
 
 ## Configuration
 
-Create a JSON configuration file with the following structure:
+Create a JSON configuration file:
 
 ```json
 {
@@ -59,8 +63,54 @@ Create a JSON configuration file with the following structure:
     "options": ["--skip-bids-validation"],
     "apptainer_args": ["--containall"],
     "output_check": {
-      "pattern": "{subject}/*",
-      "directory": "fmriprep"
+      "pattern": "sub-{subject}.html"
+    }
+  }
+}
+```
+
+### Configuration Sections
+
+#### Common Section
+- **`bids_folder`**: Path to BIDS dataset directory
+- **`output_folder`**: Path to output directory  
+- **`tmp_folder`**: Path to temporary directory for processing
+- **`container`**: Path to Apptainer/Singularity container
+- **`templateflow_dir`**: Path to TemplateFlow directory
+- **`jobs`**: Number of parallel jobs (default: CPU count)
+- **`pilottest`**: If true, process only one random subject
+
+#### App Section
+- **`analysis_level`**: Analysis level (participant, group)
+- **`options`**: List of command-line options to pass to the app
+- **`apptainer_args`**: Additional Apptainer arguments
+- **`output_check`**: Pattern to check for successful processing
+- **`mounts`**: Additional bind mounts for the container
+
+### Example: QSIPrep Configuration
+```json
+{
+  "common": {
+    "bids_folder": "/data/bids",
+    "output_folder": "/data/derivatives/qsiprep",
+    "tmp_folder": "/tmp/qsiprep_work",
+    "container": "/containers/qsiprep_0.24.0.sif",
+    "templateflow_dir": "/data/templateflow",
+    "jobs": 4
+  },
+  "app": {
+    "analysis_level": "participant",
+    "options": [
+      "--fs-license-file", "/fs/license.txt",
+      "--nprocs", "8",
+      "--skip-bids-validation",
+      "--output-resolution", "1.2"
+    ],
+    "mounts": [
+      { "source": "/usr/local/freesurfer", "target": "/fs" }
+    ],
+    "output_check": {
+      "pattern": "sub-{subject}.html"
     }
   }
 }
@@ -68,24 +118,24 @@ Create a JSON configuration file with the following structure:
 
 ## DataLad Integration
 
-The script automatically detects DataLad datasets and provides enhanced functionality:
+The script **automatically detects** DataLad datasets and provides enhanced functionality without requiring any configuration changes:
 
-### Auto-Detection Features:
-- **Dataset detection**: Automatically identifies if input is a DataLad dataset
-- **Branch management**: Creates processing branches per subject (optional)
-- **Data retrieval**: Automatically gets required data using `datalad get`
-- **Result saving**: Saves outputs to DataLad dataset with version control
+### Auto-Detection Features
+- **Dataset detection**: Checks for `.datalad/config` in input/output folders
+- **Data retrieval**: Automatically runs `datalad get` for required subjects
+- **Result saving**: Automatically runs `datalad save` after successful processing
+- **Graceful fallback**: Works normally with standard BIDS folders when DataLad not detected
 
-### DataLad Configuration (Optional):
-```json
-{
-  "datalad": {
-    "branch_per_subject": true,
-    "output_branch": "results",
-    "auto_push": false,
-    "get_derivatives": true
-  }
-}
+### DataLad Workflow Example
+```bash
+# Clone DataLad dataset
+datalad clone https://example.com/dataset.git my_dataset
+cd my_dataset
+
+# Run BIDS app (DataLad features automatically enabled)
+./run_bids_apps.py -x config.json
+
+# Results are automatically saved with version control
 ```
 
 ## Command Line Options
@@ -99,7 +149,7 @@ options:
   -x, --config CONFIG   Path to JSON config file
   --log-level LEVEL     Set logging level (default: INFO)
   --dry-run            Show commands without executing them
-  --subjects SUB [SUB ...] Process only specified subjects
+  --subjects SUB [SUB ...] Process only specified subjects (space-separated)
   --force              Force reprocessing even if output exists
   --debug              Enable detailed container execution logs
   --version            Show program version
@@ -110,49 +160,74 @@ options:
 Enable debug mode for detailed troubleshooting:
 
 ```bash
+# Debug single subject with detailed logs
 ./run_bids_apps.py -x config.json --debug --subjects sub-001
+
+# Debug multiple subjects
+./run_bids_apps.py -x config.json --debug --subjects sub-001 sub-002
 ```
 
-**Debug features:**
-- Real-time container output streaming
-- Detailed log files saved to `logs/container_logs/`
-- Last 20 lines of stderr on failure
-- Container execution timing information
+### Debug Features
+- **Real-time container output** streaming to console
+- **Detailed log files** saved to `logs/container_logs/`
+- **Error context** with last 20 lines of stderr on failure
+- **Container execution timing** information
+- **Serial processing** (parallel processing disabled in debug mode)
 
-**Log structure:**
+### Log Structure
 ```
 logs/
 ├── bids_app_runner_20240101_120000.log    # Main application log
 └── container_logs/                        # Debug mode container logs
     ├── container_sub-001_20240101_120000.log
-    └── container_sub-001_20240101_120000.err
+    ├── container_sub-001_20240101_120000.err
+    ├── container_sub-002_20240101_120000.log
+    └── container_sub-002_20240101_120000.err
 ```
+
+## Output Validation
+
+Configure output checking to skip already processed subjects:
+
+```json
+{
+  "app": {
+    "output_check": {
+      "pattern": "sub-{subject}.html",
+      "directory": "reports"  // Optional subdirectory
+    }
+  }
+}
+```
+
+The script will look for files matching the pattern and skip subjects that have already been processed (unless `--force` is used).
 
 ## Examples
 
-### Standard BIDS Processing
+### Process All Subjects
 ```bash
-# Process all subjects with fMRIPrep
-./run_bids_apps.py -x fmriprep_config.json
-
-# Dry run to test configuration
-./run_bids_apps.py -x config.json --dry-run
-
-# Force reprocessing of specific subjects
-./run_bids_apps.py -x config.json --force --subjects sub-001
+./run_bids_apps.py -x config.json
 ```
 
-### DataLad Workflow
+### Process Specific Subjects
 ```bash
-# Clone DataLad dataset
-datalad clone https://example.com/dataset.git my_dataset
-cd my_dataset
+# With sub- prefix
+./run_bids_apps.py -x config.json --subjects sub-001 sub-002 sub-003
 
-# Run BIDS app (DataLad features auto-enabled)
-./run_bids_apps.py -x config.json
+# Without sub- prefix (automatically added)
+./run_bids_apps.py -x config.json --subjects 001 002 003
+```
 
-# Check processing branches
-git branch -a
+### Testing and Debugging
+```bash
+# Test configuration
+./run_bids_apps.py -x config.json --dry-run
+
+# Debug specific subject
+./run_bids_apps.py -x config.json --debug --subjects sub-001
+
+# Force reprocessing
+./run_bids_apps.py -x config.json --force --subjects sub-001
 ```
 
 ### Group Analysis
@@ -170,16 +245,18 @@ git branch -a
 The script provides comprehensive error handling:
 
 - **Configuration validation**: Checks paths, required fields, and data types
-- **Container execution**: Detailed error reporting with log preservation
+- **Container execution**: Detailed error reporting with log preservation  
 - **DataLad operations**: Graceful fallback for DataLad failures
-- **Signal handling**: Clean shutdown on interruption
+- **Signal handling**: Clean shutdown on interruption (Ctrl+C)
+- **Output verification**: Validates successful processing completion
 
 ## Performance Tips
 
 1. **Parallel processing**: Adjust `jobs` in config based on available CPUs
-2. **Debug mode**: Use only for troubleshooting (disables parallel processing)
+2. **Debug mode**: Use only for troubleshooting (forces serial processing)
 3. **Output checking**: Configure `output_check` to skip completed subjects
 4. **Temporary storage**: Use fast local storage for `tmp_folder`
+5. **Memory management**: Monitor system resources and adjust job count accordingly
 
 ## Troubleshooting
 
@@ -192,12 +269,13 @@ The script provides comprehensive error handling:
    - Check container path in configuration
    - Ensure container file exists and is readable
 
-2. **DataLad detection issues**
+2. **Processing reported as failed but container succeeded**
    ```
-   INFO: DataLad dataset detected, enabling enhanced features
+   ERROR: Processing failed for sub-001 - no expected output found
    ```
-   - Ensure you're in a DataLad dataset directory
-   - Check DataLad installation: `datalad --version`
+   - Check `output_check` pattern in configuration
+   - Verify the pattern matches actual output files
+   - Use `--debug` mode to see detailed container logs
 
 3. **Permission errors**
    ```
@@ -206,16 +284,28 @@ The script provides comprehensive error handling:
    - Check write permissions for output and temp directories
    - Ensure parent directories exist
 
-### Debug Mode Usage
+4. **DataLad issues** (when using DataLad datasets)
+   ```
+   WARNING: DataLad command failed
+   ```
+   - Check DataLad installation: `datalad --version`
+   - Verify dataset is properly initialized
+   - Check network connectivity for remote datasets
+
+### Debug Workflow
 
 ```bash
-# Debug single subject
+# 1. Test configuration
+./run_bids_apps.py -x config.json --dry-run
+
+# 2. Debug single subject
 ./run_bids_apps.py -x config.json --debug --subjects sub-001
 
-# Check container logs
+# 3. Check container logs
 ls -la logs/container_logs/
+cat logs/container_logs/container_sub-001_*.log
 
-# View real-time logs
+# 4. View real-time logs
 tail -f logs/container_logs/container_sub-001_*.log
 ```
 
@@ -225,15 +315,15 @@ tail -f logs/container_logs/container_sub-001_*.log
 - **Apptainer/Singularity**
 - **DataLad** (optional, for enhanced features)
 - **Git** (for DataLad datasets)
+- **Sufficient disk space** for temporary files and outputs
 
 ## Files Created
 
-- `.bidsignore` - BIDS validation exclusions
-- `logs/` - Application and container logs
-- `requirements-core.txt` - Minimal dependencies
-- `requirements.txt` - Full dependencies with development tools
-- `install.sh` - Automated environment setup script
+- **`logs/`** - Application and container logs
+- **`.bidsignore`** - BIDS validation exclusions
+- **`requirements.txt`** - Python dependencies
+- **`install.sh`** - Automated environment setup script
 
 ---
 
-For HPC/SLURM environments, see `README_HPC.md`.
+**For HPC/SLURM environments, use the HPC version instead.**
