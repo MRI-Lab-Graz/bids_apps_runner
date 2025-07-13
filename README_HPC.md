@@ -1,264 +1,156 @@
-# BIDS App Runner - HPC Version 2.0.0 with DataLad
+# BIDS App Runner - HPC Version
 
-Diese erweiterte Version des BIDS App Runners ist speziell für High Performance Computing (HPC) Umgebungen mit SLURM und DataLad-Integration entwickelt.
+**Version 2.0.0** - Production-ready BIDS App execution for High Performance Computing
 
-## Neue Features in Version 2.0.0
+## Overview
 
-### 🚀 Produktionsreife Verbesserungen
+The HPC BIDS App Runner (`run_bids_apps_hpc.py`) is designed for High Performance Computing environments with:
+- **SLURM job scheduling** instead of multiprocessing
+- **DataLad integration** for BIDS dataset management
+- **Git/Git-annex** for data versioning
+- **Debug mode** with detailed container execution logs in SLURM jobs
+- **Separate output repositories** for results
 
-- **Robuste Fehlerbehandlung**: Comprehensive exception handling mit detaillierten Fehlermeldungen
-- **Signal-Handling**: Graceful shutdown bei Interrupts (CTRL+C)
-- **Erweiterte Validierung**: Vollständige Überprüfung aller Konfigurationsparameter
-- **Logging-System**: Strukturierte Logs mit Zeitstempel und verschiedenen Log-Levels
-- **Verarbeitungsstatistiken**: Detaillierte Zusammenfassung der Job-Submissions
-- **Dry-Run Modus**: Sicheres Testen der Konfiguration ohne tatsächliche Ausführung
+## Quick Start
 
-### 🔧 Erweiterte Konfiguration
-
-- **Flexible Pfade**: Unterstützung für verschiedene HPC-Umgebungen
-- **Validierung**: Automatische Überprüfung von SLURM-Parametern
-- **Intelligente Defaults**: Fallback-Werte für optionale Parameter
-- **Umgebungsvariablen**: Flexible Konfiguration von Container-UmgebungenIDS App Runner - HPC Version with DataLad
-
-Diese erweiterte Version des BIDS App Runners ist speziell für High Performance Computing (HPC) Umgebungen mit SLURM und DataLad-Integration entwickelt.
-
-## Neue Features für HPC
-
-### 🚀 SLURM Integration
-- Automatische Erstellung von SLURM Job-Scripts
-- Parallele Verarbeitung über SLURM statt multiprocessing
-- Flexible SLURM-Parameter-Konfiguration
-- Job-Monitoring und Status-Verfolgung
-
-### 📦 DataLad Integration
-- Automatisches Klonen von BIDS-Repositories
-- Branch-basierte Verarbeitung pro Subject
-- Versionskontrolle für Input- und Output-Daten
-- Git-Annex für große Dateien
-
-### 🌿 Branch-Management
-- Separate Branches für jeden Subject (`processing-sub-{ID}`)
-- Automatisches Merging der Ergebnisse
-- Saubere Trennung von Verarbeitungszuständen
-
-## Installation und Setup
-
-### Voraussetzungen
-- SLURM Workload Manager
-- DataLad (>= 0.18.0)
-- Apptainer/Singularity
-- Git und Git-Annex
-
-### HPC-Module (Beispiel)
+### 1. Installation on HPC
 ```bash
-module load apptainer/1.2.0
-module load datalad/0.19.0
-module load git-annex/10.20230408
+# Install with UV (recommended)
+./install.sh
+
+# Or manually create environment
+python -m venv .appsrunner
+source .appsrunner/bin/activate
+pip install -r requirements.txt
 ```
 
-## Konfiguration
+### 2. Basic Usage
+```bash
+# Submit SLURM jobs for all subjects
+./run_bids_apps_hpc.py -x config_hpc.json
 
-### HPC-spezifische Konfiguration (`config_hpc.json`)
+# Create job scripts only (no submission)
+./run_bids_apps_hpc.py -x config_hpc.json --slurm-only
+
+# Debug mode with container logs
+./run_bids_apps_hpc.py -x config_hpc.json --debug --subjects sub-001
+
+# Dry run to test configuration
+./run_bids_apps_hpc.py -x config_hpc.json --dry-run
+```
+
+## Configuration
+
+HPC configuration requires additional sections for SLURM and DataLad:
 
 ```json
 {
   "common": {
+    "bids_folder": "/data/bids/dataset",
+    "output_folder": "/data/output",
+    "tmp_folder": "/scratch/bids_processing",
+    "container": "/data/containers/app.sif",
     "templateflow_dir": "/data/shared/templateflow",
-    "container": "/data/containers/qsirecon/qsirecon_1.0.0.sif",
-    "work_dir": "/scratch/$USER/bids_work",
-    "log_dir": "/scratch/$USER/bids_logs"
+    "work_dir": "/scratch/work"
+  },
+  "app": {
+    "analysis_level": "participant",
+    "options": ["--skip-bids-validation"],
+    "apptainer_args": ["--containall"]
   },
   "hpc": {
+    "job_name": "bids_app",
     "partition": "compute",
     "time": "24:00:00",
-    "mem": "32G",
+    "mem": "32GB",
     "cpus": 8,
-    "job_name": "qsirecon",
-    "modules": ["apptainer/1.2.0", "datalad/0.19.0"],
+    "modules": ["apptainer", "datalad"],
+    "environment": {
+      "TEMPLATEFLOW_HOME": "/data/shared/templateflow"
+    },
+    "output_pattern": "output_%j.log",
+    "error_pattern": "error_%j.log",
     "monitor_jobs": true
   },
   "datalad": {
-    "input_repo": "git@github.com:your-lab/bids-dataset.git",
-    "output_repo": "git@github.com:your-lab/qsirecon-outputs.git",
+    "input_url": "https://example.com/dataset.git",
+    "output_url": "https://example.com/results.git",
     "branch_per_subject": true,
-    "output_branch": "results"
+    "output_branch": "results",
+    "auto_push": false
   }
 }
 ```
 
-### Wichtige Konfigurationsoptionen
+## DataLad Workflow
 
-#### HPC-Sektion
-- `partition`: SLURM-Partition
-- `time`: Maximale Laufzeit
-- `mem`: Speicher pro Job
-- `cpus`: CPU-Kerne pro Job
-- `modules`: Zu ladende Module
-- `environment`: Umgebungsvariablen
+The HPC script is built around DataLad for reproducible data management:
 
-#### DataLad-Sektion
-- `input_repo`: BIDS-Datenrepository
-- `output_repo`: Ergebnis-Repository
-- `branch_per_subject`: Separate Branches pro Subject
-- `clone_method`: "clone" oder "install"
-- `auto_push`: Automatisches Pushen der Ergebnisse
+### Workflow Steps
+1. **Setup**: Clones input and output DataLad datasets
+2. **Job Creation**: Generates SLURM job scripts for each subject
+3. **Data Retrieval**: Each job gets subject data via `datalad get`
+4. **Processing**: Runs BIDS app in isolated environment
+5. **Result Saving**: Saves outputs to DataLad dataset with versioning
 
-## Verwendung
+### Branch Management
+- **Input branches**: `processing-{subject}` for each subject
+- **Output branch**: Configurable (default: `results`)
+- **Automatic cleanup**: Temporary branches cleaned after successful processing
 
-### 1. Repository-Setup
+## Command Line Options
+
+```
+usage: run_bids_apps_hpc.py [-h] -x CONFIG [--log-level {DEBUG,INFO,WARNING,ERROR}]
+                            [--dry-run] [--subjects SUBJECTS [SUBJECTS ...]]
+                            [--slurm-only] [--job-template JOB_TEMPLATE]
+                            [--force] [--debug] [--version]
+
+options:
+  -x, --config CONFIG   Path to JSON config file
+  --log-level LEVEL     Set logging level (default: INFO)
+  --dry-run            Show commands without executing them
+  --subjects SUB [SUB ...] Process only specified subjects
+  --slurm-only         Create job scripts but don't submit to SLURM
+  --job-template FILE  Custom SLURM job template
+  --force              Force reprocessing even if output exists
+  --debug              Enable detailed container execution logs in SLURM jobs
+  --version            Show program version
+```
+
+## Debug Mode for HPC
+
+Debug mode in HPC environments provides detailed container logging within SLURM jobs:
+
 ```bash
-# Input-Repository initialisieren
-./manage_datalad_repos.sh init-input -r /data/bids/my_study
-
-# Output-Repository initialisieren  
-./manage_datalad_repos.sh init-output -r /data/outputs/qsirecon_results
-
-# Remote-Repositories einrichten
-./manage_datalad_repos.sh setup-sibling -r /data/bids/my_study -s git@github.com:lab/study.git
+./run_bids_apps_hpc.py -x config.json --debug --subjects sub-001
 ```
 
-### 2. BIDS App ausführen
-```bash
-# Normale Ausführung
-python run_bids_apps_hpc.py -x config_hpc.json
+**Debug features:**
+- Container stdout/stderr saved to dedicated log files
+- Real-time log streaming during execution
+- Log files stored in `work_dir/container_logs/`
+- Integrates with SLURM job logging
 
-# Dry-Run (zeigt nur die Befehle)
-python run_bids_apps_hpc.py -x config_hpc.json --dry-run
-
-# Nur Job-Scripts erstellen ohne Submission
-python run_bids_apps_hpc.py -x config_hpc.json --slurm-only
-
-# Spezifische Subjects verarbeiten
-python run_bids_apps_hpc.py -x config_hpc.json --subjects sub-001 sub-002
-
-# Pilot-Modus (ein zufälliger Subject)
-# Setzen Sie "pilottest": true in der Konfiguration
+**Log structure:**
+```
+work_dir/
+├── logs/                    # SLURM job logs
+│   ├── output_123456.log
+│   └── error_123456.log
+└── container_logs/          # Container execution logs (debug mode)
+    ├── container_sub-001_20240101_120000.log
+    └── container_sub-001_20240101_120000.err
 ```
 
-### 3. Job-Monitoring
-```bash
-# Job-Status überprüfen
-squeue -u $USER
+## Requirements
 
-# Logs ansehen
-tail -f logs/slurm-*.out
+- **Python 3.8+**
+- **SLURM workload manager**
+- **Apptainer/Singularity**
+- **DataLad**
+- **Git with Git-annex**
 
-# Repository-Status
-./manage_datalad_repos.sh status -r /data/outputs/qsirecon_results
-```
+---
 
-### 4. Ergebnisse zusammenführen
-```bash
-# Alle Verarbeitungs-Branches mergen
-./manage_datalad_repos.sh merge-results -r /data/outputs/qsirecon_results
-
-# Temporäre Branches aufräumen
-./manage_datalad_repos.sh cleanup -r /data/outputs/qsirecon_results
-```
-
-## Workflow-Übersicht
-
-### Typischer HPC-Workflow:
-
-1. **Setup**: Repository klonen und konfigurieren
-2. **Submission**: Jobs für alle Subjects einreichen
-3. **Monitoring**: Job-Status überwachen
-4. **Merge**: Ergebnisse zusammenführen
-5. **Cleanup**: Temporäre Daten bereinigen
-
-### DataLad-Workflow pro Subject:
-
-1. **Branch**: Neuen processing-Branch erstellen
-2. **Get**: Subject-Daten mit `datalad get` laden
-3. **Process**: BIDS App über SLURM ausführen
-4. **Save**: Ergebnisse mit `datalad save` sichern
-5. **Merge**: In Haupt-Branch zusammenführen
-
-## Verzeichnisstruktur
-
-```
-/scratch/$USER/bids_work/
-├── input_data/           # Geklonte BIDS-Daten
-│   ├── sub-001/
-│   ├── sub-002/
-│   └── derivatives/
-├── output_data/          # Ergebnis-Repository
-│   ├── derivatives/
-│   └── logs/
-└── tmp/                  # Temporäre Verarbeitung
-    ├── sub-001/
-    └── sub-002/
-```
-
-## Fehlerbehandlung
-
-### Häufige Probleme:
-
-1. **Job-Fehler**: Log-Dateien in `logs/slurm-*.err` überprüfen
-2. **DataLad-Fehler**: Repository-Status mit `datalad status` prüfen
-3. **Speicher-Probleme**: Temporäre Verzeichnisse bereinigen
-
-### Debugging:
-```bash
-# Verbose Logging
-python run_bids_apps_hpc.py -x config_hpc.json --log-level DEBUG
-
-# Job-Script ansehen
-cat job_sub-001.sh
-
-# SLURM-Job-Details
-sacct -j <job_id> --format=JobID,JobName,State,ExitCode
-```
-
-## Best Practices
-
-### 📊 Ressourcen-Management
-- Angemessene Speicher- und CPU-Anforderungen
-- Temporäre Verzeichnisse auf schnellem Storage (/scratch)
-- Regelmäßige Bereinigung alter Jobs
-
-### 🔄 Daten-Management
-- Regelmäßige Backups der Repositories
-- Branch-Strategien für verschiedene Verarbeitungsversionen
-- Dokumentation der Verarbeitungsparameter
-
-### 🚨 Monitoring
-- Job-Logs regelmäßig überprüfen
-- Disk-Usage überwachen
-- Failed Jobs analysieren und neu starten
-
-## Erweiterte Features
-
-### Custom SLURM-Templates
-```bash
-# Eigenes Job-Template verwenden
-python run_bids_apps_hpc.py -x config_hpc.json --job-template custom_template.sh
-```
-
-### Batch-Processing verschiedener Pipelines
-```bash
-# Mehrere Konfigurationen nacheinander
-for config in config_qsiprep.json config_qsirecon.json; do
-    python run_bids_apps_hpc.py -x $config
-done
-```
-
-### Integration mit anderen HPC-Systemen
-- Anpassung für andere Scheduler (PBS, LSF)
-- Integration mit Container-Orchestration
-- Automatisierung mit Workflow-Managern
-
-## Support und Weiterentwicklung
-
-Dieses Tool ist für wissenschaftliche HPC-Umgebungen optimiert und wird aktiv weiterentwickelt. Feature-Requests und Bug-Reports sind willkommen!
-
-### Bekannte Limitationen
-- SLURM-spezifisch (andere Scheduler benötigen Anpassung)
-- Erfordert DataLad-Kenntnisse für erweiterte Features
-- Git-Annex-Setup kann komplex sein
-
-### Geplante Features
-- Integration mit Workflow-Managern (Nextflow, Snakemake)
-- Web-basiertes Monitoring-Dashboard
-- Automatische QC-Report-Generierung
-- Multi-Site-Verarbeitung
+For standard/local environments, see `README_STANDARD.md`.

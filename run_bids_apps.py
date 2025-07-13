@@ -25,6 +25,104 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+def is_datalad_dataset(path):
+    """Check if a path is a DataLad dataset."""
+    if not os.path.isdir(path):
+        return False
+    
+    # Check for .datalad directory
+    datalad_dir = os.path.join(path, '.datalad')
+    if os.path.isdir(datalad_dir):
+        config_file = os.path.join(datalad_dir, 'config')
+        if os.path.isfile(config_file):
+            return True
+    
+    return False
+
+def check_datalad_available():
+    """Check if DataLad is available in the system."""
+    try:
+        result = subprocess.run(['datalad', '--version'], 
+                              capture_output=True, text=True, timeout=5)
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+        return False
+
+def run_datalad_command(cmd, cwd=None, dry_run=False):
+    """Execute a DataLad command with error handling."""
+    if dry_run:
+        logging.info(f"DRY RUN - Would execute DataLad command: {' '.join(cmd)}")
+        return True
+    
+    try:
+        logging.debug(f"Running DataLad command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, check=True, capture_output=True, 
+                              text=True, cwd=cwd, timeout=300)
+        
+        if result.stdout:
+            logging.debug(f"DataLad stdout: {result.stdout}")
+        if result.stderr:
+            logging.debug(f"DataLad stderr: {result.stderr}")
+        
+        return True
+        
+    except subprocess.CalledProcessError as e:
+        logging.warning(f"DataLad command failed: {' '.join(cmd)}")
+        logging.warning(f"Error: {e.stderr if e.stderr else str(e)}")
+        return False
+    except subprocess.TimeoutExpired:
+        logging.warning(f"DataLad command timed out: {' '.join(cmd)}")
+        return False
+    except Exception as e:
+        logging.warning(f"Unexpected error running DataLad command: {e}")
+        return False
+
+def get_subject_data_datalad(bids_dir, subject, dry_run=False):
+    """Get subject data using DataLad if dataset is detected."""
+    if not is_datalad_dataset(bids_dir):
+        return True  # Not a DataLad dataset, no action needed
+    
+    if not check_datalad_available():
+        logging.warning("DataLad not available, skipping data retrieval")
+        return True
+    
+    logging.info(f"Getting DataLad data for subject: {subject}")
+    
+    # Get subject data
+    subject_pattern = os.path.join(bids_dir, subject)
+    cmd = ["datalad", "get", subject_pattern]
+    
+    if not run_datalad_command(cmd, cwd=bids_dir, dry_run=dry_run):
+        logging.warning(f"Could not get data for {subject}, continuing anyway")
+    
+    # Also try to get derivatives if they exist
+    derivatives_pattern = os.path.join(bids_dir, "derivatives", "*", subject)
+    if glob.glob(derivatives_pattern):
+        cmd = ["datalad", "get", derivatives_pattern]
+        run_datalad_command(cmd, cwd=bids_dir, dry_run=dry_run)
+    
+    return True
+
+def save_results_datalad(output_dir, subject, dry_run=False):
+    """Save processing results using DataLad if dataset is detected."""
+    if not is_datalad_dataset(output_dir):
+        return True  # Not a DataLad dataset, no action needed
+    
+    if not check_datalad_available():
+        logging.warning("DataLad not available, skipping result saving")
+        return True
+    
+    logging.info(f"Saving DataLad results for subject: {subject}")
+    
+    # Save results
+    cmd = ["datalad", "save", "-m", f"Add results for {subject}"]
+    
+    if not run_datalad_command(cmd, cwd=output_dir, dry_run=dry_run):
+        logging.warning(f"Could not save results for {subject}")
+        return False
+    
+    return True
+
 def setup_logging(log_level="INFO"):
     """Setup logging configuration."""
     # Create logs directory if it doesn't exist
@@ -51,18 +149,26 @@ def setup_logging(log_level="INFO"):
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Run a BIDS App using a JSON config file",
+        description="Run a BIDS App using a JSON config file (with DataLad auto-detection)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s -x config.json
-  %(prog)s -x config.json --dry-run
-  %(prog)s -x config.json --log-level DEBUG
-  %(prog)s -x config.json --subjects sub-001 sub-002
-  %(prog)s -x config.json --debug  # Enable detailed container logs
-  %(prog)s -x config.json --debug --subjects sub-001  # Debug single subject
+  %(prog)s -x config.json                                    # Standard BIDS folder
+  %(prog)s -x config.json                                    # DataLad dataset (auto-detected)
+  %(prog)s -x config.json --dry-run                          # Test configuration
+  %(prog)s -x config.json --log-level DEBUG                  # Verbose logging
+  %(prog)s -x config.json --subjects sub-001 sub-002         # Specific subjects
+  %(prog)s -x config.json --debug                            # Enable detailed container logs
+  %(prog)s -x config.json --debug --subjects sub-001         # Debug single subject
+  %(prog)s -x config.json --force                            # Force reprocessing
   
-For more information, see README.md
+DataLad Integration:
+  - Automatically detects DataLad datasets in input/output folders
+  - Performs 'datalad get' for required data before processing
+  - Saves results with 'datalad save' after successful processing
+  - Works seamlessly with standard BIDS folders when DataLad not detected
+  
+For more information, see README_STANDARD.md
         """
     )
     
@@ -432,6 +538,15 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
     """Process a single subject with comprehensive error handling."""
     logging.info(f"Starting processing for subject: {subject}")
     
+    # Check if input is a DataLad dataset
+    is_input_datalad = is_datalad_dataset(common["bids_folder"])
+    is_output_datalad = is_datalad_dataset(common["output_folder"])
+    
+    if is_input_datalad or is_output_datalad:
+        logging.info("DataLad dataset detected, enabling enhanced features")
+        if not check_datalad_available():
+            logging.warning("DataLad features requested but DataLad not available")
+    
     # Create temporary directory
     tmp_dir = os.path.join(common["tmp_folder"], subject)
     
@@ -455,6 +570,10 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
             except:
                 pass
             return True
+        
+        # Get subject data if DataLad dataset
+        if is_input_datalad:
+            get_subject_data_datalad(common["bids_folder"], subject, dry_run)
         
         # Build container command
         cmd = ["apptainer", "run"]
@@ -505,6 +624,10 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
         )
         
         if not dry_run:
+            # Save results if DataLad output dataset
+            if is_output_datalad:
+                save_results_datalad(common["output_folder"], subject, dry_run)
+            
             # Check if processing was successful
             if subject_processed(subject, common, app, force=False):
                 logging.info(f"Subject {subject} processing completed successfully")
@@ -552,6 +675,13 @@ def process_group(common, app, dry_run=False, debug=False):
     """Process group-level analysis."""
     logging.info("Starting group-level processing")
     
+    # Check if input/output are DataLad datasets
+    is_input_datalad = is_datalad_dataset(common["bids_folder"])
+    is_output_datalad = is_datalad_dataset(common["output_folder"])
+    
+    if is_input_datalad or is_output_datalad:
+        logging.info("DataLad dataset detected for group analysis")
+    
     tmp_dir = os.path.join(common["tmp_folder"], "group")
     
     # Create debug log directory if in debug mode
@@ -564,6 +694,20 @@ def process_group(common, app, dry_run=False, debug=False):
     try:
         os.makedirs(tmp_dir, exist_ok=True)
         logging.debug(f"Created temp directory: {tmp_dir}")
+        
+        # Get all data if DataLad input dataset
+        if is_input_datalad:
+            logging.info("Getting all data for group analysis from DataLad dataset")
+            # Get all subject data for group analysis
+            subjects_pattern = os.path.join(common["bids_folder"], "sub-*")
+            cmd = ["datalad", "get", subjects_pattern]
+            run_datalad_command(cmd, cwd=common["bids_folder"], dry_run=dry_run)
+            
+            # Also get derivatives
+            derivatives_pattern = os.path.join(common["bids_folder"], "derivatives")
+            if os.path.exists(derivatives_pattern):
+                cmd = ["datalad", "get", derivatives_pattern]
+                run_datalad_command(cmd, cwd=common["bids_folder"], dry_run=dry_run)
         
         # Build container command
         cmd = ["apptainer", "run"]
@@ -605,6 +749,10 @@ def process_group(common, app, dry_run=False, debug=False):
         )
         
         if not dry_run:
+            # Save results if DataLad output dataset
+            if is_output_datalad:
+                save_results_datalad(common["output_folder"], "group", dry_run)
+            
             try:
                 shutil.rmtree(tmp_dir)
                 logging.debug(f"Cleaned up temp directory: {tmp_dir}")
