@@ -75,6 +75,38 @@
 - Environment management
 - Troubleshooting guide
 
+## Debug Mode Enhancement
+
+### HPC Debug Mode (run_bids_apps_hpc.py)
+**Added**: `--debug` flag for detailed container execution logging in SLURM jobs
+
+**Features**:
+- Container stdout/stderr saved to dedicated log files per subject
+- Real-time log streaming during execution  
+- Log files stored in `work_dir/container_logs/`
+- Filename format: `container_{subject}_{timestamp}.log/.err`
+- Integrates with SLURM job logging for comprehensive debugging
+
+**Usage Examples**:
+```bash
+# Debug single subject with detailed container logs
+./run_bids_apps_hpc.py -x config.json --debug --subjects sub-001
+
+# Debug mode with dry run (test job script generation)
+./run_bids_apps_hpc.py -x config.json --debug --dry-run
+```
+
+**Log Structure**:
+```
+work_dir/
+├── logs/                    # SLURM job logs
+│   ├── output_123456.log
+│   └── error_123456.log
+└── container_logs/          # Container execution logs (debug mode)
+    ├── container_sub-001_20240101_120000.log
+    └── container_sub-001_20240101_120000.err
+```
+
 ## Integration with Existing Scripts
 
 ### Both Scripts Now Support:

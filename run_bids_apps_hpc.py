@@ -66,6 +66,7 @@ Examples:
   %(prog)s -x config_hpc.json --slurm-only
   %(prog)s -x config_hpc.json --subjects sub-001 sub-002
   %(prog)s -x config_hpc.json --log-level DEBUG
+  %(prog)s -x config_hpc.json --debug --subjects sub-001  # Debug with container logs
   
 For more information, see README_HPC.md
         """
@@ -111,6 +112,12 @@ For more information, see README_HPC.md
         "--force", 
         action="store_true", 
         help="Force reprocessing of subjects even if output exists"
+    )
+    
+    parser.add_argument(
+        "--debug", 
+        action="store_true", 
+        help="Enable debug mode with detailed container execution logs in SLURM jobs"
     )
     
     parser.add_argument(
@@ -420,7 +427,7 @@ def get_data_for_subject(subject, bids_dir, datalad_config, dry_run=False):
         cmd = ["datalad", "get", derivatives_pattern]
         run_command(cmd, dry_run=dry_run)
 
-def create_slurm_job(subject, config, work_dir, script_path, dry_run=False):
+def create_slurm_job(subject, config, work_dir, script_path, dry_run=False, debug=False):
     """Create SLURM job script for a single subject."""
     logging.info(f"Creating SLURM job script for subject: {subject}")
     
@@ -441,6 +448,12 @@ def create_slurm_job(subject, config, work_dir, script_path, dry_run=False):
         # Create logs directory in work_dir
         logs_dir = os.path.join(work_dir, "logs")
         os.makedirs(logs_dir, exist_ok=True)
+        
+        # Create container logs directory if debug mode is enabled
+        container_logs_dir = None
+        if debug:
+            container_logs_dir = os.path.join(work_dir, "container_logs")
+            os.makedirs(container_logs_dir, exist_ok=True)
         
         # Update output/error patterns with full paths
         output_file = os.path.join(logs_dir, hpc['output_pattern'].replace('%j', '$SLURM_JOB_ID'))
@@ -464,6 +477,8 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_JOB_NODELIST"
 echo "Start time: $(date)"
 echo "Working directory: {work_dir}"
+{f'echo "Debug mode: Container logs will be saved to {container_logs_dir}"' if debug else ''}
+echo ""
 
 # Load modules
 """
@@ -547,9 +562,17 @@ apptainer run \\"""
         # Clean subject label (remove sub- prefix if present)
         subject_label = subject.replace("sub-", "")
         
+        # Add debug logging setup if debug mode is enabled
+        container_log_redirection = ""
+        if debug:
+            timestamp = "$(date +%Y%m%d_%H%M%S)"
+            container_stdout_log = f"{container_logs_dir}/container_{subject}_{timestamp}.log"
+            container_stderr_log = f"{container_logs_dir}/container_{subject}_{timestamp}.err"
+            container_log_redirection = f" > >(tee {container_stdout_log}) 2> >(tee {container_stderr_log} >&2)"
+            
         script_content += f"""
     --participant-label {subject_label} \\
-    -w /tmp
+    -w /tmp{container_log_redirection}
 
 # Check if processing was successful
 if [ $? -eq 0 ]; then
@@ -832,7 +855,7 @@ def main():
                 logging.info(f"Creating job for subject: {subject}")
                 
                 job_script = create_slurm_job(
-                    subject, config, work_dir, script_path, args.dry_run
+                    subject, config, work_dir, script_path, args.dry_run, args.debug
                 )
                 
                 if not args.slurm_only:

@@ -59,6 +59,8 @@ Examples:
   %(prog)s -x config.json --dry-run
   %(prog)s -x config.json --log-level DEBUG
   %(prog)s -x config.json --subjects sub-001 sub-002
+  %(prog)s -x config.json --debug  # Enable detailed container logs
+  %(prog)s -x config.json --debug --subjects sub-001  # Debug single subject
   
 For more information, see README.md
         """
@@ -93,6 +95,12 @@ For more information, see README.md
         "--force", 
         action="store_true", 
         help="Force reprocessing of subjects even if output exists"
+    )
+    
+    parser.add_argument(
+        "--debug", 
+        action="store_true", 
+        help="Enable debug mode with detailed container execution logs"
     )
     
     parser.add_argument(
@@ -250,8 +258,8 @@ def build_common_mounts(common, tmp_dir):
     logging.debug(f"Common mounts: {mounts}")
     return mounts
 
-def run_container(cmd, env=None, dry_run=False):
-    """Execute container command with optional dry run mode."""
+def run_container(cmd, env=None, dry_run=False, debug=False, subject=None, log_dir=None):
+    """Execute container command with optional dry run mode and detailed logging."""
     cmd_str = " ".join(cmd)
     
     if dry_run:
@@ -260,48 +268,179 @@ def run_container(cmd, env=None, dry_run=False):
     
     logging.info(f"Running command: {cmd_str}")
     
+    # Create container log files if debug mode is enabled
+    container_log_file = None
+    container_error_file = None
+    
+    if debug and subject and log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        container_log_file = os.path.join(log_dir, f"container_{subject}_{timestamp}.log")
+        container_error_file = os.path.join(log_dir, f"container_{subject}_{timestamp}.err")
+        
+        logging.info(f"Debug mode: Container logs will be saved to:")
+        logging.info(f"  - stdout: {container_log_file}")
+        logging.info(f"  - stderr: {container_error_file}")
+    
     try:
         # Create environment with fallback
         run_env = env or os.environ.copy()
         
-        # Run the command
-        result = subprocess.run(
-            cmd, 
-            check=True, 
-            env=run_env,
-            capture_output=True, 
-            text=True,
-            timeout=None  # No timeout for long-running processes
-        )
+        if debug:
+            # In debug mode, stream output in real-time and save to files
+            logging.info("Debug mode: Starting container execution with real-time logging...")
+            
+            with open(container_log_file, 'w') if container_log_file else open(os.devnull, 'w') as stdout_file, \
+                 open(container_error_file, 'w') if container_error_file else open(os.devnull, 'w') as stderr_file:
+                
+                process = subprocess.Popen(
+                    cmd,
+                    env=run_env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
+                )
+                
+                # Real-time output processing
+                stdout_lines = []
+                stderr_lines = []
+                
+                # Read output in real-time
+                import select
+                import sys
+                
+                if hasattr(select, 'select'):  # Unix-like systems
+                    while process.poll() is None:
+                        ready, _, _ = select.select([process.stdout, process.stderr], [], [], 0.1)
+                        
+                        for stream in ready:
+                            if stream == process.stdout:
+                                line = stream.readline()
+                                if line:
+                                    stdout_lines.append(line)
+                                    if container_log_file:
+                                        stdout_file.write(line)
+                                        stdout_file.flush()
+                                    logging.debug(f"CONTAINER STDOUT: {line.rstrip()}")
+                            
+                            elif stream == process.stderr:
+                                line = stream.readline()
+                                if line:
+                                    stderr_lines.append(line)
+                                    if container_error_file:
+                                        stderr_file.write(line)
+                                        stderr_file.flush()
+                                    logging.debug(f"CONTAINER STDERR: {line.rstrip()}")
+                else:
+                    # Fallback for systems without select (Windows)
+                    stdout, stderr = process.communicate()
+                    stdout_lines = stdout.splitlines(keepends=True) if stdout else []
+                    stderr_lines = stderr.splitlines(keepends=True) if stderr else []
+                    
+                    if container_log_file and stdout:
+                        stdout_file.write(stdout)
+                    if container_error_file and stderr:
+                        stderr_file.write(stderr)
+                
+                # Wait for process to complete
+                return_code = process.wait()
+                
+                # Create result object
+                class DebugResult:
+                    def __init__(self, returncode, stdout_lines, stderr_lines):
+                        self.returncode = returncode
+                        self.stdout = ''.join(stdout_lines)
+                        self.stderr = ''.join(stderr_lines)
+                
+                result = DebugResult(return_code, stdout_lines, stderr_lines)
+                
+                if return_code != 0:
+                    raise subprocess.CalledProcessError(return_code, cmd, result.stdout, result.stderr)
         
-        if result.stdout:
-            logging.debug(f"Command stdout: {result.stdout}")
-        if result.stderr:
-            logging.debug(f"Command stderr: {result.stderr}")
+        else:
+            # Standard mode - capture output but don't stream
+            result = subprocess.run(
+                cmd, 
+                check=True, 
+                env=run_env,
+                capture_output=True, 
+                text=True,
+                timeout=None  # No timeout for long-running processes
+            )
+        
+        # Log output based on mode
+        if debug:
+            logging.info(f"Container execution completed successfully (exit code: {result.returncode})")
+            if result.stdout:
+                logging.info(f"Container produced {len(result.stdout.splitlines())} lines of stdout")
+            if result.stderr:
+                logging.info(f"Container produced {len(result.stderr.splitlines())} lines of stderr")
+                # In debug mode, always show stderr even if successful
+                for line in result.stderr.splitlines():
+                    if line.strip():
+                        logging.warning(f"CONTAINER STDERR: {line}")
+        else:
+            # Standard mode - only debug level output
+            if result.stdout:
+                logging.debug(f"Command stdout: {result.stdout}")
+            if result.stderr:
+                logging.debug(f"Command stderr: {result.stderr}")
         
         logging.info("Command completed successfully")
         return result
         
     except subprocess.CalledProcessError as e:
         logging.error(f"Container execution failed with exit code {e.returncode}")
+        
+        if debug:
+            logging.error(f"Debug mode: Detailed error information:")
+            if container_log_file and os.path.exists(container_log_file):
+                logging.error(f"Full stdout log saved to: {container_log_file}")
+            if container_error_file and os.path.exists(container_error_file):
+                logging.error(f"Full stderr log saved to: {container_error_file}")
+                
+                # Show last 20 lines of stderr for immediate debugging
+                try:
+                    with open(container_error_file, 'r') as f:
+                        lines = f.readlines()
+                        if lines:
+                            logging.error("Last 20 lines of container stderr:")
+                            for line in lines[-20:]:
+                                logging.error(f"  {line.rstrip()}")
+                except Exception:
+                    pass
+        
+        # Always show captured output in error case
         if e.stdout:
-            logging.error(f"stdout: {e.stdout}")
+            logging.error(f"Container stdout: {e.stdout}")
         if e.stderr:
-            logging.error(f"stderr: {e.stderr}")
+            logging.error(f"Container stderr: {e.stderr}")
         raise
+        
     except subprocess.TimeoutExpired as e:
         logging.error(f"Command timed out after {e.timeout} seconds")
+        if debug and container_log_file:
+            logging.error(f"Partial container logs may be available at: {container_log_file}")
         raise
     except Exception as e:
         logging.error(f"Unexpected error during command execution: {e}")
         raise
 
-def process_subject(subject, common, app, dry_run=False, force=False):
+def process_subject(subject, common, app, dry_run=False, force=False, debug=False):
     """Process a single subject with comprehensive error handling."""
     logging.info(f"Starting processing for subject: {subject}")
     
     # Create temporary directory
     tmp_dir = os.path.join(common["tmp_folder"], subject)
+    
+    # Create debug log directory if in debug mode
+    debug_log_dir = None
+    if debug:
+        debug_log_dir = os.path.join(common.get("log_dir", "logs"), "container_logs")
+        os.makedirs(debug_log_dir, exist_ok=True)
+        logging.info(f"Debug mode enabled: Container logs will be saved to {debug_log_dir}")
     
     try:
         os.makedirs(tmp_dir, exist_ok=True)
@@ -352,8 +491,18 @@ def process_subject(subject, common, app, dry_run=False, force=False):
         # Add subject-specific parameters
         cmd.extend(["--participant-label", subject.replace("sub-", ""), "-w", "/tmp"])
         
-        # Execute the command
-        result = run_container(cmd, dry_run=dry_run)
+        if debug:
+            logging.info(f"Debug mode: About to execute container for {subject}")
+            logging.info(f"Full command: {' '.join(cmd)}")
+        
+        # Execute the command with debug information
+        result = run_container(
+            cmd, 
+            dry_run=dry_run, 
+            debug=debug, 
+            subject=subject, 
+            log_dir=debug_log_dir
+        )
         
         if not dry_run:
             # Check if processing was successful
@@ -366,22 +515,51 @@ def process_subject(subject, common, app, dry_run=False, force=False):
                     logging.warning(f"Could not clean up temp directory {tmp_dir}: {e}")
                 return True
             else:
-                logging.error(f"Processing failed for {subject} - no expected output found")
+                error_msg = f"Processing failed for {subject} - no expected output found"
+                logging.error(error_msg)
                 logging.warning(f"Temp directory preserved for debugging: {tmp_dir}")
+                
+                if debug and debug_log_dir:
+                    logging.error(f"Debug mode: Check container logs in {debug_log_dir}")
+                    # List available log files for this subject
+                    try:
+                        log_files = [f for f in os.listdir(debug_log_dir) if subject in f]
+                        if log_files:
+                            logging.error(f"Available container log files for {subject}:")
+                            for log_file in log_files:
+                                full_path = os.path.join(debug_log_dir, log_file)
+                                logging.error(f"  - {full_path}")
+                        else:
+                            logging.error(f"No container log files found for {subject}")
+                    except Exception as e:
+                        logging.warning(f"Could not list debug log files: {e}")
+                
                 return False
         
         return True
         
     except Exception as e:
-        logging.error(f"Error processing subject {subject}: {e}")
+        error_msg = f"Error processing subject {subject}: {e}"
+        logging.error(error_msg)
         logging.warning(f"Temp directory preserved for debugging: {tmp_dir}")
+        
+        if debug and debug_log_dir:
+            logging.error(f"Debug mode: Check container logs in {debug_log_dir} for error details")
+        
         return False
 
-def process_group(common, app, dry_run=False):
+def process_group(common, app, dry_run=False, debug=False):
     """Process group-level analysis."""
     logging.info("Starting group-level processing")
     
     tmp_dir = os.path.join(common["tmp_folder"], "group")
+    
+    # Create debug log directory if in debug mode
+    debug_log_dir = None
+    if debug:
+        debug_log_dir = os.path.join(common.get("log_dir", "logs"), "container_logs")
+        os.makedirs(debug_log_dir, exist_ok=True)
+        logging.info(f"Debug mode enabled for group analysis: Container logs will be saved to {debug_log_dir}")
     
     try:
         os.makedirs(tmp_dir, exist_ok=True)
@@ -418,7 +596,13 @@ def process_group(common, app, dry_run=False):
             cmd.extend(app["options"])
         
         # Execute the command
-        result = run_container(cmd, dry_run=dry_run)
+        result = run_container(
+            cmd, 
+            dry_run=dry_run, 
+            debug=debug, 
+            subject="group", 
+            log_dir=debug_log_dir
+        )
         
         if not dry_run:
             try:
@@ -521,7 +705,7 @@ def main():
                 subject = random.choice(subjects)
                 logging.info(f"Pilot mode: processing single subject ({subject})")
                 
-                success = process_subject(subject, common, app, args.dry_run, args.force)
+                success = process_subject(subject, common, app, args.dry_run, args.force, args.debug)
                 processed_subjects.append(subject)
                 if not success:
                     failed_subjects.append(subject)
@@ -530,19 +714,37 @@ def main():
                 jobs = common.get("jobs", multiprocessing.cpu_count())
                 logging.info(f"Processing {len(subjects)} subjects with {jobs} parallel jobs")
                 
+                if args.debug:
+                    logging.info("Debug mode enabled - Container execution will be logged in detail")
+                
                 if args.dry_run:
                     logging.info("DRY RUN MODE - No actual processing will occur")
                     for subject in subjects:
-                        process_subject(subject, common, app, dry_run=True, force=args.force)
+                        process_subject(subject, common, app, dry_run=True, force=args.force, debug=args.debug)
                         processed_subjects.append(subject)
                 else:
                     # Use ProcessPoolExecutor for parallel processing
-                    with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as executor:
-                        # Submit all jobs
-                        future_to_subject = {
-                            executor.submit(process_subject, subject, common, app, False, args.force): subject
-                            for subject in subjects
-                        }
+                    # Note: Debug mode disabled in parallel processing due to complexity
+                    if args.debug and jobs > 1:
+                        logging.warning("Debug mode with parallel processing (jobs > 1) not supported")
+                        logging.warning("Running in serial mode for debug output")
+                        jobs = 1
+                    
+                    if jobs == 1:
+                        # Serial processing (supports debug mode)
+                        for subject in subjects:
+                            success = process_subject(subject, common, app, False, args.force, args.debug)
+                            processed_subjects.append(subject)
+                            if not success:
+                                failed_subjects.append(subject)
+                    else:
+                        # Parallel processing (debug mode disabled)
+                        with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as executor:
+                            # Submit all jobs
+                            future_to_subject = {
+                                executor.submit(process_subject, subject, common, app, False, args.force, False): subject
+                                for subject in subjects
+                            }
                         
                         # Collect results
                         for future in concurrent.futures.as_completed(future_to_subject):
@@ -570,7 +772,7 @@ def main():
                 
         else:
             logging.info(f"Running {level} level analysis")
-            success = process_group(common, app, args.dry_run)
+            success = process_group(common, app, args.dry_run, args.debug)
             
             if success:
                 logging.info("Group analysis completed successfully")
