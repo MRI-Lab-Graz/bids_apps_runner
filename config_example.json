@@ -26,7 +26,6 @@
       { "source": "/usr/local/freesurfer", "target": "/fs" }
     ],
     "output_check": {
-      "directory": "derivatives",
       "pattern": "sub-{subject}.html"
     }
   }
