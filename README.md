@@ -120,8 +120,10 @@ Erweiterte Debugging-Funktionen:
   }
 }
 ```
-jobs: Anzahl apptainer Instanzen
-nprocs: Anzahl an Prozessoren pro apptainer Instanz
+
+*jobs: Anzahl apptainer Instanzen
+*pilottest: true => eine zufällige Person wird für einen Pilotrun gewählt
+*nprocs: Anzahl an Prozessoren pro apptainer Instanz
 
 ### HPC-Konfiguration (zusätzliche Abschnitte)
 
