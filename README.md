@@ -108,13 +108,20 @@ Erweiterte Debugging-Funktionen:
     "tmp_folder": "/tmp/bids_processing",
     "container": "/path/to/app.sif",
     "templateflow_dir": "/path/to/templateflow"
+    "jobs": 1,
+    "pilottest": true
   },
   "app": {
     "analysis_level": "participant",
-    "options": ["--skip-bids-validation"]
+    "options": [
+      "--skip-bids-validation",
+      "--nprocs" "2"
+    ],
   }
 }
 ```
+jobs: Anzahl apptainer Instanzen
+nprocs: Anzahl an Prozessoren pro apptainer Instanz
 
 ### HPC-Konfiguration (zusätzliche Abschnitte)
 
