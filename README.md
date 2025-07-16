@@ -115,7 +115,7 @@ Erweiterte Debugging-Funktionen:
     "analysis_level": "participant",
     "options": [
       "--skip-bids-validation",
-      "--nprocs" "2"
+      "--nprocs", "2"
     ],
   }
 }
