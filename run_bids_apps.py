@@ -103,8 +103,44 @@ def get_subject_data_datalad(bids_dir, subject, dry_run=False):
     
     return True
 
-def save_results_datalad(output_dir, subject, dry_run=False):
-    """Save processing results using DataLad if dataset is detected."""
+def create_analysis_branch(dataset_dir, pipeline_name, dry_run=False):
+    """Create a dedicated analysis branch for the pipeline."""
+    if not is_datalad_dataset(dataset_dir):
+        return True
+    
+    branch_name = f"analysis/{pipeline_name}"
+    logging.info(f"Creating/switching to analysis branch: {branch_name}")
+    
+    # Check if branch exists
+    cmd = ["git", "rev-parse", "--verify", f"origin/{branch_name}"]
+    branch_exists = run_datalad_command(cmd, cwd=dataset_dir, dry_run=False)
+    
+    if branch_exists:
+        # Switch to existing branch
+        cmd = ["git", "checkout", branch_name]
+        run_datalad_command(cmd, cwd=dataset_dir, dry_run=dry_run)
+        
+        # Pull latest changes
+        cmd = ["git", "pull", "origin", branch_name]
+        run_datalad_command(cmd, cwd=dataset_dir, dry_run=dry_run)
+    else:
+        # Create new branch from main
+        cmd = ["git", "checkout", "-b", branch_name, "main"]
+        run_datalad_command(cmd, cwd=dataset_dir, dry_run=dry_run)
+        
+        # Create derivatives directory structure if needed
+        derivatives_dir = os.path.join(dataset_dir, "derivatives", pipeline_name)
+        if not dry_run:
+            os.makedirs(derivatives_dir, exist_ok=True)
+        
+        # Initial commit for new branch
+        cmd = ["datalad", "save", "-m", f"Initialize {pipeline_name} analysis branch"]
+        run_datalad_command(cmd, cwd=dataset_dir, dry_run=dry_run)
+    
+    return True
+
+def save_results_datalad(output_dir, subject, dry_run=False, pipeline_name=None):
+    """Save processing results using DataLad with enhanced branch strategy."""
     if not is_datalad_dataset(output_dir):
         return True  # Not a DataLad dataset, no action needed
     
@@ -112,12 +148,30 @@ def save_results_datalad(output_dir, subject, dry_run=False):
         logging.warning("DataLad not available, skipping result saving")
         return True
     
+    # Determine if this is the dataset root (for branch switching)
+    dataset_root = output_dir
+    if output_dir.endswith('derivatives') or '/derivatives/' in output_dir:
+        # Navigate to dataset root
+        parts = output_dir.split(os.sep)
+        if 'derivatives' in parts:
+            root_parts = parts[:parts.index('derivatives')]
+            dataset_root = os.sep.join(root_parts)
+    
+    # Create/switch to analysis branch if pipeline specified
+    if pipeline_name:
+        create_analysis_branch(dataset_root, pipeline_name, dry_run)
+    
     logging.info(f"Saving DataLad results for subject: {subject}")
     
-    # Save results
-    cmd = ["datalad", "save", "-m", f"Add results for {subject}"]
+    # Save results with descriptive commit message
+    if pipeline_name:
+        commit_msg = f"Add {pipeline_name} results for {subject}"
+    else:
+        commit_msg = f"Add results for {subject}"
     
-    if not run_datalad_command(cmd, cwd=output_dir, dry_run=dry_run):
+    cmd = ["datalad", "save", "-m", commit_msg]
+    
+    if not run_datalad_command(cmd, cwd=dataset_root, dry_run=dry_run):
         logging.warning(f"Could not save results for {subject}")
         return False
     
@@ -276,6 +330,35 @@ def validate_app_config(app):
         app["analysis_level"] = "participant"
     
     logging.info("App configuration validation completed")
+
+def validate_datalad_config(datalad_config):
+    """Validate DataLad-specific configuration."""
+    if not datalad_config:
+        return None
+    
+    logging.info("Validating DataLad configuration...")
+    
+    # Set defaults
+    defaults = {
+        "analysis_branch_strategy": "analysis/{pipeline}",
+        "pipeline_name": "unknown",
+        "auto_push": False,
+        "create_analysis_branch": True
+    }
+    
+    for key, default_value in defaults.items():
+        if key not in datalad_config:
+            datalad_config[key] = default_value
+            logging.debug(f"Set DataLad default: {key} = {default_value}")
+    
+    # Validate pipeline name
+    pipeline_name = datalad_config["pipeline_name"]
+    if not pipeline_name or pipeline_name == "unknown":
+        logging.warning("No pipeline_name specified in DataLad config - using 'analysis'")
+        datalad_config["pipeline_name"] = "analysis"
+    
+    logging.info("DataLad configuration validation completed")
+    return datalad_config
 
 def validate_common_config(cfg):
     """Validate common configuration section."""
@@ -534,7 +617,7 @@ def run_container(cmd, env=None, dry_run=False, debug=False, subject=None, log_d
         logging.error(f"Unexpected error during command execution: {e}")
         raise
 
-def process_subject(subject, common, app, dry_run=False, force=False, debug=False):
+def process_subject(subject, common, app, dry_run=False, force=False, debug=False, datalad_config=None):
     """Process a single subject with comprehensive error handling."""
     logging.info(f"Starting processing for subject: {subject}")
     
@@ -626,7 +709,8 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
         if not dry_run:
             # Save results if DataLad output dataset
             if is_output_datalad:
-                save_results_datalad(common["output_folder"], subject, dry_run)
+                pipeline_name = datalad_config.get("pipeline_name") if datalad_config else None
+                save_results_datalad(common["output_folder"], subject, dry_run, pipeline_name)
             
             # Check if processing was successful
             if subject_processed(subject, common, app, force=False):
@@ -671,7 +755,7 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
         
         return False
 
-def process_group(common, app, dry_run=False, debug=False):
+def process_group(common, app, dry_run=False, debug=False, datalad_config=None):
     """Process group-level analysis."""
     logging.info("Starting group-level processing")
     
@@ -751,7 +835,8 @@ def process_group(common, app, dry_run=False, debug=False):
         if not dry_run:
             # Save results if DataLad output dataset
             if is_output_datalad:
-                save_results_datalad(common["output_folder"], "group", dry_run)
+                pipeline_name = datalad_config.get("pipeline_name") if datalad_config else None
+                save_results_datalad(common["output_folder"], "group", dry_run, pipeline_name)
             
             try:
                 shutil.rmtree(tmp_dir)
@@ -816,6 +901,9 @@ def main():
         validate_common_config(common)
         validate_app_config(app)
         
+        # Validate DataLad configuration if present
+        datalad_config = validate_datalad_config(config.get("datalad"))
+        
         # Get subjects list
         subjects = []
         level = app.get("analysis_level", "participant")
@@ -853,7 +941,7 @@ def main():
                 subject = random.choice(subjects)
                 logging.info(f"Pilot mode: processing single subject ({subject})")
                 
-                success = process_subject(subject, common, app, args.dry_run, args.force, args.debug)
+                success = process_subject(subject, common, app, args.dry_run, args.force, args.debug, datalad_config)
                 processed_subjects.append(subject)
                 if not success:
                     failed_subjects.append(subject)
@@ -868,7 +956,7 @@ def main():
                 if args.dry_run:
                     logging.info("DRY RUN MODE - No actual processing will occur")
                     for subject in subjects:
-                        process_subject(subject, common, app, dry_run=True, force=args.force, debug=args.debug)
+                        process_subject(subject, common, app, dry_run=True, force=args.force, debug=args.debug, datalad_config=datalad_config)
                         processed_subjects.append(subject)
                 else:
                     # Use ProcessPoolExecutor for parallel processing
@@ -881,7 +969,7 @@ def main():
                     if jobs == 1:
                         # Serial processing (supports debug mode)
                         for subject in subjects:
-                            success = process_subject(subject, common, app, False, args.force, args.debug)
+                            success = process_subject(subject, common, app, False, args.force, args.debug, datalad_config)
                             processed_subjects.append(subject)
                             if not success:
                                 failed_subjects.append(subject)
@@ -890,7 +978,7 @@ def main():
                         with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as executor:
                             # Submit all jobs
                             future_to_subject = {
-                                executor.submit(process_subject, subject, common, app, False, args.force, False): subject
+                                executor.submit(process_subject, subject, common, app, False, args.force, False, datalad_config): subject
                                 for subject in subjects
                             }
                         
@@ -920,7 +1008,7 @@ def main():
                 
         else:
             logging.info(f"Running {level} level analysis")
-            success = process_group(common, app, args.dry_run, args.debug)
+            success = process_group(common, app, args.dry_run, args.debug, datalad_config)
             
             if success:
                 logging.info("Group analysis completed successfully")

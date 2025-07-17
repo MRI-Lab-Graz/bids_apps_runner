@@ -1,0 +1,31 @@
+{
+  "common": {
+    "bids_folder": "/tmp/test_bids",
+    "output_folder": "/tmp/test_output",
+    "tmp_folder": "/tmp/test_temp",
+    "templateflow_dir": "/tmp/test_templateflow",
+    "container": "/tmp/test_container.sif",
+    "jobs": 1,
+    "pilottest": false
+  },
+  "app": {
+    "analysis_level": "participant",
+    "apptainer_args": [
+      "--containall"
+    ],
+    "options": [
+      "--nprocs", "1"
+    ],
+    "participant_labels": ["sub-001"],
+    "output_check": {
+      "pattern": "sub-{subject}/func/sub-{subject}_task-*_desc-preproc_bold.nii.gz",
+      "directory": ""
+    }
+  },
+  "datalad": {
+    "pipeline_name": "test_pipeline",
+    "analysis_branch_strategy": "analysis/{pipeline}",
+    "auto_push": false,
+    "create_analysis_branch": true
+  }
+}

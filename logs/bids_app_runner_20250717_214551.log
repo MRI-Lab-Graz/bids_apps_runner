@@ -1,0 +1,29 @@
+2025-07-17 21:45:51,224 - root - INFO - Logging to file: logs/bids_app_runner_20250717_214551.log
+2025-07-17 21:45:51,224 - root - INFO - BIDS App Runner 2.0.0 starting...
+2025-07-17 21:45:51,224 - root - INFO - Command line: run_bids_apps.py -x config_test_dryrun.json --dry-run --log-level INFO
+2025-07-17 21:45:51,225 - root - INFO - Successfully loaded config from: config_test_dryrun.json
+2025-07-17 21:45:51,225 - root - INFO - Validating common configuration...
+2025-07-17 21:45:51,225 - root - INFO - Created directory: /tmp/test_output
+2025-07-17 21:45:51,225 - root - INFO - Created directory: /tmp/test_temp
+2025-07-17 21:45:51,225 - root - INFO - Common configuration validation completed
+2025-07-17 21:45:51,225 - root - INFO - Validating app configuration...
+2025-07-17 21:45:51,225 - root - INFO - App configuration validation completed
+2025-07-17 21:45:51,225 - root - INFO - Validating DataLad configuration...
+2025-07-17 21:45:51,225 - root - INFO - DataLad configuration validation completed
+2025-07-17 21:45:51,225 - root - INFO - Using subjects from config: ['sub-001']
+2025-07-17 21:45:51,225 - root - INFO - Found 1 subjects to process
+2025-07-17 21:45:51,225 - root - INFO - Processing 1 subjects with 1 parallel jobs
+2025-07-17 21:45:51,226 - root - INFO - DRY RUN MODE - No actual processing will occur
+2025-07-17 21:45:51,226 - root - INFO - Starting processing for subject: sub-001
+2025-07-17 21:45:51,226 - root - INFO - DRY RUN - Would execute: apptainer run --containall -B /tmp/test_temp/sub-001:/tmp -B /tmp/test_templateflow:/templateflow -B /tmp/test_output:/output -B /tmp/test_bids:/bids --env TEMPLATEFLOW_HOME=/templateflow /tmp/test_container.sif /bids /output participant --nprocs 1 --participant-label 001 -w /tmp
+2025-07-17 21:45:51,226 - root - INFO - ============================================================
+2025-07-17 21:45:51,226 - root - INFO - PROCESSING SUMMARY
+2025-07-17 21:45:51,226 - root - INFO - ============================================================
+2025-07-17 21:45:51,226 - root - INFO - Total subjects processed: 1
+2025-07-17 21:45:51,226 - root - INFO - Successfully completed: 1
+2025-07-17 21:45:51,226 - root - INFO - Failed: 0
+2025-07-17 21:45:51,226 - root - INFO - Total processing time: 0.00 seconds
+2025-07-17 21:45:51,226 - root - INFO - ============================================================
+2025-07-17 21:45:51,226 - root - INFO - All subjects processed successfully
+2025-07-17 21:45:51,227 - root - INFO - BIDS App Runner completed successfully
+2025-07-17 21:45:51,227 - root - INFO - Log file: logs/bids_app_runner_20250717_214551.log

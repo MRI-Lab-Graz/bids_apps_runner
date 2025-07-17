@@ -1,0 +1,6 @@
+2025-07-17 21:45:29,311 - root - INFO - Logging to file: logs/bids_app_runner_20250717_214529.log
+2025-07-17 21:45:29,311 - root - INFO - BIDS App Runner 2.0.0 starting...
+2025-07-17 21:45:29,311 - root - INFO - Command line: run_bids_apps.py -x config_test_dryrun.json --dry-run --log-level DEBUG
+2025-07-17 21:45:29,311 - root - INFO - Successfully loaded config from: config_test_dryrun.json
+2025-07-17 21:45:29,311 - root - INFO - Validating common configuration...
+2025-07-17 21:45:29,311 - root - ERROR - Directory not found: /tmp/test_bids
