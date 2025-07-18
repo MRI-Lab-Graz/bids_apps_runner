@@ -161,6 +161,7 @@ Examples:
   %(prog)s -x config.json --debug                            # Enable detailed container logs
   %(prog)s -x config.json --debug --subjects sub-001         # Debug single subject
   %(prog)s -x config.json --force                            # Force reprocessing
+  %(prog)s -x config.json --pilot                            # Pilot mode: process one random subject
   
 DataLad Integration:
   - Automatically detects DataLad datasets in input/output folders
@@ -213,6 +214,18 @@ For more information, see README_STANDARD.md
         "--version", 
         action="version", 
         version="BIDS App Runner 2.0.0"
+    )
+    
+    parser.add_argument(
+        "--clean-success-markers", 
+        action="store_true", 
+        help="Remove all success markers (forces fresh detection of already processed subjects)"
+    )
+    
+    parser.add_argument(
+        "--pilot", 
+        action="store_true", 
+        help="Run in pilot mode (process only one randomly selected subject, forces jobs=1)"
     )
     
     return parser.parse_args()
@@ -330,24 +343,137 @@ def validate_common_config(cfg):
     logging.info("Common configuration validation completed")
 
 def subject_processed(subject, common, app, force=False):
-    """Check if a subject has already been processed."""
+    """Check if a subject has already been processed using multiple strategies."""
     if force:
         return False
-        
-    pattern = app.get("output_check", {}).get("pattern", "")
-    if not pattern:
-        logging.debug(f"No output check pattern defined for {subject}")
-        return False
-        
-    check_dir = os.path.join(common["output_folder"], app["output_check"].get("directory", ""))
-    full_pattern = os.path.join(check_dir, pattern.replace("{subject}", subject))
     
-    matches = glob.glob(full_pattern)
-    if matches:
-        logging.debug(f"Found existing output for {subject}: {matches}")
+    # Strategy 1: Check success marker file (most reliable)
+    success_marker = os.path.join(common["output_folder"], ".bids_app_runner", f"{subject}_success.txt")
+    if os.path.exists(success_marker):
+        logging.debug(f"Found success marker for {subject}: {success_marker}")
         return True
     
+    # Strategy 2: Use configured output pattern if available
+    pattern = app.get("output_check", {}).get("pattern", "")
+    if pattern:
+        check_dir = os.path.join(common["output_folder"], app["output_check"].get("directory", ""))
+        full_pattern = os.path.join(check_dir, pattern.replace("{subject}", subject))
+        
+        matches = glob.glob(full_pattern)
+        if matches:
+            logging.debug(f"Found existing output for {subject} via pattern: {matches}")
+            return True
+    
+    # Strategy 3: Generic output detection (fallback)
+    return check_generic_output_exists(subject, common)
+
+def check_generic_output_exists(subject, common):
+    """Check for generic output patterns that most BIDS apps produce."""
+    output_dir = common["output_folder"]
+    
+    # Common patterns that BIDS apps typically create
+    patterns_to_check = [
+        # Subject-specific directories
+        os.path.join(output_dir, subject),
+        os.path.join(output_dir, "derivatives", "*", subject),
+        
+        # fMRIPrep-style patterns
+        os.path.join(output_dir, subject, "func", f"{subject}_*"),
+        os.path.join(output_dir, subject, "anat", f"{subject}_*"),
+        
+        # FreeSurfer-style patterns
+        os.path.join(output_dir, subject, "scripts", "*"),
+        os.path.join(output_dir, subject, "surf", "*"),
+        
+        # QSIPrep-style patterns  
+        os.path.join(output_dir, subject, "dwi", f"{subject}_*"),
+        
+        # HTML reports (common across many apps)
+        os.path.join(output_dir, f"{subject}.html"),
+        os.path.join(output_dir, f"{subject}_report.html"),
+        
+        # Log files indicating completion
+        os.path.join(output_dir, "logs", f"{subject}_*"),
+        os.path.join(output_dir, f"{subject}_log.txt"),
+    ]
+    
+    for pattern in patterns_to_check:
+        matches = glob.glob(pattern)
+        if matches:
+            logging.debug(f"Found generic output for {subject}: {matches[0]} (and {len(matches)-1} others)" if len(matches) > 1 else f"Found generic output for {subject}: {matches[0]}")
+            return True
+    
+    # Strategy 4: Check if subject directory exists and is non-empty
+    subject_dir = os.path.join(output_dir, subject)
+    if os.path.isdir(subject_dir):
+        try:
+            # Check if directory has any files (recursively)
+            for root, dirs, files in os.walk(subject_dir):
+                if files:  # Found at least one file
+                    logging.debug(f"Found non-empty subject directory for {subject}: {subject_dir}")
+                    return True
+        except Exception as e:
+            logging.debug(f"Error checking subject directory {subject_dir}: {e}")
+    
+    logging.debug(f"No output found for {subject}")
     return False
+
+def create_success_marker(subject, common):
+    """Create a success marker file for a subject."""
+    marker_dir = os.path.join(common["output_folder"], ".bids_app_runner")
+    os.makedirs(marker_dir, exist_ok=True)
+    
+    marker_file = os.path.join(marker_dir, f"{subject}_success.txt")
+    try:
+        with open(marker_file, 'w') as f:
+            f.write(f"Subject {subject} processed successfully\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            f.write(f"Runner version: 2.0.0\n")
+        logging.debug(f"Created success marker: {marker_file}")
+        return True
+    except Exception as e:
+        logging.warning(f"Could not create success marker for {subject}: {e}")
+        return False
+
+def remove_success_marker(subject, common):
+    """Remove success marker file for a subject (used when forcing reprocessing)."""
+    marker_file = os.path.join(common["output_folder"], ".bids_app_runner", f"{subject}_success.txt")
+    try:
+        if os.path.exists(marker_file):
+            os.remove(marker_file)
+            logging.debug(f"Removed success marker: {marker_file}")
+    except Exception as e:
+        logging.warning(f"Could not remove success marker for {subject}: {e}")
+
+def clean_all_success_markers(common):
+    """Remove all success marker files."""
+    marker_dir = os.path.join(common["output_folder"], ".bids_app_runner")
+    if not os.path.exists(marker_dir):
+        logging.info("No success markers directory found")
+        return
+    
+    try:
+        marker_files = [f for f in os.listdir(marker_dir) if f.endswith("_success.txt")]
+        if not marker_files:
+            logging.info("No success marker files found")
+            return
+        
+        for marker_file in marker_files:
+            marker_path = os.path.join(marker_dir, marker_file)
+            os.remove(marker_path)
+            logging.debug(f"Removed success marker: {marker_path}")
+        
+        logging.info(f"Removed {len(marker_files)} success marker files")
+        
+        # Try to remove the directory if it's empty
+        try:
+            os.rmdir(marker_dir)
+            logging.debug(f"Removed empty success markers directory: {marker_dir}")
+        except OSError:
+            pass  # Directory not empty, that's fine
+            
+    except Exception as e:
+        logging.error(f"Error cleaning success markers: {e}")
 
 def build_common_mounts(common, tmp_dir):
     """Build common mount points for the container."""
@@ -571,6 +697,10 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
                 pass
             return True
         
+        # Remove existing success marker if forcing reprocessing
+        if force:
+            remove_success_marker(subject, common)
+        
         # Get subject data if DataLad dataset
         if is_input_datalad:
             get_subject_data_datalad(common["bids_folder"], subject, dry_run)
@@ -624,22 +754,74 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
         )
         
         if not dry_run:
-            # Save results if DataLad output dataset
-            if is_output_datalad:
-                save_results_datalad(common["output_folder"], subject, dry_run)
+            # Check if container execution was successful (exit code 0)
+            container_success = result is not None and (not hasattr(result, 'returncode') or result.returncode == 0)
             
-            # Check if processing was successful
-            if subject_processed(subject, common, app, force=False):
-                logging.info(f"Subject {subject} processing completed successfully")
-                try:
-                    shutil.rmtree(tmp_dir)
-                    logging.debug(f"Cleaned up temp directory: {tmp_dir}")
-                except Exception as e:
-                    logging.warning(f"Could not clean up temp directory {tmp_dir}: {e}")
-                return True
+            if container_success:
+                logging.info(f"Container execution successful for {subject}")
+                
+                # Save results if DataLad output dataset
+                if is_output_datalad:
+                    save_results_datalad(common["output_folder"], subject, dry_run)
+                
+                # Wait a moment for filesystem to sync
+                time.sleep(1)
+                
+                # Check if processing produced output using multiple strategies
+                output_exists = check_generic_output_exists(subject, common)
+                
+                # Also check configured pattern if available
+                if not output_exists:
+                    pattern = app.get("output_check", {}).get("pattern", "")
+                    if pattern:
+                        check_dir = os.path.join(common["output_folder"], app["output_check"].get("directory", ""))
+                        full_pattern = os.path.join(check_dir, pattern.replace("{subject}", subject))
+                        matches = glob.glob(full_pattern)
+                        output_exists = len(matches) > 0
+                        if output_exists:
+                            logging.info(f"Found expected output via pattern for {subject}: {matches}")
+                
+                if output_exists:
+                    # Create success marker
+                    create_success_marker(subject, common)
+                    logging.info(f"Subject {subject} processing completed successfully")
+                    
+                    try:
+                        shutil.rmtree(tmp_dir)
+                        logging.debug(f"Cleaned up temp directory: {tmp_dir}")
+                    except Exception as e:
+                        logging.warning(f"Could not clean up temp directory {tmp_dir}: {e}")
+                    return True
+                else:
+                    # Container ran successfully but no expected output found
+                    logging.warning(f"Container completed for {subject} but no output detected")
+                    logging.warning(f"This might indicate a configuration issue or the app produced output in an unexpected location")
+                    
+                    # Show output directory structure for debugging
+                    list_output_structure(subject, common)
+                    
+                    logging.warning(f"Temp directory preserved for debugging: {tmp_dir}")
+                    
+                    if debug and debug_log_dir:
+                        logging.warning(f"Debug mode: Check container logs in {debug_log_dir}")
+                        # List available log files for this subject
+                        try:
+                            log_files = [f for f in os.listdir(debug_log_dir) if subject in f]
+                            if log_files:
+                                logging.warning(f"Available container log files for {subject}:")
+                                for log_file in log_files:
+                                    full_path = os.path.join(debug_log_dir, log_file)
+                                    logging.warning(f"  - {full_path}")
+                        except Exception as e:
+                            logging.warning(f"Could not list debug log files: {e}")
+                    
+                    # List output structure for debugging
+                    list_output_structure(subject, common)
+                    
+                    return False
             else:
-                error_msg = f"Processing failed for {subject} - no expected output found"
-                logging.error(error_msg)
+                # Container execution failed
+                logging.error(f"Container execution failed for {subject}")
                 logging.warning(f"Temp directory preserved for debugging: {tmp_dir}")
                 
                 if debug and debug_log_dir:
@@ -670,6 +852,47 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
             logging.error(f"Debug mode: Check container logs in {debug_log_dir} for error details")
         
         return False
+
+def list_output_structure(subject, common, max_depth=3):
+    """List the output directory structure to help debug where files are located."""
+    output_dir = common["output_folder"]
+    logging.info(f"Output directory structure for debugging {subject}:")
+    logging.info(f"Base output directory: {output_dir}")
+    
+    if not os.path.exists(output_dir):
+        logging.info("  Output directory does not exist")
+        return
+    
+    def list_dir_recursive(path, prefix="", current_depth=0):
+        if current_depth >= max_depth:
+            return
+        
+        try:
+            items = sorted(os.listdir(path))
+            for item in items[:20]:  # Limit to first 20 items to avoid spam
+                item_path = os.path.join(path, item)
+                if os.path.isdir(item_path):
+                    logging.info(f"  {prefix}📁 {item}/")
+                    if current_depth < max_depth - 1:
+                        list_dir_recursive(item_path, prefix + "  ", current_depth + 1)
+                else:
+                    # Show file size for context
+                    try:
+                        size = os.path.getsize(item_path)
+                        size_str = f" ({size} bytes)" if size < 1024 else f" ({size//1024} KB)"
+                    except:
+                        size_str = ""
+                    logging.info(f"  {prefix}📄 {item}{size_str}")
+            
+            if len(items) > 20:
+                logging.info(f"  {prefix}... and {len(items) - 20} more items")
+                
+        except PermissionError:
+            logging.info(f"  {prefix}❌ Permission denied")
+        except Exception as e:
+            logging.info(f"  {prefix}❌ Error: {e}")
+    
+    list_dir_recursive(output_dir)
 
 def process_group(common, app, dry_run=False, debug=False):
     """Process group-level analysis."""
@@ -757,7 +980,7 @@ def process_group(common, app, dry_run=False, debug=False):
                 shutil.rmtree(tmp_dir)
                 logging.debug(f"Cleaned up temp directory: {tmp_dir}")
             except Exception as e:
-                logging.warning(f"Could not clean up temp directory {tmp_dir}: {e}")
+                logging.warning(f"Could not clean up tmp directory {tmp_dir}: {e}")
         
         logging.info("Group-level processing completed successfully")
         return True
@@ -816,6 +1039,11 @@ def main():
         validate_common_config(common)
         validate_app_config(app)
         
+        # Clean success markers if requested
+        if args.clean_success_markers:
+            logging.info("Cleaning all success markers...")
+            clean_all_success_markers(common)
+        
         # Get subjects list
         subjects = []
         level = app.get("analysis_level", "participant")
@@ -849,7 +1077,14 @@ def main():
             processed_subjects = []
             failed_subjects = []
             
-            if common.get("pilottest", False):
+            # Determine number of jobs (force to 1 if pilot mode)
+            if args.pilot:
+                jobs = 1
+                logging.info("Pilot mode enabled: Setting jobs to 1")
+            else:
+                jobs = common.get("jobs", multiprocessing.cpu_count())
+            
+            if args.pilot:
                 subject = random.choice(subjects)
                 logging.info(f"Pilot mode: processing single subject ({subject})")
                 
@@ -859,7 +1094,6 @@ def main():
                     failed_subjects.append(subject)
                     
             else:
-                jobs = common.get("jobs", multiprocessing.cpu_count())
                 logging.info(f"Processing {len(subjects)} subjects with {jobs} parallel jobs")
                 
                 if args.debug:
