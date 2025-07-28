@@ -1,0 +1,34 @@
+2025-07-28 10:10:07,942 - root - INFO - Logging to file: logs/bids_app_runner_20250728_101007.log
+2025-07-28 10:10:07,943 - root - INFO - BIDS App Runner 2.0.0 starting...
+2025-07-28 10:10:07,943 - root - INFO - Command line: run_bids_apps.py -x config_test_sessions.json --dry-run --log-level DEBUG
+2025-07-28 10:10:07,943 - root - INFO - Successfully loaded config from: config_test_sessions.json
+2025-07-28 10:10:07,943 - root - INFO - Validating common configuration...
+2025-07-28 10:10:07,943 - root - INFO - Created directory: /tmp/test_output_sessions
+2025-07-28 10:10:07,943 - root - INFO - Created directory: /tmp/test_temp_sessions
+2025-07-28 10:10:07,943 - root - INFO - Common configuration validation completed
+2025-07-28 10:10:07,943 - root - INFO - Validating app configuration...
+2025-07-28 10:10:07,943 - root - INFO - App configuration validation completed
+2025-07-28 10:10:07,943 - root - INFO - Validating DataLad configuration...
+2025-07-28 10:10:07,943 - root - INFO - DataLad configuration validation completed
+2025-07-28 10:10:07,943 - root - INFO - Using subjects from config: ['sub-001']
+2025-07-28 10:10:07,944 - root - INFO - Found 1 subjects to process
+2025-07-28 10:10:07,944 - root - INFO - Processing 1 subjects with 1 parallel jobs
+2025-07-28 10:10:07,944 - root - INFO - DRY RUN MODE - No actual processing will occur
+2025-07-28 10:10:07,944 - root - INFO - Starting processing for subject: sub-001
+2025-07-28 10:10:07,944 - root - DEBUG - Created temp directory: /tmp/test_temp_sessions/sub-001
+2025-07-28 10:10:07,944 - root - DEBUG - Found output for sub-001 ses-01: ['/tmp/test_output_sessions/sub-001/ses-01/func/sub-001_ses-01_task-rest_desc-preproc_bold.nii.gz']
+2025-07-28 10:10:07,944 - root - DEBUG - Found output for sub-001 ses-02: ['/tmp/test_output_sessions/sub-001/ses-02/func/sub-001_ses-02_task-rest_desc-preproc_bold.nii.gz']
+2025-07-28 10:10:07,944 - root - DEBUG - Subject 'sub-001' fully processed: all 2 sessions complete
+2025-07-28 10:10:07,945 - root - INFO - Subject 'sub-001' already processed, skipping
+2025-07-28 10:10:07,945 - root - DEBUG - Cleaned up temp directory: /tmp/test_temp_sessions/sub-001
+2025-07-28 10:10:07,945 - root - INFO - ============================================================
+2025-07-28 10:10:07,945 - root - INFO - PROCESSING SUMMARY
+2025-07-28 10:10:07,945 - root - INFO - ============================================================
+2025-07-28 10:10:07,945 - root - INFO - Total subjects processed: 1
+2025-07-28 10:10:07,945 - root - INFO - Successfully completed: 1
+2025-07-28 10:10:07,945 - root - INFO - Failed: 0
+2025-07-28 10:10:07,945 - root - INFO - Total processing time: 0.00 seconds
+2025-07-28 10:10:07,945 - root - INFO - ============================================================
+2025-07-28 10:10:07,945 - root - INFO - All subjects processed successfully
+2025-07-28 10:10:07,945 - root - INFO - BIDS App Runner completed successfully
+2025-07-28 10:10:07,945 - root - INFO - Log file: logs/bids_app_runner_20250728_101007.log

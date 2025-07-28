@@ -1,0 +1,28 @@
+{
+  "common": {
+    "bids_folder": "/data/bids",
+    "output_folder": "/data/derivatives/fmriprep",
+    "tmp_folder": "/tmp/fmriprep_work",
+    "container": "/containers/fmriprep_24.0.1.sif",
+    "templateflow_dir": "/data/templateflow",
+    "jobs": 4
+  },
+  "app": {
+    "analysis_level": "participant",
+    "options": [
+      "--skip-bids-validation",
+      "--nprocs", "4",
+      "--omp-nthreads", "4"
+    ],
+    "output_check": {
+      "pattern": "{subject}/{session}/func/{subject}_{session}_task-*_desc-preproc_bold.nii.gz",
+      "directory": ""
+    }
+  },
+  "datalad": {
+    "pipeline_name": "fmriprep",
+    "analysis_branch_strategy": "analysis/{pipeline}",
+    "auto_push": false,
+    "create_analysis_branch": true
+  }
+}
