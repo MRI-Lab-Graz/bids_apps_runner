@@ -342,8 +342,30 @@ def validate_common_config(cfg):
     
     logging.info("Common configuration validation completed")
 
+def get_subject_sessions(subject, bids_folder):
+    """Get list of sessions for a subject in BIDS dataset."""
+    subject_dir = os.path.join(bids_folder, subject)
+    if not os.path.isdir(subject_dir):
+        return []
+    
+    sessions = []
+    # Check for session directories
+    for item in os.listdir(subject_dir):
+        if item.startswith("ses-") and os.path.isdir(os.path.join(subject_dir, item)):
+            sessions.append(item)
+    
+    # If no sessions found, this is a single-session dataset
+    if not sessions:
+        return [None]  # None represents no session structure
+    
+    return sorted(sessions)
+
 def subject_processed(subject, common, app, force=False):
-    """Check if a subject has already been processed using multiple strategies."""
+    """Check if a subject has already been processed using multiple strategies.
+    
+    For longitudinal datasets, checks that ALL sessions are processed.
+    For single-session datasets, uses the original logic.
+    """
     if force:
         return False
     
@@ -353,16 +375,55 @@ def subject_processed(subject, common, app, force=False):
         logging.debug(f"Found success marker for {subject}: {success_marker}")
         return True
     
-    # Strategy 2: Use configured output pattern if available
+    # Strategy 2: Session-aware output pattern checking if available
     pattern = app.get("output_check", {}).get("pattern", "")
     if pattern:
+        # Get all sessions for this subject
+        sessions = get_subject_sessions(subject, common["bids_folder"])
         check_dir = os.path.join(common["output_folder"], app["output_check"].get("directory", ""))
-        full_pattern = os.path.join(check_dir, pattern.replace("{subject}", subject))
         
-        matches = glob.glob(full_pattern)
-        if matches:
-            logging.debug(f"Found existing output for {subject} via pattern: {matches}")
-            return True
+        # For single-session datasets (sessions = [None])
+        if len(sessions) == 1 and sessions[0] is None:
+            full_pattern = os.path.join(check_dir, pattern.replace("{subject}", subject))
+            matches = glob.glob(full_pattern)
+            if matches:
+                logging.debug(f"Found existing output for {subject} via pattern: {matches}")
+                return True
+        
+        # For multi-session datasets, check ALL sessions
+        else:
+            processed_sessions = []
+            missing_sessions = []
+            
+            for session in sessions:
+                # Create session-aware pattern
+                # Replace {subject} and add session info if pattern supports it
+                if "{session}" in pattern:
+                    session_pattern = pattern.replace("{subject}", subject).replace("{session}", session)
+                else:
+                    # If pattern doesn't have {session}, try to add session to subject part
+                    session_pattern = pattern.replace("{subject}", f"{subject}/{session}")
+                
+                full_pattern = os.path.join(check_dir, session_pattern)
+                matches = glob.glob(full_pattern)
+                
+                if matches:
+                    processed_sessions.append(session)
+                    logging.debug(f"Found output for {subject} {session}: {matches}")
+                else:
+                    missing_sessions.append(session)
+                    logging.debug(f"Missing output for {subject} {session}")
+            
+            # Subject is only considered processed if ALL sessions are processed
+            if missing_sessions:
+                logging.info(f"Subject '{subject}' partially processed: "
+                            f"{len(processed_sessions)}/{len(sessions)} sessions complete. "
+                            f"Missing sessions: {missing_sessions}")
+                return False
+            else:
+                logging.debug(f"Subject '{subject}' fully processed: "
+                             f"all {len(sessions)} sessions complete")
+                return True
     
     # Strategy 3: Generic output detection (fallback)
     return check_generic_output_exists(subject, common)
