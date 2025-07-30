@@ -25,6 +25,19 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# Import validation integration
+try:
+    from bids_validation_integration import (
+        BIDSAppIntegratedValidator, 
+        validate_and_generate_reprocess_config,
+        print_validation_summary
+    )
+    VALIDATION_AVAILABLE = True
+except ImportError:
+    logging.warning("Validation integration not available - validation features disabled")
+    VALIDATION_AVAILABLE = False
+from pathlib import Path
+
 def is_datalad_dataset(path):
     """Check if a path is a DataLad dataset."""
     if not os.path.isdir(path):
@@ -163,6 +176,12 @@ Examples:
   %(prog)s -x config.json --force                            # Force reprocessing
   %(prog)s -x config.json --pilot                            # Pilot mode: process one random subject
   
+Validation and Reprocessing:
+  %(prog)s -x config.json --validate                         # Process and validate outputs
+  %(prog)s -x config.json --validate-only                    # Only validate, skip processing
+  %(prog)s -x config.json --reprocess-missing                # Auto-reprocess missing subjects
+  %(prog)s -x config.json --validate --validation-output-dir reports  # Custom reports directory
+  
 DataLad Integration:
   - Automatically detects DataLad datasets in input/output folders
   - Performs 'datalad get' for required data before processing
@@ -226,6 +245,30 @@ For more information, see README_STANDARD.md
         "--pilot", 
         action="store_true", 
         help="Run in pilot mode (process only one randomly selected subject, forces jobs=1)"
+    )
+    
+    parser.add_argument(
+        "--validate", 
+        action="store_true", 
+        help="Validate outputs after processing and generate reports"
+    )
+    
+    parser.add_argument(
+        "--validate-only", 
+        action="store_true", 
+        help="Only validate outputs, skip processing"
+    )
+    
+    parser.add_argument(
+        "--reprocess-missing", 
+        action="store_true", 
+        help="Automatically reprocess subjects with missing outputs (implies --validate)"
+    )
+    
+    parser.add_argument(
+        "--validation-output-dir", 
+        default="validation_reports", 
+        help="Directory for validation reports and reprocess configs (default: validation_reports)"
     )
     
     return parser.parse_args()
@@ -1100,6 +1143,32 @@ def main():
         validate_common_config(common)
         validate_app_config(app)
         
+        # Handle validation-only mode
+        if args.validate_only:
+            if not VALIDATION_AVAILABLE:
+                logging.error("Validation not available - missing bids_validation_integration.py")
+                sys.exit("ERROR: Validation features not available")
+            
+            logging.info("Running validation-only mode...")
+            os.makedirs(args.validation_output_dir, exist_ok=True)
+            
+            results = validate_and_generate_reprocess_config(
+                common, app, args.validation_output_dir
+            )
+            
+            print_validation_summary(results)
+            
+            if results.get("total_missing", 0) > 0:
+                sys.exit(1)
+            else:
+                sys.exit(0)
+        
+        # Setup validation if requested
+        run_validation = args.validate or args.reprocess_missing
+        if run_validation and not VALIDATION_AVAILABLE:
+            logging.warning("Validation requested but not available - continuing without validation")
+            run_validation = False
+        
         # Clean success markers if requested
         if args.clean_success_markers:
             logging.info("Cleaning all success markers...")
@@ -1209,9 +1278,61 @@ def main():
             # Exit with appropriate code
             if failed_subjects:
                 logging.error(f"Processing completed with {len(failed_subjects)} failures")
+                # Don't run validation if processing failed
                 sys.exit(1)
             else:
                 logging.info("All subjects processed successfully")
+                
+                # Run validation if requested
+                if run_validation and not args.dry_run:
+                    logging.info("Running post-processing validation...")
+                    os.makedirs(args.validation_output_dir, exist_ok=True)
+                    
+                    try:
+                        results = validate_and_generate_reprocess_config(
+                            common, app, args.validation_output_dir
+                        )
+                        
+                        print_validation_summary(results)
+                        
+                        # Handle reprocess-missing mode
+                        if args.reprocess_missing and results.get("total_missing", 0) > 0:
+                            reprocess_config = results.get("reprocess_config")
+                            if reprocess_config and os.path.exists(reprocess_config):
+                                logging.info(f"Automatically reprocessing {results['total_missing']} missing subjects...")
+                                
+                                # Recursively call run_bids_apps with the reprocess config
+                                import subprocess
+                                reprocess_cmd = [
+                                    sys.executable, 
+                                    os.path.abspath(__file__), 
+                                    "-x", reprocess_config
+                                ]
+                                
+                                # Add other relevant flags
+                                if args.debug:
+                                    reprocess_cmd.append("--debug")
+                                if args.force:
+                                    reprocess_cmd.append("--force")
+                                    
+                                logging.info(f"Reprocessing command: {' '.join(reprocess_cmd)}")
+                                result = subprocess.run(reprocess_cmd)
+                                
+                                if result.returncode != 0:
+                                    logging.error("Reprocessing failed")
+                                    sys.exit(1)
+                                else:
+                                    logging.info("Reprocessing completed successfully")
+                        
+                        # Exit with error if validation found missing items but no reprocessing
+                        elif not args.reprocess_missing and results.get("total_missing", 0) > 0:
+                            logging.warning(f"Validation found {results['total_missing']} subjects with missing outputs")
+                            logging.warning("Use --reprocess-missing to automatically reprocess them")
+                            sys.exit(1)
+                            
+                    except Exception as e:
+                        logging.error(f"Validation failed: {e}")
+                        sys.exit(1)
                 
         else:
             logging.info(f"Running {level} level analysis")

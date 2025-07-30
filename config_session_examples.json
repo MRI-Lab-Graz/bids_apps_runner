@@ -1,0 +1,100 @@
+{
+  "_info": {
+    "description": "Example configurations for session-aware BIDS Apps",
+    "apps_with_session_id": ["qsiprep", "qsirecon"],
+    "apps_without_session_id": ["fmriprep", "freesurfer", "mriqc"],
+    "note": "Session-aware validation works for all apps, but only some support --session-id"
+  },
+  
+  "qsiprep_session_aware": {
+    "common": {
+      "bids_folder": "/path/to/bids/dataset",
+      "output_folder": "/path/to/output",
+      "tmp_folder": "/tmp/qsiprep",
+      "container": "/path/to/qsiprep.sif",
+      "templateflow_dir": "/path/to/templateflow"
+    },
+    "app": {
+      "analysis_level": "participant",
+      "options": ["--skip-bids-validation"],
+      "output_check": {
+        "pattern": "{subject}/{session}/dwi/{subject}_{session}_dwi.nii.gz",
+        "directory": "qsiprep"
+      }
+    },
+    "_notes": {
+      "session_support": "QSIPrep supports --session-id for processing individual sessions",
+      "validation": "Session-aware validation will generate separate configs per session",
+      "reprocessing": "Missing sessions will be reprocessed individually using --session-id"
+    }
+  },
+  
+  "fmriprep_session_aware": {
+    "common": {
+      "bids_folder": "/path/to/bids/dataset", 
+      "output_folder": "/path/to/output",
+      "tmp_folder": "/tmp/fmriprep",
+      "container": "/path/to/fmriprep.sif",
+      "templateflow_dir": "/path/to/templateflow"
+    },
+    "app": {
+      "analysis_level": "participant",
+      "options": ["--skip-bids-validation", "--output-spaces", "MNI152NLin6Asym:res-2"],
+      "output_check": {
+        "pattern": "{subject}/{session}/func/{subject}_{session}_task-*_space-MNI152NLin6Asym_desc-preproc_bold.nii.gz",
+        "directory": "fmriprep"
+      }
+    },
+    "_notes": {
+      "session_support": "fMRIPrep does NOT support --session-id",
+      "validation": "Session-aware validation detects missing sessions",
+      "reprocessing": "Entire subject (all sessions) will be reprocessed if any session is missing",
+      "workaround": "Use BIDS-filter-file to limit to specific sessions if needed"
+    }
+  },
+  
+  "freesurfer_session_aware": {
+    "common": {
+      "bids_folder": "/path/to/bids/dataset",
+      "output_folder": "/path/to/output", 
+      "tmp_folder": "/tmp/freesurfer",
+      "container": "/path/to/freesurfer.sif",
+      "templateflow_dir": "/path/to/templateflow"
+    },
+    "app": {
+      "analysis_level": "participant",
+      "options": ["--skip-bids-validation"],
+      "output_check": {
+        "pattern": "{subject}/scripts/recon-all.done",
+        "directory": "freesurfer"
+      }
+    },
+    "_notes": {
+      "session_support": "FreeSurfer does NOT support --session-id",
+      "validation": "FreeSurfer typically combines sessions for anatomical reconstruction",
+      "reprocessing": "Subject-level reprocessing (FreeSurfer doesn't process individual sessions)",
+      "behavior": "FreeSurfer will use all available T1w images across sessions"
+    }
+  },
+  
+  "validation_config_examples": {
+    "single_session_dataset": {
+      "expected_behavior": "Sessions detected as [None], standard validation applies",
+      "output_pattern": "{subject}/func/{subject}_task-rest_bold.nii.gz"
+    },
+    
+    "multi_session_dataset": {
+      "expected_behavior": "Sessions detected as ['ses-01', 'ses-02', ...], session-aware validation",
+      "output_pattern": "{subject}/{session}/func/{subject}_{session}_task-rest_bold.nii.gz",
+      "qsiprep_reprocessing": "Individual --session-id configs generated",
+      "fmriprep_reprocessing": "Subject-level config generated (all sessions)"
+    },
+    
+    "mixed_completion": {
+      "scenario": "Subject has ses-01 complete, ses-02 missing",
+      "qsiprep_behavior": "Only ses-02 will be reprocessed with --session-id ses-02",
+      "fmriprep_behavior": "Entire subject reprocessed (both ses-01 and ses-02)",
+      "recommendation": "Use QSIPrep for granular session control, expect fMRIPrep to reprocess all"
+    }
+  }
+}

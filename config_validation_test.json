@@ -1,0 +1,21 @@
+{
+  "common": {
+    "bids_folder": "/tmp/test_validation/bids",
+    "output_folder": "/tmp/test_validation/derivatives/fmriprep",
+    "tmp_folder": "/tmp/test_validation/tmp",
+    "templateflow_dir": "/tmp/test_templateflow",
+    "container": "/tmp/fmriprep_24.0.1.sif",
+    "jobs": 1
+  },
+  "app": {
+    "analysis_level": "participant",
+    "options": [
+      "--nprocs", "1"
+    ],
+    "participant_labels": ["sub-001", "sub-002", "sub-003"],
+    "output_check": {
+      "pattern": "sub-{subject}/func/sub-{subject}_task-*_desc-preproc_bold.nii.gz",
+      "directory": ""
+    }
+  }
+}
