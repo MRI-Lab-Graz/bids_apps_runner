@@ -1086,6 +1086,67 @@ class BIDSOutputValidator:
                 print(f"    No reconstruction pipelines found in derivatives structure")
 
 
+def extract_missing_subjects_from_results(results: Dict) -> Set[str]:
+    """Extract unique subject IDs from validation results that have missing data."""
+    missing_subjects = set()
+    
+    # Extract subjects from pipeline results
+    if 'pipelines' in results:
+        for pipeline_name, pipeline_data in results['pipelines'].items():
+            if 'missing_items' in pipeline_data:
+                for item in pipeline_data['missing_items']:
+                    # Extract subject ID from missing item description
+                    # Look for patterns like "sub-123" in the item string
+                    import re
+                    match = re.search(r'sub-\d+', item)
+                    if match:
+                        missing_subjects.add(match.group())
+    
+    return missing_subjects
+
+
+def save_detailed_missing_report(results: Dict, output_file: Path, pipeline_filter: Optional[str] = None):
+    """Save detailed missing subjects/sessions report to JSON file."""
+    from datetime import datetime
+    
+    missing_data = {}
+    
+    if 'pipelines' in results:
+        for pipeline_name, pipeline_data in results['pipelines'].items():
+            if pipeline_filter and pipeline_name != pipeline_filter:
+                continue
+                
+            pipeline_missing = {
+                'missing_items': pipeline_data.get('missing_items', []),
+                'total_missing': len(pipeline_data.get('missing_items', [])),
+                'subjects_with_missing_data': list(extract_missing_subjects_from_results({'pipelines': {pipeline_name: pipeline_data}}))
+            }
+            
+            missing_data[pipeline_name] = pipeline_missing
+    
+    report = {
+        'metadata': {
+            'generated_by': 'BIDS App Output Checker',
+            'timestamp': datetime.now().isoformat(),
+            'command': ' '.join(sys.argv),
+            'pipeline_filter': pipeline_filter
+        },
+        'missing_data_by_pipeline': missing_data,
+        'summary': {
+            'total_pipelines_checked': len(missing_data),
+            'pipelines_with_missing_data': len([p for p in missing_data.values() if p['total_missing'] > 0]),
+            'all_missing_subjects': sorted(list(extract_missing_subjects_from_results(results)))
+        }
+    }
+    
+    try:
+        with open(output_file, 'w') as f:
+            json.dump(report, f, indent=2)
+        print(f"Detailed missing report saved to: {output_file}", file=sys.stderr)
+    except Exception as e:
+        print(f"Error saving report: {e}", file=sys.stderr)
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -1107,6 +1168,10 @@ Examples:
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output (DEBUG level)')
     parser.add_argument('-q', '--quiet', action='store_true', help='Quiet mode (WARNING level only)')
     parser.add_argument('--log', type=Path, help='Write log to file')
+    parser.add_argument('--list-missing-subjects', action='store_true', 
+                       help='Output only missing subject IDs (one per line) for use with run_bids_apps.py')
+    parser.add_argument('--output-json', type=Path, 
+                       help='Save detailed missing subjects/sessions report to JSON file')
     
     # Show help if no arguments provided
     if len(sys.argv) == 1:
@@ -1129,6 +1194,10 @@ Examples:
         print("Error: Cannot use --verbose and --quiet together", file=sys.stderr)
         sys.exit(1)
     
+    if args.list_missing_subjects and (args.json or args.verbose):
+        print("Error: --list-missing-subjects cannot be used with --json or --verbose", file=sys.stderr)
+        sys.exit(1)
+    
     # Run validation
     try:
         validator = BIDSOutputValidator(
@@ -1139,6 +1208,21 @@ Examples:
             args.log
         )
         results = validator.validate_all(args.pipeline)
+        
+        # Handle list-missing-subjects mode
+        if args.list_missing_subjects:
+            missing_subjects = extract_missing_subjects_from_results(results)
+            
+            if missing_subjects:
+                for subject in sorted(missing_subjects):
+                    print(subject)
+                sys.exit(1)  # Exit with error code to indicate missing subjects
+            else:
+                sys.exit(0)  # No missing subjects
+        
+        # Handle detailed JSON output
+        if args.output_json:
+            save_detailed_missing_report(results, args.output_json, args.pipeline)
         
         output_format = 'json' if args.json else 'text'
         validator.print_results(results, output_format, args.quiet)

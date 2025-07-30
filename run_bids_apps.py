@@ -404,109 +404,32 @@ def get_subject_sessions(subject, bids_folder):
     return sorted(sessions)
 
 def subject_processed(subject, common, app, force=False):
-    """Check if a subject has already been processed using multiple strategies.
-    
-    For longitudinal datasets, checks that ALL sessions are processed.
-    For single-session datasets, uses the original logic.
-    """
-    logging.debug(f"=== CHECKING IF SUBJECT {subject} IS ALREADY PROCESSED ===")
-    
+    """Check if a subject has already been processed."""
     if force:
         logging.info(f"Force flag enabled - will reprocess {subject} regardless of existing outputs")
         return False
     
     # Strategy 1: Check success marker file (most reliable)
-    logging.debug(f"Strategy 1: Checking success marker for {subject}")
     success_marker = os.path.join(common["output_folder"], ".bids_app_runner", f"{subject}_success.txt")
     if os.path.exists(success_marker):
-        logging.debug(f"Found success marker for {subject}: {success_marker}")
         logging.info(f"Subject '{subject}' already processed (success marker found)")
         return True
-    else:
-        logging.debug(f"No success marker found for {subject}")
     
-    # Strategy 2: Session-aware output pattern checking if available
-    logging.debug(f"Strategy 2: Checking session-aware output patterns for {subject}")
+    # Strategy 2: Check configured output pattern if available
     pattern = app.get("output_check", {}).get("pattern", "")
     if pattern:
-        logging.debug(f"Found output_check pattern for {subject}: {pattern}")
-        
-        # Get all sessions for this subject
-        sessions = get_subject_sessions(subject, common["bids_folder"])
         check_dir = os.path.join(common["output_folder"], app["output_check"].get("directory", ""))
-        
-        logging.debug(f"Detected sessions for {subject}: {sessions}")
-        logging.debug(f"Pattern check directory: {check_dir}")
-        
-        # For single-session datasets (sessions = [None])
-        if len(sessions) == 1 and sessions[0] is None:
-            logging.debug(f"Single-session dataset detected for {subject}")
-            full_pattern = os.path.join(check_dir, pattern.replace("{subject}", subject))
-            logging.debug(f"Checking single-session pattern: {full_pattern}")
-            matches = glob.glob(full_pattern)
-            if matches:
-                logging.debug(f"Found existing output for {subject} via pattern: {matches}")
-                logging.info(f"Subject '{subject}' already processed (single-session output pattern matched)")
-                return True
-            else:
-                logging.debug(f"No output found for single-session pattern")
-        
-        # For multi-session datasets, check ALL sessions
-        else:
-            logging.debug(f"Multi-session dataset detected for {subject} with {len(sessions)} sessions")
-            processed_sessions = []
-            missing_sessions = []
-            
-            for session in sessions:
-                logging.debug(f"Checking session {session} for {subject}")
-                
-                # Create session-aware pattern
-                # Replace {subject} and add session info if pattern supports it
-                if "{session}" in pattern:
-                    session_pattern = pattern.replace("{subject}", subject).replace("{session}", session)
-                    logging.debug(f"Using session-aware pattern: {session_pattern}")
-                else:
-                    # If pattern doesn't have {session}, try to add session to subject part
-                    session_pattern = pattern.replace("{subject}", f"{subject}/{session}")
-                    logging.debug(f"Using subject/session pattern: {session_pattern}")
-                
-                full_pattern = os.path.join(check_dir, session_pattern)
-                logging.debug(f"Full pattern for {subject} {session}: {full_pattern}")
-                matches = glob.glob(full_pattern)
-                
-                if matches:
-                    processed_sessions.append(session)
-                    logging.debug(f"✓ Found output for {subject} {session}: {matches[0]} (and {len(matches)-1} others)" if len(matches) > 1 else f"✓ Found output for {subject} {session}: {matches[0]}")
-                else:
-                    missing_sessions.append(session)
-                    logging.debug(f"✗ Missing output for {subject} {session}")
-            
-            # Subject is only considered processed if ALL sessions are processed
-            if missing_sessions:
-                logging.info(f"Subject '{subject}' has MISSING SESSIONS: "
-                            f"{len(processed_sessions)}/{len(sessions)} sessions complete. "
-                            f"Missing: {missing_sessions}. Will reprocess.")
-                return False
-            else:
-                logging.debug(f"Subject '{subject}' fully processed: "
-                             f"all {len(sessions)} sessions complete")
-                logging.info(f"Subject '{subject}' already processed (all sessions complete)")
-                return True
-    else:
-        logging.debug(f"No output_check pattern configured - skipping strategy 2")
+        full_pattern = os.path.join(check_dir, pattern.replace("{subject}", subject))
+        matches = glob.glob(full_pattern)
+        if matches:
+            logging.info(f"Subject '{subject}' already processed (output pattern matched)")
+            return True
     
     # Strategy 3: Generic output detection (fallback)
-    logging.debug(f"Strategy 3: Checking generic output patterns for {subject}")
-    generic_output_exists = check_generic_output_exists(subject, common)
-    if generic_output_exists:
-        logging.warning(f"IMPORTANT: Subject '{subject}' detected as processed by generic detection")
-        logging.warning(f"This might miss session-specific processing! Consider configuring output_check patterns.")
+    if check_generic_output_exists(subject, common):
         logging.info(f"Subject '{subject}' already processed (generic output detection)")
         return True
-    else:
-        logging.debug(f"No generic output found for {subject}")
     
-    logging.debug(f"=== RESULT: {subject} needs processing ===")
     return False
 
 def check_generic_output_exists(subject, common):

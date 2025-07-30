@@ -1,0 +1,27 @@
+{
+  "common": {
+    "bids_folder": "/data/mrivault/_0_STAGING/134_AF19/rawdata/",
+    "output_folder": "/data/local/134_AF19/derivatives/qsiprep/",
+    "tmp_folder": "/data/local/134_AF19/derivatives/qsirecon_temp",
+    "templateflow_dir": "/data/local/templateflow",
+    "container": "/data/local/container/qsiprep/qsiprep_1.0.1.sif",
+    "optional_folder": "/data/local/134_AF19/", 
+    "jobs": 1
+  },
+  "app": {
+    "analysis_level": "participant",
+    "options": [
+      "--fs-license-file", "/fs/license.txt",
+      "--nprocs", "4",
+      "--skip-bids-validation",
+      "--output-resolution", "1.2"
+    ],
+    "mounts": [
+      { "source": "/usr/local/freesurfer", "target": "/fs" }
+    ],
+    "output_check": {
+      "pattern": "{subject}/{session}/dwi/{subject}_{session}_*desc-preproc_dwi.nii.gz",
+      "directory": ""
+    }
+  }
+}
