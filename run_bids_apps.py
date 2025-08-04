@@ -22,8 +22,10 @@ import concurrent.futures
 import logging
 import signal
 import time
+import re
 from datetime import datetime
 from pathlib import Path
+from typing import Set, Optional
 
 # Import validation integration
 try:
@@ -159,6 +161,82 @@ def setup_logging(log_level="INFO"):
     
     return log_file
 
+
+def parse_missing_subjects_from_json(json_file: Path, pipeline_filter: Optional[str] = None) -> Set[str]:
+    """Parse missing subjects from external JSON report file.
+    
+    Supports JSON format from external BIDS app checking tools with structure:
+    {
+        "pipelines": {
+            "pipeline_name": {
+                "subjects": ["sub-001", "sub-002", ...]
+            }
+        }
+    }
+    """
+    try:
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+    except Exception as e:
+        raise ValueError(f"Could not read JSON file {json_file}: {e}")
+    
+    missing_subjects = set()
+    
+    # Handle the format from external BIDS app checking tools
+    if 'pipelines' in data:
+        pipelines = data['pipelines']
+        
+        # If pipeline filter specified, only use that pipeline
+        if pipeline_filter:
+            if pipeline_filter in pipelines:
+                pipeline_data = pipelines[pipeline_filter]
+                if 'subjects' in pipeline_data:
+                    missing_subjects.update(pipeline_data['subjects'])
+                else:
+                    logging.warning(f"No 'subjects' field found in pipeline '{pipeline_filter}'")
+            else:
+                available_pipelines = list(pipelines.keys())
+                raise ValueError(f"Pipeline '{pipeline_filter}' not found in JSON. Available: {available_pipelines}")
+        else:
+            # No filter - collect subjects from all pipelines
+            for pipeline_name, pipeline_data in pipelines.items():
+                if 'subjects' in pipeline_data:
+                    missing_subjects.update(pipeline_data['subjects'])
+                    logging.info(f"Found {len(pipeline_data['subjects'])} missing subjects in {pipeline_name}")
+    
+    # Also handle the format from check_app_output.py --output-json
+    elif 'missing_data_by_pipeline' in data:
+        pipelines = data['missing_data_by_pipeline']
+        
+        if pipeline_filter:
+            if pipeline_filter in pipelines:
+                pipeline_data = pipelines[pipeline_filter]
+                if 'subjects_with_missing_data' in pipeline_data:
+                    missing_subjects.update(pipeline_data['subjects_with_missing_data'])
+            else:
+                available_pipelines = list(pipelines.keys())
+                raise ValueError(f"Pipeline '{pipeline_filter}' not found in JSON. Available: {available_pipelines}")
+        else:
+            for pipeline_name, pipeline_data in pipelines.items():
+                if 'subjects_with_missing_data' in pipeline_data:
+                    missing_subjects.update(pipeline_data['subjects_with_missing_data'])
+                    logging.info(f"Found {len(pipeline_data['subjects_with_missing_data'])} missing subjects in {pipeline_name}")
+    
+    # Handle direct subject list format
+    elif 'all_missing_subjects' in data:
+        missing_subjects.update(data['all_missing_subjects'])
+    
+    else:
+        raise ValueError("Unsupported JSON format. Expected 'pipelines', 'missing_data_by_pipeline', or 'all_missing_subjects' fields.")
+    
+    if not missing_subjects:
+        logging.info("No missing subjects found in JSON file")
+    else:
+        logging.info(f"Parsed {len(missing_subjects)} missing subjects from {json_file}")
+    
+    return missing_subjects
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -175,8 +253,14 @@ Examples:
   %(prog)s -x config.json --debug --subjects sub-001         # Debug single subject
   %(prog)s -x config.json --force                            # Force reprocessing
   %(prog)s -x config.json --pilot                            # Pilot mode: process one random subject
+  %(prog)s -x config.json --from-json missing.json           # Reprocess subjects from JSON report
+  %(prog)s -x config.json --from-json missing.json --pipeline qsiprep  # Specific pipeline from JSON
   
-Validation and Reprocessing:
+Validation Examples:
+  %(prog)s -x config.json --validate                         # Validate outputs after processing
+  %(prog)s -x config.json --validate-only                    # Only validate, don't process
+  %(prog)s -x config.json --reprocess-missing                # Auto-reprocess missing subjects
+  %(prog)s -x config.json --validate --validation-output-dir reports  # Custom reports directoryValidation and Reprocessing:
   %(prog)s -x config.json --validate                         # Process and validate outputs
   %(prog)s -x config.json --validate-only                    # Only validate, skip processing
   %(prog)s -x config.json --reprocess-missing                # Auto-reprocess missing subjects
@@ -269,6 +353,17 @@ For more information, see README_STANDARD.md
         "--validation-output-dir", 
         default="validation_reports", 
         help="Directory for validation reports and reprocess configs (default: validation_reports)"
+    )
+    
+    parser.add_argument(
+        "--from-json", 
+        type=Path,
+        help="Parse missing subjects from external JSON report file and process them"
+    )
+    
+    parser.add_argument(
+        "--pipeline", 
+        help="When using --from-json, specify which pipeline to extract subjects from (if not specified, uses all pipelines)"
     )
     
     return parser.parse_args()
@@ -1140,8 +1235,22 @@ def main():
         level = app.get("analysis_level", "participant")
         
         if level == "participant":
+            # Handle --from-json option first
+            if args.from_json:
+                try:
+                    missing_subjects = parse_missing_subjects_from_json(args.from_json, args.pipeline)
+                    subjects = sorted(list(missing_subjects))
+                    if args.pipeline:
+                        logging.info(f"Using subjects from JSON file {args.from_json} (pipeline: {args.pipeline}): {len(subjects)} subjects")
+                    else:
+                        logging.info(f"Using subjects from JSON file {args.from_json} (all pipelines): {len(subjects)} subjects")
+                    if subjects:
+                        logging.info(f"Subjects to reprocess: {subjects[:5]}" + ("..." if len(subjects) > 5 else ""))
+                except Exception as e:
+                    logging.error(f"Error parsing JSON file: {e}")
+                    sys.exit(f"ERROR: Could not parse JSON file {args.from_json}: {e}")
             # Use command-line subjects if provided
-            if args.subjects:
+            elif args.subjects:
                 subjects = [s if s.startswith("sub-") else f"sub-{s}" for s in args.subjects]
                 logging.info(f"Using subjects from command line: {subjects}")
             # Use subjects from config if provided
