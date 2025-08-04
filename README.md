@@ -1,180 +1,246 @@
-# BIDS App Runner
+# BIDS Apps Runner
 
-**Version 2.0.0** - Production-ready BIDS App execution with advanced features
+A comprehensive tool for running BIDS Apps with automatic output validation and reprocessing capabilities.
 
-Ein flexibles Python-Tool zur Ausführung von BIDS Apps mit JSON-Konfiguration, DataLad-Unterstützung und erweiterten Features.
+## Overview
 
-## 🎯 Features
+This tool provides a seamless workflow for:
 
-- **🔄 Automatische DataLad-Erkennung** - Unterstützt sowohl Standard-BIDS-Ordner als auch DataLad-Datasets
-- **⚡ Parallele Verarbeitung** - Multithreading für effiziente Batch-Verarbeitung  
-- **🐛 Debug-Modus** - Detaillierte Container-Logs für Troubleshooting
-- **🎛️ HPC-Integration** - SLURM-Job-Scheduling für Cluster-Umgebungen
-- **✅ Robuste Validierung** - Umfassende Fehlerbehandlung und Konfigurationsprüfung
-- **📊 Ausführliche Berichte** - Zusammenfassungen mit Timing und Erfolgsraten
+1. **Running BIDS Apps** with robust configuration management
+2. **Validating pipeline outputs** to identify missing or incomplete data
+3. **Automatic reprocessing** of missing subjects without manual intervention
 
-## 🚀 Schnellstart
+## Key Features
 
-### Installation
+- 🚀 **Automated Pipeline Execution**: Run fMRIPrep, QSIPrep, FreeSurfer, and other BIDS Apps
+- 🔍 **Smart Output Validation**: Automatically detect missing or incomplete pipeline outputs
+- 🔄 **Seamless Reprocessing**: Identify and reprocess missing subjects in one command
+- ⚡ **Parallel Processing**: Efficient multi-subject processing with configurable parallelization
+- 📊 **Comprehensive Logging**: Detailed logs and validation reports
+- 🐳 **Container Support**: Full Apptainer/Singularity container integration
 
-```bash
-# Automatische Installation mit UV
-./install.sh
+## Quick Start
 
-# Oder manuell
-python -m venv .appsrunner
-source .appsrunner/bin/activate
-pip install -r requirements.txt
-```
-
-### Beispielkonfiguration
+### 1. Basic BIDS App Execution
 
 ```bash
-# Beispielkonfiguration kopieren und anpassen
-cp config_example.json my_config.json
+# Run a BIDS App with a configuration file
+python run_bids_apps.py -x config.json
+
+# Process specific subjects
+python run_bids_apps.py -x config.json --subjects sub-001 sub-002
+
+# Dry run to test configuration
+python run_bids_apps.py -x config.json --dry-run
 ```
 
-## 📚 Dokumentation
-
-### Standard-Script (Lokale Ausführung)
-
-**Datei:** `run_bids_apps.py`  
-**Dokumentation:** [README_STANDARD.md](README_STANDARD.md)
+### 2. Automated Validation and Reprocessing Workflow
 
 ```bash
-# Einfache Ausführung
-./run_bids_apps.py -x config.json
+# Step 1: Validate pipeline outputs and generate missing subjects report
+python check_app_output.py /data/bids /data/derivatives --output-json missing_subjects.json
 
-# Mit spezifischen Subjects
-./run_bids_apps.py -x config.json --subjects sub-001 sub-002
-
-# Debug-Modus für Troubleshooting  
-./run_bids_apps.py -x config.json --debug
+# Step 2: Automatically reprocess missing subjects (--force is auto-enabled)
+python run_bids_apps.py -x config.json --from-json missing_subjects.json
 ```
 
-### HPC-Script (SLURM-Cluster)
+## Configuration
 
-**Datei:** `run_bids_apps_hpc.py`  
-**Dokumentation:** [README_HPC.md](README_HPC.md)
-
-```bash
-# SLURM-Jobs für alle Subjects einreichen
-./run_bids_apps_hpc.py -x config_hpc.json
-
-# Mit Debug-Logs in SLURM-Jobs
-./run_bids_apps_hpc.py -x config_hpc.json --debug
-
-# Nur Job-Scripts erstellen (ohne Einreichung)
-./run_bids_apps_hpc.py -x config_hpc.json --slurm-only
-```
-
-## 🔧 Wichtige Features
-
-### DataLad Integration
-
-Beide Scripts erkennen automatisch DataLad-Datasets und bieten:
-
-- **Automatische Datenabfrage** mit `datalad get`
-- **Ergebnis-Versionierung** mit `datalad save`
-- **Nahtloser Fallback** auf Standard-BIDS-Ordner
-- **Keine Konfigurationsänderungen erforderlich**
-
-### Debug-Modus
-
-Erweiterte Debugging-Funktionen:
-
-- **Echtzeit-Container-Output** Streaming
-- **Detaillierte Log-Dateien** pro Subject
-- **Fehler-Kontext** mit letzten 20 Zeilen von stderr
-- **Performance-Timing** Informationen
-
-### Production-Ready Features
-
-- **Umfassende Fehlerbehandlung** mit detaillierten Nachrichten
-- **Signal-Handling** für graceful shutdown
-- **Konfigurationsvalidierung** mit hilfreichen Fehlermeldungen
-- **Strukturiertes Logging** mit Timestamps und Levels
-- **Performance-Monitoring** und Statistiken
-
-## ⚙️ Konfiguration
-
-### Basis-Konfiguration
+Create a `config.json` file with your pipeline settings:
 
 ```json
 {
   "common": {
-    "bids_folder": "/path/to/bids/dataset",
-    "output_folder": "/path/to/output",
-    "tmp_folder": "/tmp/bids_processing",
-    "container": "/path/to/app.sif",
-    "templateflow_dir": "/path/to/templateflow"
-    "jobs": 1,
-    "pilottest": true
+    "bids_folder": "/data/bids",
+    "output_folder": "/data/derivatives/fmriprep",
+    "tmp_folder": "/tmp/fmriprep_work",
+    "container": "/containers/fmriprep-24.0.0.sif",
+    "jobs": 4
   },
   "app": {
     "analysis_level": "participant",
     "options": [
-      "--skip-bids-validation",
-      "--nprocs", "2"
-    ],
+      "--fs-license-file", "/freesurfer/license.txt",
+      "--output-spaces", "MNI152NLin2009cAsym:res-native",
+      "--skip_bids_validation"
+    ]
   }
 }
 ```
 
-- **jobs: Anzahl apptainer Instanzen**
-- **pilottest: true => eine zufällige Person wird für einen Pilotrun gewählt**
-- **nprocs: Anzahl an Prozessoren pro apptainer Instanz**
+## Core Components
 
-### HPC-Konfiguration (zusätzliche Abschnitte)
+### run_bids_apps.py
 
-```json
-{
-  "hpc": {
-    "job_name": "bids_app",
-    "partition": "compute",
-    "time": "24:00:00",
-    "mem": "32GB",
-    "cpus": 8
-  },
-  "datalad": {
-    "input_url": "https://example.com/dataset.git",
-    "output_url": "https://example.com/results.git"
-  }
-}
+Main execution engine for running BIDS Apps with features:
+
+- JSON-based configuration management
+- Automatic subject discovery
+- Parallel processing with configurable job limits
+- Force reprocessing capabilities
+- Comprehensive error handling and logging
+
+### check_app_output.py
+
+Output validation tool supporting:
+
+- **fMRIPrep**: Validates preprocessed BOLD data, HTML reports, surface outputs
+- **QSIPrep**: Checks DWI preprocessing, session handling, sidecar files
+- **FreeSurfer**: Validates recon-all completion, longitudinal processing
+- **QSIRecon**: Checks reconstruction pipelines and derivatives structure
+
+## Command Line Options
+
+### run_bids_apps.py
+
+```bash
+-x, --config         Configuration JSON file (required)
+--subjects           Specific subjects to process
+--from-json          Process subjects from validation JSON report
+--pipeline           Filter specific pipeline from JSON report
+--force              Force reprocessing (auto-enabled with --from-json)
+--dry-run            Test configuration without execution
+--pilot              Process one random subject for testing
+--debug              Enable detailed container output
+--log-level          Set logging verbosity (DEBUG, INFO, WARNING, ERROR)
 ```
 
-## 🔄 Workflow-Auswahl
+### check_app_output.py
 
-**Wählen Sie das passende Script für Ihre Umgebung:**
+```bash
+bids_dir             BIDS source directory
+derivatives_dir      BIDS derivatives directory
+-p, --pipeline       Check specific pipeline only
+--output-json        Save detailed missing subjects report
+--verbose            Detailed validation output
+--quiet              Minimal output mode
+```
 
-- **Local/Workstation**: Verwenden Sie `run_bids_apps.py` (siehe [README_STANDARD.md](README_STANDARD.md))
-- **HPC/Cluster**: Verwenden Sie `run_bids_apps_hpc.py` (siehe [README_HPC.md](README_HPC.md))
+## Supported Pipelines
 
-## 📋 Systemanforderungen
+| Pipeline | Container Support | Output Validation | Key Features |
+|----------|------------------|-------------------|--------------|
+| **fMRIPrep** | ✅ | ✅ | Preprocessed BOLD, HTML reports, surface outputs |
+| **QSIPrep** | ✅ | ✅ | DWI preprocessing, multi-session support |
+| **FreeSurfer** | ✅ | ✅ | Structural processing, longitudinal analysis |
+| **QSIRecon** | ✅ | ✅ | DWI reconstruction, multiple recon pipelines |
 
-- **Python 3.8+**
-- **Apptainer/Singularity**
-- **DataLad** (optional, für erweiterte Features)
-- **SLURM** (für HPC-Script)
+## Advanced Features
 
-## 📁 Dateien
+### Automatic Force Mode
 
-- `run_bids_apps.py` - Standard-Script mit DataLad Auto-Erkennung
-- `run_bids_apps_hpc.py` - HPC-Script für SLURM-Cluster
-- `config.json` - Beispielkonfiguration
-- `install.sh` - Automatische Installation
-- `README_STANDARD.md` - Vollständige Dokumentation für Standard-Script
-- `README_HPC.md` - Vollständige Dokumentation für HPC-Script
+When using `--from-json`, the `--force` flag is automatically enabled to ensure missing subjects are reprocessed regardless of existing partial outputs.
 
-## 🆘 Support
+### Smart Output Detection
 
-Bei Problemen:
+The validation system uses pipeline-specific completion indicators:
 
-1. Verwenden Sie den **Debug-Modus** (`--debug`)
-2. Prüfen Sie die **Log-Dateien** im `logs/` Verzeichnis
-3. Konsultieren Sie die entsprechende Dokumentation
-4. Prüfen Sie die **Konfigurationsvalidierung**
+- **fMRIPrep**: HTML reports + preprocessed files
+- **QSIPrep**: HTML reports + desc-preproc DWI files
+- **FreeSurfer**: recon-all.done markers
+- **QSIRecon**: Reconstruction-specific output files
 
----
+### Session Handling
 
-**Entwickelt für robuste, production-ready BIDS App-Ausführung mit erweiterten Features.**
+Full support for multi-session BIDS datasets with automatic session detection and validation.
+
+## Workflow Examples
+
+### Complete Validation and Reprocessing
+
+```bash
+# 1. Check all pipelines and save detailed report
+python check_app_output.py /data/bids /data/derivatives \
+    --output-json validation_report.json --verbose
+
+# 2. Reprocess only fMRIPrep missing subjects
+python run_bids_apps.py -x fmriprep_config.json \
+    --from-json validation_report.json --pipeline fmriprep
+
+# 3. Monitor progress
+tail -f logs/bids_app_runner_*.log
+```
+
+### Quick Pipeline Testing
+
+```bash
+# Test configuration with one subject
+python run_bids_apps.py -x config.json --pilot --dry-run
+
+# Run actual pilot test
+python run_bids_apps.py -x config.json --pilot --debug
+```
+
+## Installation
+
+1. **Clone the repository**
+
+   ```bash
+   git clone https://github.com/MRI-Lab-Graz/bids_apps_runner.git
+   cd bids_apps_runner
+   ```
+
+2. **Install dependencies**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Set up containers**
+   - Download your BIDS App containers (Apptainer/Singularity format)
+   - Update container paths in your configuration files
+
+## Requirements
+
+- Python 3.8+
+- Apptainer/Singularity for container execution
+- Sufficient disk space for BIDS datasets and derivatives
+- Optional: Slurm for HPC environments (see `run_bids_apps_hpc.py`)
+
+## Logging and Monitoring
+
+- **Execution logs**: `logs/bids_app_runner_YYYYMMDD_HHMMSS.log`
+- **Validation reports**: `validation_reports/validation_report_YYYYMMDD_HHMMSS.json`
+- **Real-time monitoring**: Use `tail -f` on log files for live progress tracking
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"All subjects already processed"**
+   - Use `--force` flag or `--from-json` (which auto-enables force mode)
+   - Check output detection logic with `--debug`
+
+2. **Container execution fails**
+   - Verify container path and permissions
+   - Check bind mounts and directory access
+   - Review container logs with `--debug`
+
+3. **Validation reports empty results**
+   - Ensure correct BIDS directory structure
+   - Verify pipeline-specific output formats
+   - Use `--verbose` for detailed validation output
+
+### Getting Help
+
+- Check log files for detailed error messages
+- Use `--dry-run` to test configurations safely
+- Use `--debug` for verbose container output
+- Review validation reports for missing data details
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Citation
+
+If you use this tool in your research, please cite:
+
+```
+BIDS Apps Runner: Automated Pipeline Execution and Validation for BIDS Datasets
+GitHub: https://github.com/MRI-Lab-Graz/bids_apps_runner
+```
