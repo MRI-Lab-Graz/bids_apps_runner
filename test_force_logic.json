@@ -1,0 +1,18 @@
+{
+  "metadata": {
+    "generated_by": "Test",
+    "timestamp": "2025-08-04T12:00:00"
+  },
+  "missing_data_by_pipeline": {
+    "qsiprep": {
+      "missing_items": [
+        "Subject sub-001 missing",
+        "Subject sub-002 missing"
+      ],
+      "subjects_with_missing_data": ["sub-001", "sub-002"]
+    }
+  },
+  "summary": {
+    "all_missing_subjects": ["sub-001", "sub-002"]
+  }
+}

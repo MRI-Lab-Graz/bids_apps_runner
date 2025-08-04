@@ -253,16 +253,12 @@ Examples:
   %(prog)s -x config.json --debug --subjects sub-001         # Debug single subject
   %(prog)s -x config.json --force                            # Force reprocessing
   %(prog)s -x config.json --pilot                            # Pilot mode: process one random subject
-  %(prog)s -x config.json --from-json missing.json           # Reprocess subjects from JSON report
+  %(prog)s -x config.json --from-json missing.json           # Reprocess subjects from JSON report (--force auto-enabled)
   %(prog)s -x config.json --from-json missing.json --pipeline qsiprep  # Specific pipeline from JSON
   
 Validation Examples:
   %(prog)s -x config.json --validate                         # Validate outputs after processing
   %(prog)s -x config.json --validate-only                    # Only validate, don't process
-  %(prog)s -x config.json --reprocess-missing                # Auto-reprocess missing subjects
-  %(prog)s -x config.json --validate --validation-output-dir reports  # Custom reports directoryValidation and Reprocessing:
-  %(prog)s -x config.json --validate                         # Process and validate outputs
-  %(prog)s -x config.json --validate-only                    # Only validate, skip processing
   %(prog)s -x config.json --reprocess-missing                # Auto-reprocess missing subjects
   %(prog)s -x config.json --validate --validation-output-dir reports  # Custom reports directory
   
@@ -358,7 +354,7 @@ For more information, see README_STANDARD.md
     parser.add_argument(
         "--from-json", 
         type=Path,
-        help="Parse missing subjects from external JSON report file and process them"
+        help="Parse missing subjects from external JSON report file and process them (automatically enables --force)"
     )
     
     parser.add_argument(
@@ -520,10 +516,22 @@ def subject_processed(subject, common, app, force=False):
             logging.info(f"Subject '{subject}' already processed (output pattern matched)")
             return True
     
-    # Strategy 3: Generic output detection (fallback)
+    # Strategy 3: Generic output detection (fallback) - but be conservative
+    # Only consider subject processed if we have substantial evidence
     if check_generic_output_exists(subject, common):
-        logging.info(f"Subject '{subject}' already processed (generic output detection)")
-        return True
+        # For critical pipelines, be more strict about what counts as "processed"
+        app_name = app.get("image", "").lower()
+        if any(critical_app in app_name for critical_app in ["fmriprep", "qsiprep", "freesurfer"]):
+            # For critical apps, also check for completion indicators
+            if has_completion_indicators(subject, common, app_name):
+                logging.info(f"Subject '{subject}' already processed (generic output detection + completion indicators)")
+                return True
+            else:
+                logging.info(f"Subject '{subject}' has partial output but no completion indicators - will reprocess")
+                return False
+        else:
+            logging.info(f"Subject '{subject}' already processed (generic output detection)")
+            return True
     
     return False
 
@@ -577,6 +585,53 @@ def check_generic_output_exists(subject, common):
     
     logging.debug(f"No output found for {subject}")
     return False
+
+def has_completion_indicators(subject, common, app_name):
+    """Check for specific completion indicators for critical BIDS apps."""
+    output_dir = common["output_folder"]
+    
+    if "fmriprep" in app_name:
+        # fMRIPrep completion indicators
+        indicators = [
+            os.path.join(output_dir, f"{subject}.html"),  # HTML report
+            os.path.join(output_dir, subject, "func", f"{subject}_*desc-preproc_bold.nii*"),  # Preprocessed BOLD
+            os.path.join(output_dir, subject, "anat", f"{subject}_*desc-preproc_T1w.nii*"),   # Preprocessed T1w
+        ]
+    elif "qsiprep" in app_name:
+        # QSIPrep completion indicators
+        indicators = [
+            os.path.join(output_dir, f"{subject}.html"),  # HTML report
+            os.path.join(output_dir, subject, "dwi", f"{subject}_*desc-preproc_dwi.nii*"),    # Preprocessed DWI
+        ]
+    elif "freesurfer" in app_name:
+        # FreeSurfer completion indicators
+        indicators = [
+            os.path.join(output_dir, subject, "scripts", "recon-all.done"),  # Completion marker
+            os.path.join(output_dir, subject, "surf", "lh.pial"),            # Surface files
+            os.path.join(output_dir, subject, "surf", "rh.pial"),
+        ]
+    else:
+        # For other apps, just check for any substantial output
+        indicators = [
+            os.path.join(output_dir, f"{subject}.html"),
+            os.path.join(output_dir, subject, "*", f"{subject}_*"),
+        ]
+    
+    # Check if at least some key indicators exist
+    found_indicators = 0
+    for indicator in indicators:
+        if glob.glob(indicator):
+            found_indicators += 1
+    
+    # For fMRIPrep/QSIPrep: need HTML report + at least one preprocessed file
+    # For FreeSurfer: need recon-all.done
+    # For others: need at least one indicator
+    if "fmriprep" in app_name or "qsiprep" in app_name:
+        return found_indicators >= 2  # HTML + preprocessed data
+    elif "freesurfer" in app_name:
+        return any(glob.glob(os.path.join(output_dir, subject, "scripts", "recon-all.done")))
+    else:
+        return found_indicators >= 1
 
 def create_success_marker(subject, common):
     """Create a success marker file for a subject."""
@@ -1183,6 +1238,12 @@ def main():
     try:
         # Parse arguments and setup logging
         args = parse_args()
+        
+        # Auto-enable --force when using --from-json
+        if args.from_json and not args.force:
+            args.force = True
+            logging.info("Auto-enabling --force flag when using --from-json")
+        
         log_file = setup_logging(args.log_level)
         
         logging.info("BIDS App Runner 2.0.0 starting...")
