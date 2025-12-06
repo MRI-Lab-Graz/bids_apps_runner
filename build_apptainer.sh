@@ -7,19 +7,24 @@ DOCKERFILE=""
 
 # Function to display usage information
 usage() {
+    echo
+    echo "====================================================================="
+    echo "  MRI-Lab Graz (Karl Koschutnig) - BIDS Apptainer Builder 🧠 🏗️"
+    echo "====================================================================="
+    echo
     echo "Usage: $0 [-o OUTPUT_DIR] [-t TEMP_DIR] [-d DOCKERFILE] [-h]"
     echo
-    echo "Options:"
-    echo "  -o OUTPUT_DIR   Specify the output directory for the Apptainer image."
+    echo "Options ⚙️ :"
+    echo "  -o OUTPUT_DIR   📂 Specify the output directory for the Apptainer image."
     echo "                  Default is the current directory."
-    echo "  -t TEMP_DIR     Specify the temporary directory for Apptainer build files."
+    echo "  -t TEMP_DIR     🗑️  Specify the temporary directory for Apptainer build files."
     echo "                  Default is the current directory."
-    echo "  -d DOCKERFILE   Provide a Dockerfile to build the container."
+    echo "  -d DOCKERFILE   🐳 Provide a Dockerfile to build the container."
     echo "                  When specified, the script will use Docker to build an image"
     echo "                  from this Dockerfile and then convert it to an Apptainer image."
-    echo "  -h              Display this help message and exit."
+    echo "  -h              ℹ️  Display this help message and exit."
     echo
-    echo "Examples:"
+    echo "Examples 💡:"
     echo "  Build from Docker Hub:"
     echo "    $0 -o /data/local/container/qsiprep -t /data/local/container/apptainer_tmp"
     echo
@@ -27,6 +32,27 @@ usage() {
     echo "    $0 -d /path/to/Dockerfile -o /data/local/container/custom"
     exit 1
 }
+
+# Function to display a spinner
+spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='|/-\'
+    echo -n " "
+    while kill -0 $pid 2>/dev/null; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
+
+# Check if no arguments provided
+if [ $# -eq 0 ]; then
+    usage
+fi
 
 # Parse command-line options
 while getopts ":o:t:d:h" opt; do
@@ -49,6 +75,12 @@ while getopts ":o:t:d:h" opt; do
       ;;
   esac
 done
+
+echo
+echo "====================================================================="
+echo "  MRI-Lab Graz (Karl Koschutnig) - BIDS Apptainer Builder 🧠 🏗️"
+echo "====================================================================="
+echo
 
 # Check if Apptainer is installed
 if ! command -v apptainer &> /dev/null; then
@@ -124,20 +156,43 @@ if [ -n "$DOCKERFILE" ]; then
     # Log file for build output
     LOG_FILE="${OUTPUT_PATH%.sif}.log"
 
-    echo "Converting Docker image '${IMAGE_NAME}:latest' to Apptainer image..."
-    if apptainer build --tmpdir="$APPTAINER_TMPDIR" "$OUTPUT_PATH" "docker-daemon://${IMAGE_NAME}:latest" &> "$LOG_FILE"; then
-         echo "Apptainer image built successfully at: $OUTPUT_PATH"
+    echo "Converting Docker image '${IMAGE_NAME}:latest' to Apptainer image... 🔄"
+    echo "   This may take a while. Please wait..."
+
+    apptainer build --tmpdir="$APPTAINER_TMPDIR" "$OUTPUT_PATH" "docker-daemon://${IMAGE_NAME}:latest" &> "$LOG_FILE" &
+    BUILD_PID=$!
+    spinner $BUILD_PID
+
+    wait $BUILD_PID
+    EXIT_CODE=$?
+
+    if [ $EXIT_CODE -eq 0 ]; then
+         echo "✅ Apptainer image built successfully at: $OUTPUT_PATH"
          exit 0
     else
-         echo "Failed to build Apptainer image. Check log file: $LOG_FILE"
+         echo "❌ Failed to build Apptainer image. Check log file: $LOG_FILE"
          exit 1
     fi
 fi
 
 # --- Docker Hub Branch ---
 
-# Prompt user for Docker image repository (e.g., 'pennbbl/qsiprep')
-read -p "Enter Docker image repository (e.g., 'pennbbl/qsiprep'): " DOCKER_REPO
+# Predefined BIDS Apps
+APPS=("nipreps/fmriprep" "pennbbl/qsiprep" "nipreps/mriqc" "freesurfer/freesurfer" "Custom")
+
+echo "Select a BIDS App to build 📦:"
+PS3="Please enter your choice (number): "
+select APP in "${APPS[@]}"; do
+    if [[ "$APP" == "Custom" ]]; then
+        read -p "Enter Docker image repository (e.g., 'pennbbl/qsiprep'): " DOCKER_REPO
+        break
+    elif [[ -n "$APP" ]]; then
+        DOCKER_REPO="$APP"
+        break
+    else
+        echo "❌ Invalid selection. Please try again."
+    fi
+done
 
 # Extract the image name (e.g., 'qsiprep' from 'pennbbl/qsiprep')
 IMAGE_NAME="${DOCKER_REPO##*/}"
@@ -186,9 +241,19 @@ mkdir -p "$OUTPUT_DIR"
 
 # Build the Apptainer image and log output
 LOG_FILE="${OUTPUT_PATH%.sif}.log"
-if apptainer build --tmpdir="$APPTAINER_TMPDIR" "$OUTPUT_PATH" "docker://${DOCKER_REPO}:${TAG}" &> "$LOG_FILE"; then
-    echo "Apptainer image built successfully at: $OUTPUT_PATH"
+echo "🚀 Starting Apptainer build for ${DOCKER_REPO}:${TAG}..."
+echo "   This may take a while. Please wait..."
+
+apptainer build --tmpdir="$APPTAINER_TMPDIR" "$OUTPUT_PATH" "docker://${DOCKER_REPO}:${TAG}" &> "$LOG_FILE" &
+BUILD_PID=$!
+spinner $BUILD_PID
+
+wait $BUILD_PID
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "✅ Apptainer image built successfully at: $OUTPUT_PATH"
 else
-    echo "Failed to build Apptainer image. Check log file: $LOG_FILE"
+    echo "❌ Failed to build Apptainer image. Check log file: $LOG_FILE"
     exit 1
 fi
