@@ -428,6 +428,11 @@ def validate_common_config(cfg):
     """Validate common configuration section."""
     logging.info("Validating common configuration...")
     
+    # Check for Apptainer or Singularity
+    if not (shutil.which("apptainer") or shutil.which("singularity")):
+        logging.error("Neither 'apptainer' nor 'singularity' found in PATH")
+        sys.exit("ERROR: Apptainer/Singularity is required but not found")
+    
     required = ["bids_folder", "output_folder", "tmp_folder", "container", "templateflow_dir"]
     missing = []
     

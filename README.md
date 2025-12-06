@@ -46,7 +46,12 @@ python run_bids_apps.py -x config.json --from-json missing_subjects.json
 
 ## Configuration
 
-Create a `config.json` file with your pipeline settings:
+Create a `config.json` file with your pipeline settings. You can use `config_example.json` as a template:
+
+```bash
+cp config_example.json config.json
+# Edit config.json with your specific paths and settings
+```
 
 ```json
 {

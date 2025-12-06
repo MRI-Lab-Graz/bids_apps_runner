@@ -1,3 +1,9 @@
 __pycache__/
 logs/
 nohup.out
+config.json
+validation_reports/
+.appsrunner/
+*.sif
+.DS_Store
+
