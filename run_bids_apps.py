@@ -361,6 +361,12 @@ For more information, see README_STANDARD.md
         "--pipeline", 
         help="When using --reprocess-from-json, specify which pipeline to extract subjects from (if not specified, uses all pipelines)"
     )
+
+    parser.add_argument(
+        "--nohup", 
+        action="store_true", 
+        help="Run in background (nohup mode) to survive connection drops"
+    )
     
     return parser.parse_args()
 
@@ -805,7 +811,7 @@ def run_container(cmd, env=None, dry_run=False, debug=False, subject=None, log_d
                                     if container_log_file:
                                         stdout_file.write(line)
                                         stdout_file.flush()
-                                    logging.debug(f"CONTAINER STDOUT: {line.rstrip()}")
+                                    logging.info(f"CONTAINER STDOUT: {line.rstrip()}")
                             
                             elif stream == process.stderr:
                                 line = stream.readline()
@@ -814,7 +820,7 @@ def run_container(cmd, env=None, dry_run=False, debug=False, subject=None, log_d
                                     if container_error_file:
                                         stderr_file.write(line)
                                         stderr_file.flush()
-                                    logging.debug(f"CONTAINER STDERR: {line.rstrip()}")
+                                    logging.info(f"CONTAINER STDERR: {line.rstrip()}")
                 else:
                     # Fallback for systems without select (Windows)
                     stdout, stderr = process.communicate()
@@ -1313,6 +1319,61 @@ def analyze_sessions(bids_dir, subjects):
             else:
                 logging.info(f"  • {session_counts[count]} subjects have {count} sessions")
 
+def validate_app_options_against_help(common, app):
+    """Validate that app options match the container's help output."""
+    container_path = common["container"]
+    options = app.get("options", [])
+    
+    if not options:
+        return
+
+    logging.info("Validating configuration flags against container help...")
+    
+    try:
+        # Run container with --help
+        cmd = ["apptainer", "run", container_path, "--help"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        if result.returncode != 0:
+            logging.warning("Could not run container with --help. Skipping flag validation.")
+            return
+            
+        help_text = result.stdout
+        
+        # Extract valid flags from help text
+        # We look for tokens starting with - or --
+        all_tokens = help_text.split()
+        valid_flags = set()
+        for token in all_tokens:
+            # Clean up token (remove commas, brackets, etc.)
+            clean_token = token.strip(',[]();.')
+            if clean_token.startswith('-'):
+                # Handle --flag=value syntax
+                clean_token = clean_token.split('=')[0]
+                valid_flags.add(clean_token)
+        
+        # Check user options
+        user_flags = [str(opt) for opt in options if str(opt).startswith('-')]
+        
+        invalid_flags = []
+        for flag in user_flags:
+            clean_flag = flag.split('=')[0]
+            if clean_flag not in valid_flags:
+                # Some flags might be hidden or formatted weirdly, but this catches most typos
+                invalid_flags.append(flag)
+        
+        if invalid_flags:
+            logging.warning("⚠️  POTENTIAL CONFIGURATION ISSUES DETECTED:")
+            logging.warning(f"   The following flags were not found in the container's help output:")
+            for flag in invalid_flags:
+                logging.warning(f"   - {flag}")
+            logging.warning("   Please verify these flags are correct for this version of the BIDS App.")
+        else:
+            logging.info("✅ All configuration flags appear to be valid.")
+            
+    except Exception as e:
+        logging.warning(f"Error during flag validation: {e}")
+
 def main():
     """Main function with comprehensive error handling."""
     start_time = time.time()
@@ -1328,6 +1389,30 @@ def main():
     try:
         # Parse arguments and setup logging
         args = parse_args()
+
+        # Handle nohup mode
+        if args.nohup:
+            # Remove --nohup from arguments to prevent infinite recursion
+            cmd_args = [arg for arg in sys.argv if arg != "--nohup"]
+            
+            # Create a log file for the background process
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            nohup_log = f"nohup_bids_runner_{timestamp}.log"
+            
+            print(f"🚀 Launching in background (nohup mode)...")
+            print(f"📄 Output will be redirected to: {nohup_log}")
+            
+            with open(nohup_log, "w") as log_f:
+                subprocess.Popen(
+                    [sys.executable] + cmd_args,
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                    preexec_fn=os.setpgrp  # Detach from terminal group
+                )
+            
+            print(f"✅ Process started in background. You can disconnect now.")
+            print(f"👀 Monitor progress with: tail -f {nohup_log}")
+            sys.exit(0)
         
         # Auto-enable --force when using --reprocess-from-json
         force_auto_enabled = False
@@ -1354,6 +1439,10 @@ def main():
         common, app = config["common"], config["app"]
         validate_common_config(common)
         validate_app_config(app)
+        
+        # Validate app options against container help (only in dry-run or if requested)
+        if args.dry_run:
+            validate_app_options_against_help(common, app)
         
         # Handle validation-only mode
         if args.validate_only:
@@ -1418,7 +1507,17 @@ def main():
                 try:
                     subjects = [d for d in os.listdir(common["bids_folder"])
                                if d.startswith("sub-") and os.path.isdir(os.path.join(common["bids_folder"], d))]
-                    logging.info(f"Auto-discovered subjects: {subjects}")
+                    # Sort subjects for consistent output
+                    subjects.sort()
+                    
+                    # Print formatted subject list
+                    logging.info(f"Auto-discovered {len(subjects)} subjects:")
+                    if len(subjects) > 10:
+                        logging.info(f"  First 5: {', '.join(subjects[:5])}")
+                        logging.info(f"  Last 5:  {', '.join(subjects[-5:])}")
+                    else:
+                        logging.info(f"  Subjects: {', '.join(subjects)}")
+                        
                 except Exception as e:
                     logging.error(f"Error discovering subjects: {e}")
                     sys.exit("ERROR: Could not discover subjects in BIDS folder")
@@ -1426,8 +1525,6 @@ def main():
             if not subjects:
                 logging.error("No subjects found to process")
                 sys.exit("ERROR: No subjects found.")
-            
-            logging.info(f"Found {len(subjects)} subjects to process")
             
             # Analyze sessions
             analyze_sessions(common["bids_folder"], subjects)
@@ -1531,7 +1628,7 @@ def main():
                                 logging.info(f"Automatically reprocessing {results['total_missing']} missing subjects...")
                                 
                                 # Recursively call run_bids_apps with the reprocess config
-                                import subprocess
+                                # import subprocess  <-- Removed local import to fix scope issue
                                 reprocess_cmd = [
                                     sys.executable, 
                                     os.path.abspath(__file__), 

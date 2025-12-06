@@ -10,3 +10,6 @@ configs/
 logs/
 validation_reports/
 cache/
+nohup*.log
+logs/
+data/

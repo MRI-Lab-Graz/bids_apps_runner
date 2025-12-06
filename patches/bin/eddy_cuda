@@ -1,0 +1,10 @@
+#!/bin/bash
+# Serialize execution of eddy_cuda using a lock file
+# This ensures that even if Nipype tries to run multiple eddy jobs in parallel (due to --nprocs > 1),
+# they will run one at a time to avoid overloading the GPU.
+
+echo "Wrapper: Acquiring lock for eddy_cuda..."
+flock /tmp/eddy_cuda.lock /opt/conda/envs/fslqsiprep/bin/eddy_cuda10.2 "$@"
+ret=$?
+echo "Wrapper: eddy_cuda finished with exit code $ret"
+exit $ret
