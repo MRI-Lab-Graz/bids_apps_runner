@@ -1,0 +1,19 @@
+{
+  "common": {
+    "bids_folder": "/data/local/datalad_repo/rawdata",
+    "output_folder": "data/local/datalad_repo/derivatives/mriqc",
+    "tmp_folder": "/data/local/134_AF19/derivatives/qsirecon_temp",
+"templateflow_dir": "/data/local/templateflow",
+    "container": "/data/local/container/mriqc/mriqc_25.0.0rc0.sif",
+    "optional_folder": "/data/local/datalad_repo/rawdata", 
+    "jobs": 1
+  },
+  "app": {
+    "analysis_level": "participant",
+    "options": ["--no-sub", "--fft-spikes-detector"
+],
+    "mounts": [
+      { "source": "/usr/local/freesurfer", "target": "/fs" }
+    ]
+  }
+}

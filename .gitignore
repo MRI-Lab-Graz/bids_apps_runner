@@ -6,4 +6,7 @@ validation_reports/
 .appsrunner/
 *.sif
 .DS_Store
-
+configs/
+logs/
+validation_reports/
+cache/
