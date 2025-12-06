@@ -768,6 +768,10 @@ def main():
     # Setup signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
+    print("\n" + "="*70)
+    print("  MRI-Lab Graz (Karl Koschutnig) - BIDS HPC Runner 🧠 🚀")
+    print("="*70 + "\n")
     
     try:
         # Parse arguments
@@ -780,7 +784,7 @@ def main():
         log_dir = config.get("common", {}).get("log_dir")
         log_file = setup_logging(args.log_level, log_dir)
         
-        logging.info("BIDS App Runner HPC 2.0.0 starting...")
+        logging.info("🚀 BIDS App Runner HPC 2.0.0 starting...")
         logging.info(f"Command line: {' '.join(sys.argv)}")
         
         # Validate configuration sections

@@ -1149,6 +1149,14 @@ def save_detailed_missing_report(results: Dict, output_file: Path, pipeline_filt
 
 def main():
     """Main entry point."""
+    
+    # Check for quiet/machine-readable modes before printing header
+    quiet_modes = ['--json', '--list-missing-subjects', '-q', '--quiet']
+    if not any(arg in sys.argv for arg in quiet_modes):
+        print("\n" + "="*70)
+        print("  MRI-Lab Graz (Karl Koschutnig) - BIDS Output Checker 🧠 🔍")
+        print("="*70 + "\n")
+
     parser = argparse.ArgumentParser(
         description="Validate BIDS pipeline outputs",
         formatter_class=argparse.RawDescriptionHelpFormatter,

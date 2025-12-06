@@ -253,8 +253,8 @@ Examples:
   %(prog)s -x config.json --debug --subjects sub-001         # Debug single subject
   %(prog)s -x config.json --force                            # Force reprocessing
   %(prog)s -x config.json --pilot                            # Pilot mode: process one random subject
-  %(prog)s -x config.json --from-json missing.json           # Reprocess subjects from JSON report (--force auto-enabled)
-  %(prog)s -x config.json --from-json missing.json --pipeline qsiprep  # Specific pipeline from JSON
+  %(prog)s -x config.json --reprocess-from-json missing.json # Reprocess subjects from JSON report (--force auto-enabled)
+  %(prog)s -x config.json --reprocess-from-json missing.json --pipeline qsiprep  # Specific pipeline from JSON
   
 Validation Examples:
   %(prog)s -x config.json --validate                         # Validate outputs after processing
@@ -352,14 +352,14 @@ For more information, see README_STANDARD.md
     )
     
     parser.add_argument(
-        "--from-json", 
+        "--reprocess-from-json", 
         type=Path,
         help="Parse missing subjects from external JSON report file and process them (automatically enables --force)"
     )
     
     parser.add_argument(
         "--pipeline", 
-        help="When using --from-json, specify which pipeline to extract subjects from (if not specified, uses all pipelines)"
+        help="When using --reprocess-from-json, specify which pipeline to extract subjects from (if not specified, uses all pipelines)"
     )
     
     return parser.parse_args()
@@ -716,6 +716,36 @@ def run_container(cmd, env=None, dry_run=False, debug=False, subject=None, log_d
     
     if dry_run:
         logging.info(f"DRY RUN - Would execute: {cmd_str}")
+        
+        # Attempt to validate the command syntax by appending --version
+        # This catches errors like missing arguments for flags (e.g. --longitudinal without arg)
+        try:
+            logging.info("Validating command syntax...")
+            validation_cmd = cmd + ["--version"]
+            
+            # Run with a timeout to prevent hanging if the app ignores --version and starts running
+            result = subprocess.run(
+                validation_cmd, 
+                capture_output=True, 
+                text=True, 
+                timeout=10,
+                env=env or os.environ.copy()
+            )
+            
+            if result.returncode == 0:
+                logging.info("✅ Command syntax validated successfully")
+            else:
+                logging.warning("❌ Command validation failed!")
+                # Extract the last line of stderr which usually contains the error
+                error_msg = result.stderr.strip().split('\n')[-1] if result.stderr else "Unknown error"
+                logging.warning(f"Validation error: {error_msg}")
+                logging.warning("Please check your configuration options.")
+                
+        except subprocess.TimeoutExpired:
+            logging.warning("⚠️ Command validation timed out (app might be ignoring --version)")
+        except Exception as e:
+            logging.warning(f"⚠️ Could not validate command: {e}")
+            
         return None
     
     logging.info(f"Running command: {cmd_str}")
@@ -917,6 +947,29 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
                 pass
             return True
         
+        # Check for longitudinal data context
+        sessions = get_subject_sessions(subject, common["bids_folder"])
+        # Filter out None (single session)
+        real_sessions = [s for s in sessions if s is not None]
+        
+        if len(real_sessions) > 1:
+            # Check if app options contain longitudinal flags
+            options = app.get("options", [])
+            options_str = " ".join(str(opt) for opt in options)
+            
+            # Check for modern QSIPrep/fMRIPrep longitudinal flag
+            has_unbiased = "--subject-anatomical-reference" in options and "unbiased" in options
+            # Check for legacy longitudinal flag
+            has_legacy_long = any("--longitudinal" in str(opt) for opt in options)
+            
+            if not (has_unbiased or has_legacy_long):
+                logging.info(f"ℹ️  Subject {subject} has {len(real_sessions)} sessions but longitudinal processing is NOT enabled.")
+                logging.info(f"    Processing will be cross-sectional (sessions processed independently).")
+                logging.info(f"    To enable longitudinal processing, add '--subject-anatomical-reference', 'unbiased' to options.")
+            else:
+                mode = "unbiased template" if has_unbiased else "legacy longitudinal"
+                logging.info(f"ℹ️  Longitudinal processing enabled for {subject} ({len(real_sessions)} sessions) using {mode} mode.")
+
         # Remove existing success marker if forcing reprocessing
         if force:
             remove_success_marker(subject, common)
@@ -1232,6 +1285,34 @@ def print_summary(processed_subjects, failed_subjects, total_time):
     
     logging.info("=" * 60)
 
+def analyze_sessions(bids_dir, subjects):
+    """Analyze and print session counts for subjects."""
+    session_counts = {}
+    
+    for subject in subjects:
+        subject_dir = os.path.join(bids_dir, subject)
+        if not os.path.isdir(subject_dir):
+            continue
+            
+        try:
+            sessions = [d for d in os.listdir(subject_dir) 
+                       if d.startswith("ses-") and os.path.isdir(os.path.join(subject_dir, d))]
+            
+            count = len(sessions)
+            if count not in session_counts:
+                session_counts[count] = 0
+            session_counts[count] += 1
+        except Exception:
+            pass
+            
+    if session_counts:
+        logging.info("📊 Session Summary:")
+        for count in sorted(session_counts.keys()):
+            if count == 0:
+                logging.info(f"  • {session_counts[count]} subjects have no explicit session folders (single session)")
+            else:
+                logging.info(f"  • {session_counts[count]} subjects have {count} sessions")
+
 def main():
     """Main function with comprehensive error handling."""
     start_time = time.time()
@@ -1239,25 +1320,29 @@ def main():
     # Setup signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
+    print("\n" + "="*70)
+    print("  MRI-Lab Graz (Karl Koschutnig) - BIDS App Runner 🧠 🏃")
+    print("="*70 + "\n")
     
     try:
         # Parse arguments and setup logging
         args = parse_args()
         
-        # Auto-enable --force when using --from-json
+        # Auto-enable --force when using --reprocess-from-json
         force_auto_enabled = False
-        if args.from_json and not args.force:
+        if args.reprocess_from_json and not args.force:
             args.force = True
             force_auto_enabled = True
         
         log_file = setup_logging(args.log_level)
         
-        logging.info("BIDS App Runner 2.0.0 starting...")
+        logging.info("🚀 BIDS App Runner 2.0.0 starting...")
         logging.info(f"Command line: {' '.join(sys.argv)}")
         
         # Log force auto-activation after logging is set up
         if force_auto_enabled:
-            logging.info("Auto-enabling --force flag when using --from-json")
+            logging.info("⚠️ Auto-enabling --force flag when using --reprocess-from-json")
         
         # Read and validate configuration
         config = read_config(args.config)
@@ -1306,20 +1391,20 @@ def main():
         level = app.get("analysis_level", "participant")
         
         if level == "participant":
-            # Handle --from-json option first
-            if args.from_json:
+            # Handle --reprocess-from-json option first
+            if args.reprocess_from_json:
                 try:
-                    missing_subjects = parse_missing_subjects_from_json(args.from_json, args.pipeline)
+                    missing_subjects = parse_missing_subjects_from_json(args.reprocess_from_json, args.pipeline)
                     subjects = sorted(list(missing_subjects))
                     if args.pipeline:
-                        logging.info(f"Using subjects from JSON file {args.from_json} (pipeline: {args.pipeline}): {len(subjects)} subjects")
+                        logging.info(f"Using subjects from JSON file {args.reprocess_from_json} (pipeline: {args.pipeline}): {len(subjects)} subjects")
                     else:
-                        logging.info(f"Using subjects from JSON file {args.from_json} (all pipelines): {len(subjects)} subjects")
+                        logging.info(f"Using subjects from JSON file {args.reprocess_from_json} (all pipelines): {len(subjects)} subjects")
                     if subjects:
                         logging.info(f"Subjects to reprocess: {subjects[:5]}" + ("..." if len(subjects) > 5 else ""))
                 except Exception as e:
                     logging.error(f"Error parsing JSON file: {e}")
-                    sys.exit(f"ERROR: Could not parse JSON file {args.from_json}: {e}")
+                    sys.exit(f"ERROR: Could not parse JSON file {args.reprocess_from_json}: {e}")
             # Use command-line subjects if provided
             elif args.subjects:
                 subjects = [s if s.startswith("sub-") else f"sub-{s}" for s in args.subjects]
@@ -1343,6 +1428,9 @@ def main():
                 sys.exit("ERROR: No subjects found.")
             
             logging.info(f"Found {len(subjects)} subjects to process")
+            
+            # Analyze sessions
+            analyze_sessions(common["bids_folder"], subjects)
             
             # Process subjects
             processed_subjects = []
@@ -1485,14 +1573,14 @@ def main():
                 logging.error("Group analysis failed")
                 sys.exit(1)
         
-        logging.info("BIDS App Runner completed successfully")
+        logging.info("✅ BIDS App Runner completed successfully")
         logging.info(f"Log file: {log_file}")
         
     except KeyboardInterrupt:
-        logging.warning("Process interrupted by user")
+        logging.warning("⚠️ Process interrupted by user")
         sys.exit(1)
     except Exception as e:
-        logging.error(f"Unexpected error: {e}")
+        logging.error(f"❌ Unexpected error: {e}")
         logging.error("See log file for details")
         sys.exit(1)
 
