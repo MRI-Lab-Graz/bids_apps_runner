@@ -1,9 +1,12 @@
 #!/bin/bash
 
-# Default directories
-OUTPUT_DIR="$(pwd)"
-APPTAINER_TMPDIR="$(pwd)"
+# User-supplied directories (mandatory)
+OUTPUT_DIR=""
+APPTAINER_TMPDIR=""
 DOCKERFILE=""
+
+OUTPUT_SET=false
+TMP_SET=false
 
 # Function to display usage information
 usage() {
@@ -12,24 +15,22 @@ usage() {
     echo "  MRI-Lab Graz (Karl Koschutnig) - BIDS Apptainer Builder 🧠 🏗️"
     echo "====================================================================="
     echo
-    echo "Usage: $0 [-o OUTPUT_DIR] [-t TEMP_DIR] [-d DOCKERFILE] [-h]"
+    echo "Usage: $0 -o OUTPUT_DIR -t TEMP_DIR [-d DOCKERFILE] [-h]"
     echo
     echo "Options ⚙️ :"
-    echo "  -o OUTPUT_DIR   📂 Specify the output directory for the Apptainer image."
-    echo "                  Default is the current directory."
-    echo "  -t TEMP_DIR     🗑️  Specify the temporary directory for Apptainer build files."
-    echo "                  Default is the current directory."
+    echo "  -o OUTPUT_DIR   📂 (required) Output directory for the Apptainer image (.sif)."
+    echo "  -t TEMP_DIR     🗑️  (required) Temporary directory for Apptainer build files."
     echo "  -d DOCKERFILE   🐳 Provide a Dockerfile to build the container."
     echo "                  When specified, the script will use Docker to build an image"
     echo "                  from this Dockerfile and then convert it to an Apptainer image."
     echo "  -h              ℹ️  Display this help message and exit."
     echo
     echo "Examples 💡:"
-    echo "  Build from Docker Hub:"
+    echo "  Build from Docker Hub (interactive app + tag selection):"
     echo "    $0 -o /data/local/container/qsiprep -t /data/local/container/apptainer_tmp"
     echo
-    echo "  Build from a Dockerfile:"
-    echo "    $0 -d /path/to/Dockerfile -o /data/local/container/custom"
+    echo "  Build from a Dockerfile (no interactive tag selection):"
+    echo "    $0 -d /path/to/Dockerfile -o /data/local/container/custom -t /tmp/apptainer"
     exit 1
 }
 
@@ -59,9 +60,11 @@ while getopts ":o:t:d:h" opt; do
   case $opt in
     o)
       OUTPUT_DIR="$OPTARG"
+    OUTPUT_SET=true
       ;;
     t)
       APPTAINER_TMPDIR="$OPTARG"
+    TMP_SET=true
       ;;
     d)
       DOCKERFILE="$OPTARG"
@@ -76,10 +79,20 @@ while getopts ":o:t:d:h" opt; do
   esac
 done
 
+# Require mandatory options
+if [ "$OUTPUT_SET" != true ] || [ "$TMP_SET" != true ]; then
+    echo "Error: Both -o (output dir) and -t (temporary dir) are required."
+    usage
+fi
+
 echo
 echo "====================================================================="
 echo "  MRI-Lab Graz (Karl Koschutnig) - BIDS Apptainer Builder 🧠 🏗️"
 echo "====================================================================="
+echo
+echo "You will select the Docker image (BIDS App) and tag to convert into an Apptainer image."
+echo "Using output dir: $OUTPUT_DIR"
+echo "Using temp dir:   $APPTAINER_TMPDIR"
 echo
 
 # Check if Apptainer is installed
@@ -100,8 +113,25 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
-# Set the temporary directory for Apptainer
-export APPTAINER_CACHEDIR="$APPTAINER_TMPDIR"
+# Ensure OUTPUT_DIR exists and is a directory
+if [ -e "$OUTPUT_DIR" ] && [ ! -d "$OUTPUT_DIR" ]; then
+    echo "Error: Output path '$OUTPUT_DIR' exists and is not a directory."
+    exit 1
+fi
+
+if [ ! -d "$OUTPUT_DIR" ]; then
+    mkdir -p "$OUTPUT_DIR" || { echo "Error: Failed to create output directory '$OUTPUT_DIR'."; exit 1; }
+fi
+
+# Ensure APPTAINER_TMPDIR exists and is a directory
+if [ -e "$APPTAINER_TMPDIR" ] && [ ! -d "$APPTAINER_TMPDIR" ]; then
+    echo "Error: Temporary path '$APPTAINER_TMPDIR' exists and is not a directory."
+    exit 1
+fi
+
+if [ ! -d "$APPTAINER_TMPDIR" ]; then
+    mkdir -p "$APPTAINER_TMPDIR" || { echo "Error: Failed to create temporary directory '$APPTAINER_TMPDIR'."; exit 1; }
+fi
 
 # Validate that OUTPUT_DIR is writable
 if [ ! -w "$OUTPUT_DIR" ]; then
@@ -114,6 +144,9 @@ if [ ! -w "$APPTAINER_TMPDIR" ]; then
     echo "Error: Temporary directory '$APPTAINER_TMPDIR' is not writable."
     exit 1
 fi
+
+# Set the temporary directory for Apptainer
+export APPTAINER_CACHEDIR="$APPTAINER_TMPDIR"
 
 # --- Dockerfile Branch ---
 if [ -n "$DOCKERFILE" ]; then
@@ -159,7 +192,8 @@ if [ -n "$DOCKERFILE" ]; then
     echo "Converting Docker image '${IMAGE_NAME}:latest' to Apptainer image... 🔄"
     echo "   This may take a while. Please wait..."
 
-    apptainer build --tmpdir="$APPTAINER_TMPDIR" "$OUTPUT_PATH" "docker-daemon://${IMAGE_NAME}:latest" &> "$LOG_FILE" &
+    # --force allows rebuilding if a prior image file already exists
+    apptainer build --force --tmpdir="$APPTAINER_TMPDIR" "$OUTPUT_PATH" "docker-daemon://${IMAGE_NAME}:latest" &> "$LOG_FILE" &
     BUILD_PID=$!
     spinner $BUILD_PID
 
@@ -180,7 +214,7 @@ fi
 # Predefined BIDS Apps
 APPS=("nipreps/fmriprep" "pennbbl/qsiprep" "nipreps/mriqc" "freesurfer/freesurfer" "Custom")
 
-echo "Select a BIDS App to build 📦:"
+echo "Select a BIDS App (Docker Hub repo) to build 📦:"
 PS3="Please enter your choice (number): "
 select APP in "${APPS[@]}"; do
     if [[ "$APP" == "Custom" ]]; then
@@ -193,6 +227,8 @@ select APP in "${APPS[@]}"; do
         echo "❌ Invalid selection. Please try again."
     fi
 done
+
+echo "Chosen Docker repository: ${DOCKER_REPO}"
 
 # Extract the image name (e.g., 'qsiprep' from 'pennbbl/qsiprep')
 IMAGE_NAME="${DOCKER_REPO##*/}"
@@ -244,7 +280,7 @@ LOG_FILE="${OUTPUT_PATH%.sif}.log"
 echo "🚀 Starting Apptainer build for ${DOCKER_REPO}:${TAG}..."
 echo "   This may take a while. Please wait..."
 
-apptainer build --tmpdir="$APPTAINER_TMPDIR" "$OUTPUT_PATH" "docker://${DOCKER_REPO}:${TAG}" &> "$LOG_FILE" &
+apptainer build --force --tmpdir="$APPTAINER_TMPDIR" "$OUTPUT_PATH" "docker://${DOCKER_REPO}:${TAG}" &> "$LOG_FILE" &
 BUILD_PID=$!
 spinner $BUILD_PID
 

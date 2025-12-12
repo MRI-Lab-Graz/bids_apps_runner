@@ -244,23 +244,23 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s -x config.json                                    # Standard BIDS folder
-  %(prog)s -x config.json                                    # DataLad dataset (auto-detected)
-  %(prog)s -x config.json --dry-run                          # Test configuration
-  %(prog)s -x config.json --log-level DEBUG                  # Verbose logging
-  %(prog)s -x config.json --subjects sub-001 sub-002         # Specific subjects
-  %(prog)s -x config.json --debug                            # Enable detailed container logs
-  %(prog)s -x config.json --debug --subjects sub-001         # Debug single subject
-  %(prog)s -x config.json --force                            # Force reprocessing
-  %(prog)s -x config.json --pilot                            # Pilot mode: process one random subject
-  %(prog)s -x config.json --reprocess-from-json missing.json # Reprocess subjects from JSON report (--force auto-enabled)
-  %(prog)s -x config.json --reprocess-from-json missing.json --pipeline qsiprep  # Specific pipeline from JSON
+    %(prog)s -c config.json                                    # Standard BIDS folder
+    %(prog)s -c config.json                                    # DataLad dataset (auto-detected)
+    %(prog)s -c config.json --dry-run                          # Test configuration
+    %(prog)s -c config.json --log-level DEBUG                  # Verbose logging
+    %(prog)s -c config.json --subjects sub-001 sub-002         # Specific subjects
+    %(prog)s -c config.json --debug                            # Enable detailed container logs
+    %(prog)s -c config.json --debug --subjects sub-001         # Debug single subject
+    %(prog)s -c config.json --force                            # Force reprocessing
+    %(prog)s -c config.json --pilot                            # Pilot mode: process one random subject
+    %(prog)s -c config.json --reprocess-from-json missing.json # Reprocess subjects from JSON report (--force auto-enabled)
+    %(prog)s -c config.json --reprocess-from-json missing.json --pipeline qsiprep  # Specific pipeline from JSON
   
 Validation Examples:
-  %(prog)s -x config.json --validate                         # Validate outputs after processing
-  %(prog)s -x config.json --validate-only                    # Only validate, don't process
-  %(prog)s -x config.json --reprocess-missing                # Auto-reprocess missing subjects
-  %(prog)s -x config.json --validate --validation-output-dir reports  # Custom reports directory
+    %(prog)s -c config.json --validate                         # Validate outputs after processing
+    %(prog)s -c config.json --validate-only                    # Only validate, don't process
+    %(prog)s -c config.json --reprocess-missing                # Auto-reprocess missing subjects
+    %(prog)s -c config.json --validate --validation-output-dir reports  # Custom reports directory
   
 DataLad Integration:
   - Automatically detects DataLad datasets in input/output folders
@@ -273,9 +273,10 @@ For more information, see README_STANDARD.md
     )
     
     parser.add_argument(
-        "-x", "--config", 
-        required=True, 
-        help="Path to JSON config file"
+        "-c", "--config", "-x",  # -x kept for backward compatibility
+        dest="config",
+        required=True,
+        help="Path to JSON config file (required). Use -c/--config; -x is deprecated."
     )
     
     parser.add_argument(
@@ -368,7 +369,20 @@ For more information, see README_STANDARD.md
         help="Run in background (nohup mode) to survive connection drops"
     )
     
-    return parser.parse_args()
+    # If run without arguments, show help instead of an argparse error
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+
+    args = parser.parse_args()
+
+    # Extra friendly message if config is missing but other args were given
+    if not args.config:
+        parser.print_help()
+        print("\nConfig file is required. Provide it with -c / --config <file>.")
+        sys.exit(0)
+
+    return args
 
 def read_config(path):
     """Read and validate JSON configuration file."""
