@@ -253,7 +253,7 @@ Examples:
     %(prog)s -c config.json --debug --subjects sub-001         # Debug single subject
     %(prog)s -c config.json --force                            # Force reprocessing
     %(prog)s -c config.json --pilot                            # Pilot mode: process one random subject
-    %(prog)s -c config.json --reprocess-from-json missing.json # Reprocess subjects from JSON report (--force auto-enabled)
+    %(prog)s -c config.json --reprocess-from-json missing.json # Process subjects listed in JSON report
     %(prog)s -c config.json --reprocess-from-json missing.json --pipeline qsiprep  # Specific pipeline from JSON
   
 Validation Examples:
@@ -355,7 +355,7 @@ For more information, see README_STANDARD.md
     parser.add_argument(
         "--reprocess-from-json", 
         type=Path,
-        help="Parse missing subjects from external JSON report file and process them (automatically enables --force)"
+        help="Parse subjects from external JSON report file and process them"
     )
     
     parser.add_argument(
@@ -545,7 +545,9 @@ def subject_processed(subject, common, app, force=False):
     # Only consider subject processed if we have substantial evidence
     if check_generic_output_exists(subject, common):
         # For critical pipelines, be more strict about what counts as "processed"
-        app_name = app.get("image", "").lower()
+        # NOTE: configs in this repo typically define the container path under common["container"],
+        # not app["image"]. Fall back accordingly.
+        app_name = (app.get("image") or common.get("container") or "").lower()
         if any(critical_app in app_name for critical_app in ["fmriprep", "qsiprep", "freesurfer"]):
             # For critical apps, also check for completion indicators
             if has_completion_indicators(subject, common, app_name):
@@ -1428,20 +1430,10 @@ def main():
             print(f"👀 Monitor progress with: tail -f {nohup_log}")
             sys.exit(0)
         
-        # Auto-enable --force when using --reprocess-from-json
-        force_auto_enabled = False
-        if args.reprocess_from_json and not args.force:
-            args.force = True
-            force_auto_enabled = True
-        
         log_file = setup_logging(args.log_level)
         
         logging.info("🚀 BIDS App Runner 2.0.0 starting...")
         logging.info(f"Command line: {' '.join(sys.argv)}")
-        
-        # Log force auto-activation after logging is set up
-        if force_auto_enabled:
-            logging.info("⚠️ Auto-enabling --force flag when using --reprocess-from-json")
         
         # Read and validate configuration
         config = read_config(args.config)

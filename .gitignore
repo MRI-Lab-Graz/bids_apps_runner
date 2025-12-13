@@ -13,3 +13,4 @@ cache/
 nohup*.log
 logs/
 data/
+missing_qsiprep.json
