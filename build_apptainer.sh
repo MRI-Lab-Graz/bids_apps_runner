@@ -5,8 +5,40 @@ OUTPUT_DIR=""
 APPTAINER_TMPDIR=""
 DOCKERFILE=""
 
+NO_TEMP_DEL=false
+APPTAINER_BASE_TMPDIR=""
+APPTAINER_RUN_TMPDIR=""
+
 OUTPUT_SET=false
 TMP_SET=false
+
+cleanup_run_tmpdir_on_success() {
+    local run_tmpdir="$1"
+
+    if [ "$NO_TEMP_DEL" = true ]; then
+        echo "🧷 Keeping per-build temp dir (requested): $run_tmpdir"
+        return 0
+    fi
+    if [ -z "$run_tmpdir" ] || [ ! -d "$run_tmpdir" ]; then
+        return 0
+    fi
+
+    local run_real
+    run_real=$(realpath "$run_tmpdir" 2>/dev/null) || return 0
+
+    # Safety guards: never delete dangerous paths.
+    if [ -z "$run_real" ] || [ "$run_real" = "/" ]; then
+        echo "⚠️  Refusing to delete per-build temp dir: '$run_tmpdir' (resolved to '$run_real')."
+        return 0
+    fi
+    if [ -n "$APPTAINER_BASE_TMPDIR" ] && [ "$run_real" = "$APPTAINER_BASE_TMPDIR" ]; then
+        echo "⚠️  Refusing to delete base temp dir: '$run_real'."
+        return 0
+    fi
+
+    echo "🧹 Deleting per-build temp dir: $run_real"
+    rm -rf -- "${run_real:?}" 2>/dev/null || true
+}
 
 # Function to display usage information
 usage() {
@@ -15,11 +47,12 @@ usage() {
     echo "  MRI-Lab Graz (Karl Koschutnig) - BIDS Apptainer Builder 🧠 🏗️"
     echo "====================================================================="
     echo
-    echo "Usage: $0 -o OUTPUT_DIR -t TEMP_DIR [-d DOCKERFILE] [-h]"
+    echo "Usage: $0 -o OUTPUT_DIR -t TEMP_DIR [--no-temp-del] [-d DOCKERFILE] [-h]"
     echo
     echo "Options ⚙️ :"
     echo "  -o OUTPUT_DIR   📂 (required) Output directory for the Apptainer image (.sif)."
     echo "  -t TEMP_DIR     🗑️  (required) Temporary directory for Apptainer build files."
+    echo "  --no-temp-del   🧷 Keep the per-build temp folder after a successful build."
     echo "  -d DOCKERFILE   🐳 Provide a Dockerfile to build the container."
     echo "                  When specified, the script will use Docker to build an image"
     echo "                  from this Dockerfile and then convert it to an Apptainer image."
@@ -54,6 +87,20 @@ spinner() {
 if [ $# -eq 0 ]; then
     usage
 fi
+
+# Pre-parse long options (getopts doesn't support them)
+ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-temp-del)
+            NO_TEMP_DEL=true
+            ;;
+        *)
+            ARGS+=("$arg")
+            ;;
+    esac
+done
+set -- "${ARGS[@]}"
 
 # Parse command-line options
 while getopts ":o:t:d:h" opt; do
@@ -145,8 +192,23 @@ if [ ! -w "$APPTAINER_TMPDIR" ]; then
     exit 1
 fi
 
-# Set the temporary directory for Apptainer
-export APPTAINER_CACHEDIR="$APPTAINER_TMPDIR"
+# Create a per-build temp directory under the provided base temp dir (-t)
+APPTAINER_BASE_TMPDIR=$(realpath "$APPTAINER_TMPDIR" 2>/dev/null)
+if [ -z "$APPTAINER_BASE_TMPDIR" ] || [ "$APPTAINER_BASE_TMPDIR" = "/" ]; then
+    echo "Error: Refusing to use unsafe temp directory: '$APPTAINER_TMPDIR'."
+    exit 1
+fi
+
+APPTAINER_RUN_TMPDIR=$(mktemp -d -p "$APPTAINER_BASE_TMPDIR" "apptainer_build.XXXXXX")
+if [ -z "$APPTAINER_RUN_TMPDIR" ] || [ ! -d "$APPTAINER_RUN_TMPDIR" ]; then
+    echo "Error: Failed to create per-build temporary directory under '$APPTAINER_BASE_TMPDIR'."
+    exit 1
+fi
+
+echo "Using per-build temp dir: $APPTAINER_RUN_TMPDIR"
+
+# Set the temporary/cache directory for Apptainer to the per-build folder
+export APPTAINER_CACHEDIR="$APPTAINER_RUN_TMPDIR"
 
 # --- Dockerfile Branch ---
 if [ -n "$DOCKERFILE" ]; then
@@ -161,9 +223,6 @@ if [ -n "$DOCKERFILE" ]; then
         exit 1
     fi
 
-    # Convert temporary directory to an absolute path
-    APPTAINER_TMPDIR=$(realpath "$APPTAINER_TMPDIR")
-    
     # Derive an image name from the Dockerfile filename and convert it to lowercase
     IMAGE_NAME=$(basename "$DOCKERFILE")
     IMAGE_NAME="${IMAGE_NAME%.*}"
@@ -193,7 +252,7 @@ if [ -n "$DOCKERFILE" ]; then
     echo "   This may take a while. Please wait..."
 
     # --force allows rebuilding if a prior image file already exists
-    apptainer build --force --tmpdir="$APPTAINER_TMPDIR" "$OUTPUT_PATH" "docker-daemon://${IMAGE_NAME}:latest" &> "$LOG_FILE" &
+    apptainer build --force --tmpdir="$APPTAINER_RUN_TMPDIR" "$OUTPUT_PATH" "docker-daemon://${IMAGE_NAME}:latest" &> "$LOG_FILE" &
     BUILD_PID=$!
     spinner $BUILD_PID
 
@@ -202,6 +261,7 @@ if [ -n "$DOCKERFILE" ]; then
 
     if [ $EXIT_CODE -eq 0 ]; then
          echo "✅ Apptainer image built successfully at: $OUTPUT_PATH"
+            cleanup_run_tmpdir_on_success "$APPTAINER_RUN_TMPDIR"
          exit 0
     else
          echo "❌ Failed to build Apptainer image. Check log file: $LOG_FILE"
@@ -280,7 +340,7 @@ LOG_FILE="${OUTPUT_PATH%.sif}.log"
 echo "🚀 Starting Apptainer build for ${DOCKER_REPO}:${TAG}..."
 echo "   This may take a while. Please wait..."
 
-apptainer build --force --tmpdir="$APPTAINER_TMPDIR" "$OUTPUT_PATH" "docker://${DOCKER_REPO}:${TAG}" &> "$LOG_FILE" &
+apptainer build --force --tmpdir="$APPTAINER_RUN_TMPDIR" "$OUTPUT_PATH" "docker://${DOCKER_REPO}:${TAG}" &> "$LOG_FILE" &
 BUILD_PID=$!
 spinner $BUILD_PID
 
@@ -289,6 +349,8 @@ EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
     echo "✅ Apptainer image built successfully at: $OUTPUT_PATH"
+    cleanup_run_tmpdir_on_success "$APPTAINER_RUN_TMPDIR"
+    exit 0
 else
     echo "❌ Failed to build Apptainer image. Check log file: $LOG_FILE"
     exit 1

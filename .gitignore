@@ -7,7 +7,7 @@ validation_reports/
 *.sif
 .DS_Store
 configs/
-logs/
+logs/*
 validation_reports/
 cache/
 nohup*.log

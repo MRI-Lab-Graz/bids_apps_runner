@@ -732,6 +732,120 @@ def build_common_mounts(common, tmp_dir):
     logging.debug(f"Common mounts: {mounts}")
     return mounts
 
+
+def _get_validate_timeout_seconds(default: int = 10) -> int:
+    """Timeout for dry-run validation.
+
+    Can be overridden via env var `BIDS_RUNNER_VALIDATE_TIMEOUT`.
+    """
+    try:
+        return max(1, int(os.environ.get("BIDS_RUNNER_VALIDATE_TIMEOUT", str(default))))
+    except Exception:
+        return default
+
+
+def sanitize_apptainer_args(apptainer_args):
+    """Sanitize apptainer args to avoid invalid invocations.
+
+    Today we mainly guard against a bare `--env` (which requires KEY=VALUE).
+    """
+    if not apptainer_args:
+        return []
+
+    sanitized = []
+    i = 0
+    while i < len(apptainer_args):
+        token = str(apptainer_args[i])
+
+        # Allow inline syntax like --env=KEY=VALUE
+        if token.startswith("--env="):
+            if "=" not in token[len("--env="):]:
+                logging.warning(f"Ignoring invalid apptainer arg '{token}' (expected --env=KEY=VALUE)")
+                i += 1
+                continue
+            sanitized.append(token)
+            i += 1
+            continue
+
+        if token == "--env":
+            if i + 1 >= len(apptainer_args):
+                logging.warning("Ignoring invalid apptainer arg '--env' (missing KEY=VALUE)")
+                i += 1
+                continue
+
+            value = str(apptainer_args[i + 1])
+            if value.startswith("-") or "=" not in value:
+                logging.warning(f"Ignoring invalid apptainer args '--env {value}' (expected KEY=VALUE)")
+                # Skip the value too if it's not another flag, to avoid shifting positional args.
+                i += 2 if not value.startswith("-") else 1
+                continue
+
+            sanitized.extend([token, value])
+            i += 2
+            continue
+
+        sanitized.append(token)
+        i += 1
+
+    return sanitized
+
+
+def validate_apptainer_cmd_static(cmd):
+    """Static sanity-check for common argument errors without running anything."""
+    # Check for flags that require values in our generated commands.
+    for idx, token in enumerate(cmd):
+        if token == "--env":
+            if idx + 1 >= len(cmd):
+                return "--env missing KEY=VALUE"
+            nxt = cmd[idx + 1]
+            if str(nxt).startswith("-") or "=" not in str(nxt):
+                return f"invalid --env value '{nxt}' (expected KEY=VALUE)"
+        if token in ("-B", "--bind"):
+            if idx + 1 >= len(cmd):
+                return f"{token} missing bind spec"
+            nxt = cmd[idx + 1]
+            if str(nxt).startswith("-"):
+                return f"{token} missing bind spec (got '{nxt}')"
+    return None
+
+
+def find_local_apptainer_image(cmd):
+    """Best-effort: locate a local .sif image path in an apptainer command."""
+    for token in cmd:
+        try:
+            if isinstance(token, str) and token.endswith(".sif") and os.path.isfile(token):
+                return token
+            if isinstance(token, str) and os.path.isfile(token):
+                return token
+        except Exception:
+            continue
+    return None
+
+
+def validate_container_fast(cmd, env=None):
+    """Fast validation that avoids starting the BIDS app runscript.
+
+    Runs: `apptainer exec <image> /bin/true` when a local image path is present.
+    """
+    image = find_local_apptainer_image(cmd)
+    if not image:
+        return True, "No local image path found; skipped exec validation."
+
+    timeout_s = _get_validate_timeout_seconds(10)
+    probe_cmd = ["apptainer", "exec", image, "/bin/true"]
+    result = subprocess.run(
+        probe_cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+        env=env or os.environ.copy(),
+    )
+    if result.returncode == 0:
+        return True, "OK"
+
+    err = result.stderr.strip().split("\n")[-1] if result.stderr else "Unknown error"
+    return False, err
+
 def run_container(cmd, env=None, dry_run=False, debug=False, subject=None, log_dir=None):
     """Execute container command with optional dry run mode and detailed logging."""
     cmd_str = " ".join(cmd)
@@ -739,32 +853,22 @@ def run_container(cmd, env=None, dry_run=False, debug=False, subject=None, log_d
     if dry_run:
         logging.info(f"DRY RUN - Would execute: {cmd_str}")
         
-        # Attempt to validate the command syntax by appending --version
-        # This catches errors like missing arguments for flags (e.g. --longitudinal without arg)
+        # Fast validation: static checks + container probe that doesn't start the BIDS app.
         try:
             logging.info("Validating command syntax...")
-            validation_cmd = cmd + ["--version"]
-            
-            # Run with a timeout to prevent hanging if the app ignores --version and starts running
-            result = subprocess.run(
-                validation_cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=10,
-                env=env or os.environ.copy()
-            )
-            
-            if result.returncode == 0:
-                logging.info("✅ Command syntax validated successfully")
-            else:
+            static_err = validate_apptainer_cmd_static(cmd)
+            if static_err:
                 logging.warning("❌ Command validation failed!")
-                # Extract the last line of stderr which usually contains the error
-                error_msg = result.stderr.strip().split('\n')[-1] if result.stderr else "Unknown error"
-                logging.warning(f"Validation error: {error_msg}")
-                logging.warning("Please check your configuration options.")
-                
+                logging.warning(f"Validation error: {static_err}")
+            else:
+                ok, detail = validate_container_fast(cmd, env=env)
+                if ok:
+                    logging.info("✅ Command syntax validated successfully")
+                else:
+                    logging.warning("❌ Command validation failed!")
+                    logging.warning(f"Validation error: {detail}")
         except subprocess.TimeoutExpired:
-            logging.warning("⚠️ Command validation timed out (app might be ignoring --version)")
+            logging.warning("⚠️ Command validation timed out")
         except Exception as e:
             logging.warning(f"⚠️ Could not validate command: {e}")
             
@@ -1005,8 +1109,9 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
         
         # Add app-specific apptainer arguments
         if app.get("apptainer_args"):
-            cmd.extend(app["apptainer_args"])
-            logging.debug(f"Added apptainer args: {app['apptainer_args']}")
+            safe_args = sanitize_apptainer_args(app["apptainer_args"])
+            cmd.extend(safe_args)
+            logging.debug(f"Added apptainer args: {safe_args}")
         else:
             cmd.append("--containall")
         
@@ -1232,7 +1337,7 @@ def process_group(common, app, dry_run=False, debug=False):
         
         # Add app-specific apptainer arguments
         if app.get("apptainer_args"):
-            cmd.extend(app["apptainer_args"])
+            cmd.extend(sanitize_apptainer_args(app["apptainer_args"]))
         else:
             cmd.append("--containall")
         
