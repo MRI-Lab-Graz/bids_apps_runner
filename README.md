@@ -2,6 +2,28 @@
 
 A comprehensive tool for running BIDS Apps with automatic output validation and reprocessing capabilities.
 
+## Documentation (Read the Docs)
+
+This repository includes a Sphinx documentation site in `docs/` and a Read the Docs build config in `.readthedocs.yaml`.
+
+- **Local build**:
+
+   ```bash
+   pip install -r docs/requirements.txt
+   sphinx-build -b html docs docs/_build/html
+   ```
+
+- **Enable GitHub ↔ RTD integration** (one-time setup in the Read the Docs UI):
+   1. Create a project on https://readthedocs.org
+   2. Import `MRI-Lab-Graz/bids_apps_runner`
+   3. Ensure the project uses the included `.readthedocs.yaml`
+
+After you create the RTD project, you can add a badge by replacing `<rtd-project-slug>`:
+
+```markdown
+[![Documentation Status](https://readthedocs.org/projects/<rtd-project-slug>/badge/?version=latest)](https://<rtd-project-slug>.readthedocs.io/en/latest/?badge=latest)
+```
+
 ## Overview
 
 This tool provides a seamless workflow for:
