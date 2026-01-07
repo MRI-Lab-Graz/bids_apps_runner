@@ -1036,9 +1036,68 @@ def run_container(cmd, env=None, dry_run=False, debug=False, subject=None, log_d
         logging.error(f"Unexpected error during command execution: {e}")
         raise
 
+def fix_bids_metadata(bids_root, subject_label):
+    """
+    Finds all fmap JSON files for a specific subject and fixes the IntendedFor field.
+    Removes 'bids::sub-<label>/' prefix to ensure compatibility with BIDS apps.
+    """
+    subject_dir = Path(bids_root) / f"{subject_label if subject_label.startswith('sub-') else 'sub-'+subject_label}"
+    if not subject_dir.exists():
+        logging.warning(f"Metadata fix: Subject directory {subject_dir} not found.")
+        return
+
+    json_files = list(subject_dir.glob("**/fmap/*.json"))
+    if not json_files:
+        logging.info(f"No fmap JSON files found to fix for {subject_label}.")
+        return
+
+    fixed_count = 0
+    for json_file in json_files:
+        try:
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+
+            if "IntendedFor" in data:
+                intended_for = data["IntendedFor"]
+                if isinstance(intended_for, str):
+                    intended_for = [intended_for]
+                
+                new_intended_for = []
+                modified = False
+                subj_tag = subject_label if subject_label.startswith('sub-') else f"sub-{subject_label}"
+                
+                for path in intended_for:
+                    if path.startswith("bids::"):
+                        # Remove bids:: prefix
+                        new_path = path.replace("bids::", "")
+                        # Remove sub-XXXXX/ if it exists at the start
+                        if new_path.startswith(f"{subj_tag}/"):
+                            new_path = new_path.replace(f"{subj_tag}/", "")
+                        
+                        new_intended_for.append(new_path)
+                        modified = True
+                    else:
+                        new_intended_for.append(path)
+                
+                if modified:
+                    data["IntendedFor"] = new_intended_for
+                    with open(json_file, 'w') as f:
+                        json.dump(data, f, indent=4)
+                    fixed_count += 1
+        except Exception as e:
+            logging.error(f"Error fixing metadata for {json_file}: {e}")
+    
+    if fixed_count > 0:
+        logging.info(f"Successfully fixed 'bids::' prefix in {fixed_count} fmap JSON files for {subject_label}")
+
 def process_subject(subject, common, app, dry_run=False, force=False, debug=False):
     """Process a single subject with comprehensive error handling."""
     logging.info(f"Starting processing for subject: {subject}")
+    
+    # Internal fix for BIDS metadata (e.g. bids:: prefix in IntendedFor)
+    # This specifically addresses metadata compatibility issues known in QSIPrep
+    if not dry_run and "qsiprep" in str(common.get("container", "")).lower():
+        fix_bids_metadata(common["bids_folder"], subject)
     
     # Check if input is a DataLad dataset
     is_input_datalad = is_datalad_dataset(common["bids_folder"])
