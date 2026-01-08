@@ -5,9 +5,13 @@ import json
 import glob
 import subprocess
 import requests
+import shutil
+import tempfile
+from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 from waitress import serve
 from pathlib import Path
+from check_app_output import BIDSOutputValidator
 
 app = Flask(__name__)
 app.secret_key = "bids-app-runner-secret-key"
@@ -15,6 +19,7 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 
 # Base directory for the project
 BASE_DIR = Path(__file__).resolve().parent
+LOG_DIR = BASE_DIR / "logs"
 
 @app.before_request
 def log_request_info():
@@ -30,6 +35,20 @@ APP_REPO_MAPPING = {
     'freesurfer': 'freesurfer/freesurfer',
     'synthseg': 'freesurfer/synthseg'
 }
+
+def _ensure_logs_dir():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+def _record_build_log(path, command, stdout, stderr):
+    try:
+        with open(path, "w", encoding="utf-8") as logf:
+            logf.write(f"Command: {' '.join(command)}\n\n")
+            logf.write("STDOUT:\n")
+            logf.write((stdout or "<no output>") + "\n\n")
+            logf.write("STDERR:\n")
+            logf.write((stderr or "<no errors>") + "\n")
+    except OSError:
+        pass
 
 def get_latest_version_from_dockerhub(repo):
     """Fetch the latest tag from Docker Hub for a given repo."""
@@ -140,6 +159,231 @@ def get_log():
 def health():
     return "Flask is running and responding!", 200
 
+@app.route('/list_reports', methods=['POST'])
+def list_reports():
+    """List HTML reports in derivatives folder for a specific pipeline."""
+    data = request.json or {}
+    derivatives_dir = data.get('derivatives_dir')
+    pipeline = data.get('pipeline')
+    
+    if not derivatives_dir:
+        return jsonify({'error': 'Derivatives folder required'}), 400
+        
+    p = Path(os.path.expanduser(derivatives_dir))
+    if pipeline:
+        p = p / pipeline
+        
+    if not p.exists():
+        return jsonify({'reports': []})
+        
+    # Find all .html files that look like subject reports
+    reports = []
+    # common patterns: sub-xxx.html or sub-xxx_desc-report.html
+    html_files = sorted(list(p.glob("sub-*.html")))
+    for hf in html_files:
+        reports.append({
+            'name': hf.name,
+            'path': str(hf),
+            'subject': hf.name.split('_')[0].split('.')[0],
+            'modified': datetime.fromtimestamp(hf.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        })
+        
+    return jsonify({'reports': reports})
+
+@app.route('/view_report')
+def view_report():
+    """Serves a BIDS App HTML report."""
+    path = request.args.get('path')
+    if not path or not path.endswith('.html'):
+         return "Invalid report path", 400
+    
+    p = Path(path)
+    if not p.exists():
+        return "Report not found", 404
+        
+    with open(p, 'r') as f:
+        content = f.read()
+        
+    # BIDS reports are self-contained but often use relative paths for images in rare cases.
+    # We might need to handle those or just serve the HTML.
+    return content
+
+@app.route('/run_output_check', methods=['POST'])
+def run_output_check():
+    data = request.get_json(silent=True) or {}
+    bids_dir = (data.get('bids_dir') or '').strip()
+    derivatives_dir = (data.get('derivatives_dir') or '').strip()
+    if not bids_dir or not derivatives_dir:
+        return jsonify({'error': 'Both BIDS and derivatives folders must be provided.'}), 400
+
+    bids_path = Path(os.path.expanduser(bids_dir))
+    derivatives_path = Path(os.path.expanduser(derivatives_dir))
+    if not bids_path.exists():
+        return jsonify({'error': f'BIDS folder does not exist: {bids_path}'}), 400
+    if not derivatives_path.exists():
+        return jsonify({'error': f'Derivatives folder does not exist: {derivatives_path}'}), 400
+
+    _ensure_logs_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = LOG_DIR / f"check_app_output_{timestamp}.log"
+
+    cmd = [
+        sys.executable,
+        str(BASE_DIR / "check_app_output.py"),
+        str(bids_path),
+        str(derivatives_path),
+        "--json",
+        "--log",
+        str(log_file)
+    ]
+    pipeline = (data.get('pipeline') or '').strip()
+    if pipeline:
+        cmd.extend(["-p", pipeline])
+    if data.get('verbose'):
+        cmd.append("--verbose")
+    if data.get('quiet'):
+        cmd.append("--quiet")
+    if data.get('list_missing'):
+        cmd.append("--list-missing-subjects")
+
+    timeout_seconds = int(data.get('timeout', 900))
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds, cwd=str(BASE_DIR))
+    except subprocess.TimeoutExpired as exc:
+        return jsonify({'error': 'Validation timed out', 'details': str(exc)}), 500
+
+    parsed = None
+    try:
+        # Try direct parsing first
+        parsed = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        # Fallback: find the first { and last } to extract JSON block
+        try:
+            start = result.stdout.find('{')
+            end = result.stdout.rfind('}')
+            if start != -1 and end != -1:
+                json_str = result.stdout[start:end+1]
+                parsed = json.loads(json_str)
+        except:
+            parsed = None
+
+    return jsonify({
+        'success': result.returncode == 0,
+        'returncode': result.returncode,
+        'stdout': result.stdout,
+        'stderr': result.stderr,
+        'parsed': parsed,
+        'log_file': str(log_file)
+    })
+
+@app.route('/detect_validation_pipelines', methods=['POST'])
+def detect_validation_pipelines():
+    data = request.get_json(silent=True) or {}
+    bids_dir = (data.get('bids_dir') or '').strip()
+    derivatives_dir = (data.get('derivatives_dir') or '').strip()
+    
+    if not bids_dir or not derivatives_dir:
+        return jsonify({'error': 'Both BIDS and derivatives folders are required.'}), 400
+        
+    try:
+        bids_path = Path(os.path.expanduser(bids_dir))
+        derivatives_path = Path(os.path.expanduser(derivatives_dir))
+        
+        if not bids_path.exists() or not derivatives_path.exists():
+            return jsonify({'pipelines': []}) # No folder, no pipelines
+            
+        validator = BIDSOutputValidator(bids_path, derivatives_path)
+        pipelines = validator.discover_pipelines()
+        return jsonify({'pipelines': pipelines})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/build_apptainer', methods=['POST'])
+def build_apptainer():
+    data = request.get_json(silent=True) or {}
+    output_dir = (data.get('output_dir') or '').strip()
+    tmp_dir = (data.get('tmp_dir') or '').strip()
+    if not output_dir or not tmp_dir:
+        return jsonify({'error': 'Output directory and temporary directory are required.'}), 400
+
+    output_path = Path(os.path.expanduser(output_dir))
+    tmp_path = Path(os.path.expanduser(tmp_dir))
+    output_path.mkdir(parents=True, exist_ok=True)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+
+    _ensure_logs_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = LOG_DIR / f"build_apptainer_{timestamp}.log"
+
+    dockerfile = (data.get('dockerfile') or '').strip()
+    docker_repo = (data.get('docker_repo') or '').strip()
+    docker_tag = (data.get('docker_tag') or '').strip()
+    keep_temp = bool(data.get('keep_temp'))
+
+    cmd = []
+    built_image = None
+    per_build_dir = None
+
+    if dockerfile:
+        script_path = BASE_DIR / "scripts" / "build_apptainer.sh"
+        if not script_path.exists():
+            return jsonify({'error': 'Build script missing from project.'}), 500
+        cmd = ["bash", str(script_path), "-o", str(output_path), "-t", str(tmp_path)]
+        if keep_temp:
+            cmd.append("--no-temp-del")
+        cmd.extend(["-d", dockerfile])
+        if docker_repo:
+            cmd.extend(["--docker-repo", docker_repo])
+        if docker_tag:
+            cmd.extend(["--docker-tag", docker_tag])
+    else:
+        if not docker_repo or not docker_tag:
+            return jsonify({'error': 'Docker repository and tag are required when no Dockerfile is provided.'}), 400
+        if shutil.which("apptainer") is None:
+            return jsonify({'error': 'Apptainer is not available on this host.'}), 500
+        per_build_dir = tempfile.mkdtemp(prefix="apptainer_build_", dir=str(tmp_path))
+        built_image = output_path / f"{Path(docker_repo).name}_{docker_tag}.sif"
+        cmd = [
+            "apptainer",
+            "build",
+            "--force",
+            "--tmpdir",
+            per_build_dir,
+            str(built_image),
+            f"docker://{docker_repo}:{docker_tag}"
+        ]
+
+    timeout_seconds = int(data.get('timeout', 7200))
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds, cwd=str(BASE_DIR))
+    except subprocess.TimeoutExpired as exc:
+        return jsonify({'error': 'Apptainer build timed out', 'details': str(exc), 'log_file': str(log_file)}), 500
+    finally:
+        if per_build_dir and not keep_temp:
+            shutil.rmtree(per_build_dir, ignore_errors=True)
+
+    if not dockerfile:
+        _record_build_log(log_file, cmd, result.stdout, result.stderr)
+    else:
+        try:
+            # Ensure log file exists even if script deleted it
+            log_file.touch(exist_ok=True)
+        except OSError:
+            pass
+
+    if not built_image:
+        match = re.search(r'Apptainer image built successfully at: (.+)', result.stdout)
+        if match:
+            built_image = Path(match.group(1).strip())
+
+    return jsonify({
+        'success': result.returncode == 0,
+        'returncode': result.returncode,
+        'stdout': result.stdout,
+        'stderr': result.stderr,
+        'log_file': str(log_file),
+        'output_image': str(built_image) if built_image else None
+    })
 @app.route('/get_app_help', methods=['POST'])
 def get_app_help():
     container = request.json.get('container')

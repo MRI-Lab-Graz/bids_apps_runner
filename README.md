@@ -47,13 +47,13 @@ This tool provides a seamless workflow for:
 
 ```bash
 # Run a BIDS App with a configuration file
-python run_bids_apps.py -x config.json
+python run_bids_apps.py -x configs/config.json
 
 # Process specific subjects
-python run_bids_apps.py -x config.json --subjects sub-001 sub-002
+python run_bids_apps.py -x configs/config.json --subjects sub-001 sub-002
 
 # Dry run to test configuration
-python run_bids_apps.py -x config.json --dry-run
+python run_bids_apps.py -x configs/config.json --dry-run
 ```
 
 ### 2. Automated Validation and Reprocessing Workflow
@@ -63,16 +63,16 @@ python run_bids_apps.py -x config.json --dry-run
 python check_app_output.py /data/bids /data/derivatives --output-json missing_subjects.json
 
 # Step 2: Automatically reprocess missing subjects (--force is auto-enabled)
-python run_bids_apps.py -x config.json --from-json missing_subjects.json
+python run_bids_apps.py -x configs/config.json --from-json missing_subjects.json
 ```
 
 ## Configuration
 
-Create a `config.json` file with your pipeline settings. You can use `config_example.json` as a template:
+Create a `configs/config.json` file with your pipeline settings. You can use `config_example.json` as a template:
 
 ```bash
-cp config_example.json config.json
-# Edit config.json with your specific paths and settings
+cp config_example.json configs/config.json
+# Edit configs/config.json with your specific paths and settings
 ```
 
 ```json
@@ -181,7 +181,7 @@ python check_app_output.py /data/bids /data/derivatives \
     --output-json validation_report.json --verbose
 
 # 2. Reprocess only fMRIPrep missing subjects
-python run_bids_apps.py -x fmriprep_config.json \
+python run_bids_apps.py -x configs/fmriprep_config.json \
     --from-json validation_report.json --pipeline fmriprep
 
 # 3. Monitor progress
@@ -192,10 +192,10 @@ tail -f logs/bids_app_runner_*.log
 
 ```bash
 # Test configuration with one subject
-python run_bids_apps.py -x config.json --pilot --dry-run
+python run_bids_apps.py -x configs/config.json --pilot --dry-run
 
 # Run actual pilot test
-python run_bids_apps.py -x config.json --pilot --debug
+python run_bids_apps.py -x configs/config.json --pilot --debug
 ```
 
 ## Browser-based GUI

@@ -29,11 +29,150 @@ class BIDSChecker:
         self.derivatives_dir = derivatives_dir
         self.missing_items = []
         self.logger = logging.getLogger(__name__)
-        self.stats = {}  # For pipeline-specific statistics
+        self.stats = {
+            'metadata': {
+                'tool': 'Unknown',
+                'version': 'Unknown',
+                'bids_version': 'Unknown',
+                'description': ''
+            }
+        }  # For pipeline-specific statistics
     
+    def _extract_metadata(self, pipeline_dir: Path):
+        """Extract metadata from dataset_description.json and logs."""
+        meta_file = pipeline_dir / "dataset_description.json"
+        if meta_file.exists():
+            try:
+                with open(meta_file, 'r') as f:
+                    data = json.load(f)
+                    self.stats['metadata']['bids_version'] = data.get('BIDSVersion', 'Unknown')
+                    self.stats['metadata']['description'] = data.get('Name', '')
+                    
+                    # Try to get tool and version from GeneratedBy
+                    gen_by = data.get('GeneratedBy', [])
+                    if gen_by and isinstance(gen_by, list):
+                        info = gen_by[0]
+                        self.stats['metadata']['tool'] = info.get('Name', 'Unknown')
+                        self.stats['metadata']['version'] = info.get('Version', 'Unknown')
+                    elif 'PipelineDescription' in data:
+                        info = data['PipelineDescription']
+                        self.stats['metadata']['tool'] = info.get('Name', 'Unknown')
+                        self.stats['metadata']['version'] = info.get('Version', 'Unknown')
+            except Exception as e:
+                self.logger.debug(f"Could not parse metadata: {e}")
+        
+        # Try to find some command/settings info in logs
+        logs_dir = pipeline_dir / "logs"
+        if logs_dir.exists():
+            log_files = sorted(list(logs_dir.glob("*.toml")) + list(logs_dir.glob("*.log")), 
+                               key=lambda x: x.stat().st_mtime, reverse=True)
+            if log_files:
+                self.stats['metadata']['last_log'] = log_files[0].name
+                # Try to extract environment or modalities from TOML
+                if log_files[0].suffix == '.toml':
+                    try:
+                        with open(log_files[0], 'r') as f:
+                            content = f.read()
+                            # Minimal regex-based parsing to avoid adding toml dependency
+                            env_match = re.search(r'exec_env\s*=\s*"([^"]+)"', content)
+                            if env_match:
+                                self.stats['metadata']['env'] = env_match.group(1)
+                            
+                            mod_match = re.search(r'modalities\s*=\s*\[([^\]]+)\]', content)
+                            if mod_match:
+                                mods = [m.strip().strip('"').strip("'") for m in mod_match.group(1).split(',')]
+                                self.stats['metadata']['settings'] = f"Modalities: {', '.join([m for m in mods if m])}"
+                    except:
+                        pass
+                elif log_files[0].suffix == '.log':
+                    # Try to find Command line in log file
+                    try:
+                        with open(log_files[0], 'r', errors='ignore') as f:
+                            # Read first 100 lines
+                            for _ in range(100):
+                                line = f.readline()
+                                if not line: break
+                                if "Command line:" in line or "Command:" in line:
+                                    self.stats['metadata']['settings'] = line.split(":", 1)[1].strip()[:200]
+                                    break
+                    except:
+                        pass
+
+    def _check_logs(self, pipeline_dir: Path):
+        """Scan log files for errors and warnings."""
+        log_dirs = [pipeline_dir / "logs", pipeline_dir / "log"]
+        self.stats['log_stats'] = {
+            'errors': 0,
+            'warnings': 0,
+            'error_list': [],
+            'warning_list': []
+        }
+        
+        found_logs = []
+        for d in log_dirs:
+            if d.exists():
+                found_logs.extend(list(d.glob("*.log")) + list(d.glob("*.txt")))
+        
+        # Also check subject specific logs if they exist in sub-folders
+        for subj_dir in pipeline_dir.glob("sub-*"):
+            if subj_dir.is_dir():
+                log_d = subj_dir / "log"
+                if log_d.exists():
+                    found_logs.extend(list(log_d.glob("*.log")) + list(log_d.glob("*.txt")))
+
+        # Maximum number of unique errors to report
+        MAX_REPORT = 10
+        unique_errors = set()
+        unique_warnings = set()
+
+        for log_file in found_logs:
+            try:
+                with open(log_file, 'r', errors='ignore') as f:
+                    for line in f:
+                        # Common error patterns in BIDS apps / Nipype
+                        is_error = False
+                        is_warning = False
+                        
+                        upper_line = line.upper()
+                        if " ERROR " in upper_line or upper_line.split(":")[0].strip().endswith("ERROR") or upper_line.strip().startswith("ERROR"):
+                            is_error = True
+                        elif " WARNING " in upper_line or upper_line.split(":")[0].strip().endswith("WARNING") or upper_line.strip().startswith("WARNING"):
+                            is_warning = True
+                        elif "EXCEPTION" in upper_line and "CAPTURED" not in upper_line:
+                            is_error = True
+                        elif " CRITICAL " in upper_line or upper_line.strip().startswith("CRITICAL"):
+                            is_error = True
+                        elif "FAILED" in upper_line and len(line) < 100: # Heuristic for short failure messages
+                            is_error = True
+                            
+                        if is_error:
+                            self.stats['log_stats']['errors'] += 1
+                            if len(unique_errors) < MAX_REPORT:
+                                cleaned = line.strip()
+                                # Truncate if too long
+                                if len(cleaned) > 200: cleaned = cleaned[:197] + "..."
+                                unique_errors.add(cleaned)
+                        elif is_warning:
+                            self.stats['log_stats']['warnings'] += 1
+                            if len(unique_warnings) < MAX_REPORT:
+                                cleaned = line.strip()
+                                if len(cleaned) > 200: cleaned = cleaned[:197] + "..."
+                                unique_warnings.add(cleaned)
+            except:
+                pass
+
+        self.stats['log_stats']['error_list'] = sorted(list(unique_errors))
+        self.stats['log_stats']['warning_list'] = sorted(list(unique_warnings))
+
     def get_subjects(self) -> List[Path]:
         """Get all subject directories from BIDS source."""
         return sorted([d for d in self.bids_dir.glob("sub-*") if d.is_dir()])
+    
+    def get_subjects_in_dir(self, directory: Path) -> List[Path]:
+        """Get all subject directories from a specific directory."""
+        if not directory.exists():
+            return []
+        return sorted([d for d in directory.glob("sub-*") if d.is_dir()])
     
     def get_sessions(self, subject_dir: Path) -> List[Path]:
         """Get sessions for a subject, or return subject dir if no sessions."""
@@ -45,12 +184,8 @@ class BIDSChecker:
         formatted_item = f"[{severity}] {item}"
         self.missing_items.append(formatted_item)
         
-        if severity == "ERROR":
-            self.logger.error(f"MISSING: {item}")
-        elif severity == "WARNING":
-            self.logger.warning(f"WARNING: {item}")
-        else:
-            self.logger.info(f"INFO: {item}")
+        # Always log to debug, but don't spam the console unless in verbose mode
+        self.logger.debug(f"MISSING ({severity}): {item}")
     
     def add_found_item(self, item: str):
         """Log found items for debugging."""
@@ -67,25 +202,65 @@ class FMRIPrepChecker(BIDSChecker):
     def check_pipeline(self, pipeline_dir: Path) -> bool:
         """Check fMRIPrep outputs."""
         self.logger.info("Checking fMRIPrep pipeline...")
+        self._extract_metadata(pipeline_dir)
+        self._check_logs(pipeline_dir)
+        
+        # Initialize statistics tracking
+        self.stats.update({
+            'total_subjects': 0,
+            'all_subjects_list': [],
+            'subjects_with_bold': 0,
+            'subjects_with_no_bold': [],
+            'subjects_with_missing_sessions': [],
+            'surface_output_subjects': 0,
+            'session_statistics': {}
+        })
         
         has_surface_output = {}
         all_subjects = []
         surface_found_global = False
         
-        for subj_dir in self.get_subjects():
+        subjects = self.get_subjects()
+        if not subjects:
+            subjects = self.get_subjects_in_dir(pipeline_dir)
+
+        for subj_dir in subjects:
             subj = subj_dir.name
-            self.logger.info(f"Checking subject: {subj}")
+            self.logger.debug(f"Checking subject: {subj}")
             all_subjects.append(subj)
+            self.stats['total_subjects'] += 1
+            self.stats['all_subjects_list'].append(subj)
             surface_found_for_subject = False
+            
+            # Check HTML report
+            html_report = pipeline_dir / f"{subj}.html"
+            if not html_report.exists():
+                self.add_missing_item(f"fMRIPrep HTML report missing: {subj}.html")
+            
+            subject_has_bold = False
+            missing_sessions = []
             
             for sess_dir in self.get_sessions(subj_dir):
                 func_dir = sess_dir / "func"
+                
+                # Statistics for session
+                sess_name = sess_dir.name if sess_dir.name.startswith("ses-") else "single-session"
+                if sess_name not in self.stats['session_statistics']:
+                    self.stats['session_statistics'][sess_name] = {'total_subjects': 0, 'missing_subjects': []}
+                
                 if not func_dir.exists():
-                    self.logger.warning(f"No func directory in {sess_dir.name}")
+                    self.logger.debug(f"No func directory in {sess_dir.name}")
                     continue
                 
+                # Check for BOLD files in source to know what to expect
+                source_bold = list(func_dir.glob("*_bold.nii*"))
+                if source_bold:
+                    self.stats['session_statistics'][sess_name]['total_subjects'] += 1
+                    subject_has_bold = True
+                
+                session_passed = True
                 # Check volumetric preprocessed data
-                for bids_func in func_dir.glob("*_bold.nii*"):
+                for bids_func in source_bold:
                     prefix = bids_func.stem.split("_bold")[0]
                     if bids_func.suffix == ".gz":
                         prefix = prefix.split(".nii")[0]
@@ -103,58 +278,49 @@ class FMRIPrepChecker(BIDSChecker):
                     
                     if not fmriprep_func_dir.exists():
                         self.add_missing_item(
-                            f"fMRIPrep func directory missing:\n"
-                            f"    Expected: {fmriprep_func_dir}\n"
-                            f"    Subject:  {subj}\n"
-                            f"    Session:  {sess_basename if sess_basename.startswith('ses-') else 'single-session'}"
+                            f"fMRIPrep func directory missing: {fmriprep_func_dir}"
                         )
+                        session_passed = False
                         continue
                     
                     matches = list(fmriprep_func_dir.glob(pattern))
                     
                     if not matches:
-                        # List what files are actually in the directory
-                        actual_files = list(fmriprep_func_dir.glob("*.nii*"))
-                        self.add_missing_item(
-                            f"fMRIPrep preprocessed BOLD missing:\n"
-                            f"    Input:     {bids_func}\n"
-                            f"    Expected:  {fmriprep_func_dir}/{pattern}\n"
-                            f"    Found:     {len(actual_files)} files in directory\n"
-                            f"    Examples:  {[f.name for f in actual_files[:3]]}"
-                        )
+                        self.add_missing_item(f"fMRIPrep preprocessed BOLD missing: {subj}/{sess_basename}/{bids_func.name}")
+                        session_passed = False
                     else:
                         self.add_found_item(f"fMRIPrep preprocessed file for: {bids_func}")
-                        # Check if we have multiple matches (might indicate issue)
-                        if len(matches) > 1:
-                            self.add_missing_item(
-                                f"Multiple fMRIPrep matches for {bids_func.name}:\n"
-                                f"    Found: {[m.name for m in matches]}", 
-                                "WARNING"
-                            )
                 
+                if not session_passed:
+                    self.stats['session_statistics'][sess_name]['missing_subjects'].append(subj)
+                    missing_sessions.append(sess_name)
+
                 # Check surface-based outputs
+                fmriprep_subj_dir = pipeline_dir / subj
+                sess_basename = sess_dir.name
+                if sess_basename.startswith("ses-"):
+                    fmriprep_subj_base = fmriprep_subj_dir / sess_basename
+                else:
+                    fmriprep_subj_base = fmriprep_subj_dir
+                
+                fmriprep_func_dir = fmriprep_subj_base / "func"
+                
                 if fmriprep_func_dir.exists():
                     surface_files = list(fmriprep_func_dir.glob("*_hemi-*_bold.func.gii"))
                     if surface_files:
                         surface_found_for_subject = True
                         surface_found_global = True
-                        
-                        # Check hemisphere pairs
-                        for surface_file in surface_files:
-                            if "hemi-L" in surface_file.name:
-                                expected_r = Path(str(surface_file).replace("hemi-L", "hemi-R"))
-                                if not expected_r.exists():
-                                    self.add_missing_item(
-                                        f"Missing hemi-R pair for: {surface_file}"
-                                    )
-                            elif "hemi-R" in surface_file.name:
-                                expected_l = Path(str(surface_file).replace("hemi-R", "hemi-L"))
-                                if not expected_l.exists():
-                                    self.add_missing_item(
-                                        f"Missing hemi-L pair for: {surface_file}"
-                                    )
+            
+            if subject_has_bold:
+                self.stats['subjects_with_bold'] += 1
+                if missing_sessions:
+                    self.stats['subjects_with_missing_sessions'].append(subj)
+            else:
+                self.stats['subjects_with_no_bold'].append(subj)
             
             has_surface_output[subj] = surface_found_for_subject
+            if surface_found_for_subject:
+                self.stats['surface_output_subjects'] += 1
         
         # Global surface output consistency check
         if surface_found_global:
@@ -172,8 +338,15 @@ class FreeSurferChecker(BIDSChecker):
     
     def check_pipeline(self, pipeline_dir: Path) -> bool:
         """Check FreeSurfer outputs."""
-        self.logger.info("Checking FreeSurfer pipeline...")
-        
+        self._extract_metadata(pipeline_dir)
+        self._check_logs(pipeline_dir)
+        # Initialize statistics tracking
+        self.stats.update({
+            'total_subjects': 0,
+            'all_subjects_list': [],
+            'longitudinal_subjects': 0
+        })
+
         subject_tracking = defaultdict(lambda: {
             'cross_hippoSf': False, 'cross_amyg': False,
             'long_hippoSf': False, 'long_amyg': False,
@@ -183,7 +356,9 @@ class FreeSurferChecker(BIDSChecker):
         
         for subj_dir in self.get_subjects():
             subj = subj_dir.name
-            self.logger.info(f"Checking FreeSurfer outputs for: {subj}")
+            self.logger.debug(f"Checking FreeSurfer outputs for: {subj}")
+            self.stats['total_subjects'] += 1
+            self.stats['all_subjects_list'].append(subj)
             
             # Count sessions with anatomical data
             anat_sessions = 0
@@ -343,23 +518,31 @@ class QSIPrepChecker(BIDSChecker):
     def check_pipeline(self, pipeline_dir: Path) -> bool:
         """Check QSIPrep outputs."""
         self.logger.info("Checking QSIPrep pipeline...")
+        self._extract_metadata(pipeline_dir)
+        self._check_logs(pipeline_dir)
         
         # Initialize statistics tracking
-        self.stats = {
+        self.stats.update({
             'total_subjects': 0,
+            'all_subjects_list': [],
             'subjects_with_dwi': 0,
             'subjects_with_missing_sessions': [],
             'subjects_with_no_dwi': [],
             'missing_sessions_by_subject': {},
             'session_statistics': {}
-        }
+        })
         
-        for subj_dir in self.get_subjects():
+        subjects = self.get_subjects()
+        if not subjects:
+            subjects = self.get_subjects_in_dir(pipeline_dir)
+
+        for subj_dir in subjects:
             subj = subj_dir.name
-            self.logger.info(f"Checking QSIPrep outputs for: {subj}")
+            self.logger.debug(f"Checking QSIPrep outputs for: {subj}")
             
             # Update statistics
             self.stats['total_subjects'] += 1
+            self.stats['all_subjects_list'].append(subj)
             
             # Check subject folder exists
             qsiprep_subj_dir = pipeline_dir / subj
@@ -563,15 +746,18 @@ class QSIReconChecker(BIDSChecker):
     def check_pipeline(self, pipeline_dir: Path) -> bool:
         """Check QSIRecon outputs."""
         self.logger.info("Checking QSIRecon pipeline...")
+        self._extract_metadata(pipeline_dir)
+        self._check_logs(pipeline_dir)
         
         # Initialize statistics tracking
-        self.stats = {
+        self.stats.update({
             'total_subjects': 0,
+            'all_subjects_list': [],
             'subjects_with_dwi': 0,
             'recon_pipelines_found': [],
             'subjects_by_pipeline': {},
             'missing_subjects_by_pipeline': {}
-        }
+        })
         
         # Find all qsirecon pipelines in derivatives
         qsirecon_pipelines = list(pipeline_dir.glob("qsirecon*"))
@@ -614,7 +800,15 @@ class QSIReconChecker(BIDSChecker):
         
         # Get all subjects with DWI data from BIDS source
         subjects_with_dwi = []
-        for subj_dir in self.get_subjects():
+        subjects = self.get_subjects()
+        if not subjects:
+            for rp in recon_pipelines:
+                s_in_rp = self.get_subjects_in_dir(rp)
+                if s_in_rp:
+                    subjects = s_in_rp
+                    break
+        
+        for subj_dir in subjects:
             subj = subj_dir.name
             has_dwi = False
             for sess_dir in self.get_sessions(subj_dir):
@@ -625,7 +819,8 @@ class QSIReconChecker(BIDSChecker):
             if has_dwi:
                 subjects_with_dwi.append(subj)
         
-        self.stats['total_subjects'] = len(self.get_subjects())
+        self.stats['total_subjects'] = len(subjects)
+        self.stats['all_subjects_list'] = [s.name for s in subjects]
         self.stats['subjects_with_dwi'] = len(subjects_with_dwi)
         
         for recon_pipeline in recon_pipelines:
@@ -787,6 +982,9 @@ class QSIReconChecker(BIDSChecker):
     
     def _check_direct_structure(self, qsi_pipeline: Path, pipeline_name: str):
         """Check QSIRecon outputs in direct structure (fallback for older versions)."""
+        self.stats['total_subjects'] = len(self.get_subjects())
+        self.stats['all_subjects_list'] = [s.name for s in self.get_subjects()]
+        
         for subj_dir in self.get_subjects():
             subj = subj_dir.name
             
@@ -819,6 +1017,137 @@ class QSIReconChecker(BIDSChecker):
                         )
 
 
+class MRIQCChecker(BIDSChecker):
+    """Checker for MRIQC pipeline outputs."""
+    
+    def check_pipeline(self, pipeline_dir: Path) -> bool:
+        """Check MRIQC outputs."""
+        self.logger.info("Checking MRIQC pipeline...")
+        self._extract_metadata(pipeline_dir)
+        self._check_logs(pipeline_dir)
+        
+        # Initialize statistics tracking
+        self.stats.update({
+            'total_subjects': 0,
+            'all_subjects_list': [],
+            'subjects_with_reports': 0,
+            'subjects_with_metrics': 0,
+            'group_reports_found': []
+        })
+        
+        # Check for group reports
+        group_reports = list(pipeline_dir.glob("group_*.html"))
+        self.stats['group_reports_found'] = [f.name for f in group_reports]
+        if not group_reports:
+            self.add_missing_item("MRIQC group reports missing (group_T1w.html, group_bold.html, etc.)", "WARNING")
+        
+        subjects = self.get_subjects()
+        if not subjects:
+            subjects = self.get_subjects_in_dir(pipeline_dir)
+            if subjects:
+                self.logger.info(f"Using {len(subjects)} subjects found in MRIQC directory (source BIDS empty)")
+
+        for subj_dir in subjects:
+            subj = subj_dir.name
+            self.logger.debug(f"Checking MRIQC outputs for: {subj}")
+            self.stats['total_subjects'] += 1
+            self.stats['all_subjects_list'].append(subj)
+            
+            has_report = False
+            has_metrics = False
+            
+            # Check for subject-level HTML reports
+            subj_reports = list(pipeline_dir.glob(f"{subj}*.html"))
+            if subj_reports:
+                has_report = True
+                self.stats['subjects_with_reports'] += 1
+            else:
+                self.add_missing_item(f"MRIQC HTML report missing for subject: {subj}")
+            
+            # Check for JSON metrics in subject folder
+            subj_data_dir = pipeline_dir / subj
+            if subj_data_dir.exists():
+                json_files = list(subj_data_dir.rglob("*.json"))
+                if json_files:
+                    has_metrics = True
+                    self.stats['subjects_with_metrics'] += 1
+                else:
+                    self.add_missing_item(f"MRIQC JSON metrics missing in: {subj_data_dir}")
+            else:
+                # Some versions put JSONs directly in the root or in session folders
+                json_files = list(pipeline_dir.glob(f"{subj}_*.json"))
+                if json_files:
+                    has_metrics = True
+                    self.stats['subjects_with_metrics'] += 1
+                else:
+                    self.add_missing_item(f"MRIQC subject directory or metrics missing: {subj}")
+                    
+        return len(self.missing_items) == 0
+
+
+class CAT12Checker(BIDSChecker):
+    """Checker for CAT12 pipeline outputs."""
+    
+    def check_pipeline(self, pipeline_dir: Path) -> bool:
+        """Check CAT12 outputs."""
+        self.logger.info("Checking CAT12 pipeline...")
+        self._extract_metadata(pipeline_dir)
+        self._check_logs(pipeline_dir)
+        
+        # Initialize statistics tracking
+        self.stats.update({
+            'total_subjects': 0,
+            'all_subjects_list': [],
+            'subjects_with_cat12_output': 0,
+            'subjects_with_segmentation': 0,
+            'subjects_failed': [],
+            'processing_completed_markers': 0
+        })
+        
+        subjects = self.get_subjects()
+        if not subjects:
+            subjects = self.get_subjects_in_dir(pipeline_dir)
+            if subjects:
+                self.logger.info(f"Using {len(subjects)} subjects found in CAT12 directory (source BIDS empty)")
+
+        for subj_dir in subjects:
+            subj = subj_dir.name
+            self.stats['total_subjects'] += 1
+            self.stats['all_subjects_list'].append(subj)
+            
+            cat_subj_dir = pipeline_dir / subj
+            if not cat_subj_dir.exists():
+                 self.add_missing_item(f"CAT12 subject directory missing: {subj}")
+                 continue
+            
+            # Check for CAT12 status markers
+            comp_marker = cat_subj_dir / "CAT12_PROCESSING_COMPLETED.txt"
+            fail_marker = cat_subj_dir / "CAT12_PROCESSING_FAILED.txt"
+            
+            if comp_marker.exists():
+                self.stats['processing_completed_markers'] += 1
+            if fail_marker.exists():
+                self.stats['subjects_failed'].append(subj)
+
+            # Check for core outputs
+            mri_dir = cat_subj_dir / "mri"
+            
+            # CAT12 usually has mri/m*.nii or similar
+            has_mri = mri_dir.exists() and len(list(mri_dir.glob("*.nii"))) > 0
+            has_report = (cat_subj_dir / "report").exists() or (cat_subj_dir / "boilerplate.html").exists()
+
+            if has_mri:
+                self.stats['subjects_with_cat12_output'] += 1
+                self.stats['subjects_with_segmentation'] += 1
+            else:
+                self.add_missing_item(f"CAT12 segmentation missing/incomplete: {subj}")
+            
+            if not has_report:
+                self.add_missing_item(f"CAT12 report/boilerplate missing: {subj}")
+
+        return len(self.missing_items) == 0
+
+
 class BIDSOutputValidator:
     """Main validator class that orchestrates all pipeline checks."""
     
@@ -827,11 +1156,15 @@ class BIDSOutputValidator:
         'freesurfer': FreeSurferChecker,
         'qsiprep': QSIPrepChecker,
         'qsirecon': QSIReconChecker,
+        'mriqc': MRIQCChecker,
+        'cat12': CAT12Checker,
     }
     
     def __init__(self, bids_dir: Path, derivatives_dir: Path, verbose: bool = False, quiet: bool = False, log_file: Optional[Path] = None):
         self.bids_dir = bids_dir
         self.derivatives_dir = derivatives_dir
+        self.verbose = verbose
+        self.quiet = quiet
         self.setup_logging(verbose, quiet, log_file)
         self.results = {}
     
@@ -841,7 +1174,7 @@ class BIDSOutputValidator:
         if verbose:
             level = logging.DEBUG
         elif quiet:
-            level = logging.WARNING
+            level = logging.ERROR # Even quieter: only errors
         else:
             level = logging.INFO
         
@@ -849,13 +1182,17 @@ class BIDSOutputValidator:
         logging.getLogger().handlers.clear()
         
         # Setup formatter
-        formatter = logging.Formatter(
-            '%(asctime)s - %(levelname)s: %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
+        if quiet:
+             # Minimal formatter for quiet mode
+             formatter = logging.Formatter('%(levelname)s: %(message)s')
+        else:
+             formatter = logging.Formatter(
+                '%(asctime)s - %(levelname)s: %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
         
-        # Console handler
-        console_handler = logging.StreamHandler(sys.stdout)
+        # Console handler - use stderr so stdout can be pure JSON if needed
+        console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setLevel(level)
         console_handler.setFormatter(formatter)
         
@@ -871,7 +1208,8 @@ class BIDSOutputValidator:
                 file_handler.setLevel(logging.DEBUG)  # Always log everything to file
                 file_handler.setFormatter(formatter)
                 root_logger.addHandler(file_handler)
-                logging.info(f"Logging to file: {log_file}")
+                if not quiet:
+                    logging.info(f"Logging to file: {log_file}")
             except Exception as e:
                 logging.error(f"Could not setup file logging: {e}")
         
@@ -899,7 +1237,8 @@ class BIDSOutputValidator:
         if pipeline_name not in self.PIPELINE_CHECKERS:
             raise ValueError(f"Unknown pipeline: {pipeline_name}")
         
-        self.logger.info(f"Validating pipeline: {pipeline_name}")
+        if logging.getLogger().getEffectiveLevel() <= logging.INFO:
+            self.logger.info(f"Validating pipeline: {pipeline_name}")
         
         # Determine pipeline directory
         if pipeline_name == 'qsirecon':
@@ -938,10 +1277,12 @@ class BIDSOutputValidator:
             pipelines = self.discover_pipelines()
         
         if not pipelines:
-            self.logger.warning("No pipelines found to validate")
+            if logging.getLogger().getEffectiveLevel() <= logging.INFO:
+                self.logger.warning("No pipelines found to validate")
             return {'pipelines': {}, 'summary': {'total_pipelines': 0, 'passed': 0, 'failed': 0}}
         
-        self.logger.info(f"Found pipelines to check: {', '.join(pipelines)}")
+        if logging.getLogger().getEffectiveLevel() <= logging.INFO:
+            self.logger.info(f"Found pipelines to check: {', '.join(pipelines)}")
         
         results = {}
         for pipeline in pipelines:
@@ -962,109 +1303,158 @@ class BIDSOutputValidator:
         return {'pipelines': results, 'summary': summary}
     
     def print_results(self, results: Dict, output_format: str = 'text', quiet: bool = False):
-        """Print validation results."""
+        """Print validation results in a structured, clustered way."""
         if output_format == 'json':
             print(json.dumps(results, indent=2, default=str))
             return
         
-        # Text output
-        if not quiet:
-            print("=" * 60)
-            print("BIDS PIPELINE OUTPUT VALIDATION RESULTS")
-            print("=" * 60)
-        
         summary = results['summary']
         
+        # Text output - Header (use stderr to keep stdout pure for JSON)
+        if not quiet:
+            print("=" * 60, file=sys.stderr)
+            print("BIDS PIPELINE OUTPUT VALIDATION RESULTS", file=sys.stderr)
+            print("=" * 60, file=sys.stderr)
+            print(f"Total pipelines checked: {summary['total_pipelines']}", file=sys.stderr)
+            print(f"Passed: {summary['passed']}", file=sys.stderr)
+            print(f"Failed: {summary['failed']}", file=sys.stderr)
+            print(f"Total missing items: {summary['total_missing_items']}", file=sys.stderr)
+            print(file=sys.stderr)
+        
+        for pipeline_name, pipeline_result in results['pipelines'].items():
+            status = pipeline_result['status']
+            status_symbol = "✅" if status == 'passed' else "❌"
+            
+            if not quiet or status == 'failed':
+                print(f"{status_symbol} {pipeline_name.upper()}: {status.upper()}", file=sys.stderr)
+            
+            if pipeline_result['missing_items']:
+                # Advanced Clustering: Group Subjects by Issue
+                # issue_map: { issue_summary -> [subject_ids] }
+                issue_map = defaultdict(set)
+                global_issues = []
+                
+                for item in pipeline_result['missing_items']:
+                    # Extract subject ID using regex
+                    subj_match = re.search(r'sub-\w+', item)
+                    if subj_match:
+                        subj_id = subj_match.group()
+                        
+                        # Clean the message for grouping:
+                        # 1. Strip severity tags
+                        clean_msg = re.sub(r'\[(ERROR|WARNING|INFO)\]\s*', '', item)
+                        # 2. Extract first significant line
+                        lines = [l.strip() for l in clean_msg.split('\n') if l.strip()]
+                        summary_msg = lines[0] if lines else "Unknown issue"
+                        # 3. Replace the actual subject ID with a placeholder to group identical issues
+                        summary_msg = summary_msg.replace(subj_id, "subject")
+                        # 4. Remove session references to group across sessions? 
+                        # (Maybe too aggressive, but user wants clustering)
+                        summary_msg = re.sub(r'ses-\w+', 'session', summary_msg)
+                        
+                        issue_map[summary_msg].add(subj_id)
+                    else:
+                        global_issues.append(item)
+                
+                # Print clustered results
+                if issue_map:
+                    if not quiet:
+                        print(f"  Missing items clustered by subject group:", file=sys.stderr)
+                    
+                    for msg, subjects in sorted(issue_map.items()):
+                        sub_list = sorted(list(subjects))
+                        count = len(sub_list)
+                        
+                        # Display logic: show all in verbose, strictly limited in normal/quiet
+                        if count > 10 and not self.verbose:
+                            sub_str = ", ".join(sub_list[:10]) + f" ... and {count-10} more"
+                        else:
+                            sub_str = ", ".join(sub_list)
+                        
+                        prefix = "  - " if not quiet else "  "
+                        print(f"{prefix}{msg.upper() if quiet else msg} ({count} subjects)", file=sys.stderr)
+                        print(f"    Affected: {sub_str}", file=sys.stderr)
+                
+                # Print global issues
+                if global_issues:
+                    if not quiet:
+                        print(f"  Global Issues:", file=sys.stderr)
+                    for issue in global_issues[:10]:
+                        msg = issue.split('\n')[0].strip()
+                        print(f"    - {msg}", file=sys.stderr)
+                    if len(global_issues) > 10:
+                        print(f"    ... and {len(global_issues)-10} more global issues", file=sys.stderr)
+            
+            # Print pipeline stats if not quiet
+            if not quiet and 'stats' in pipeline_result and pipeline_result['stats']:
+                self._print_pipeline_statistics(pipeline_name, pipeline_result['stats'])
+            
+            if not quiet:
+                print(file=sys.stderr)
+
         if quiet:
-            # Minimal output for quiet mode
+            print("-" * 30, file=sys.stderr)
             if summary['failed'] > 0:
-                print(f"❌ FAILED: {summary['failed']}/{summary['total_pipelines']} pipelines failed")
-                print(f"Total missing items: {summary['total_missing_items']}")
+                print(f"❌ FAILED: {summary['failed']}/{summary['total_pipelines']} pipelines failed", file=sys.stderr)
+                print(f"Total missing items: {summary['total_missing_items']}", file=sys.stderr)
             else:
-                print(f"✅ PASSED: All {summary['total_pipelines']} pipelines validated successfully")
+                print(f"✅ PASSED: All {summary['total_pipelines']} pipelines validated successfully", file=sys.stderr)
         else:
-            # Normal detailed output
-            print(f"Total pipelines checked: {summary['total_pipelines']}")
-            print(f"Passed: {summary['passed']}")
-            print(f"Failed: {summary['failed']}")
-            print(f"Total missing items: {summary['total_missing_items']}")
-            print()
-            
-            for pipeline_name, pipeline_result in results['pipelines'].items():
-                status = pipeline_result['status']
-                status_symbol = "✅" if status == 'passed' else "❌"
-                print(f"{status_symbol} {pipeline_name.upper()}: {status.upper()}")
-                
-                # Print pipeline-specific statistics
-                if 'stats' in pipeline_result and pipeline_result['stats']:
-                    self._print_pipeline_statistics(pipeline_name, pipeline_result['stats'])
-                
-                if pipeline_result['missing_items']:
-                    print(f"  Missing items ({len(pipeline_result['missing_items'])}):")
-                    # Show fewer items in normal mode, more in verbose
-                    max_items = 20 if logging.getLogger().getEffectiveLevel() == logging.DEBUG else 5
-                    for item in pipeline_result['missing_items'][:max_items]:
-                        print(f"    - {item}")
-                    if len(pipeline_result['missing_items']) > max_items:
-                        remaining = len(pipeline_result['missing_items']) - max_items
-                        print(f"    ... and {remaining} more items (use --verbose to see all)")
-                print()
-            
-            print("=" * 60)
+            print("=" * 60, file=sys.stderr)
     
     def _print_pipeline_statistics(self, pipeline_name: str, stats: Dict):
         """Print detailed statistics for a pipeline."""
         if pipeline_name == 'qsiprep' and stats:
-            print(f"  📊 Subject Statistics:")
-            print(f"    Total subjects checked: {stats.get('total_subjects', 0)}")
+            print(f"  📊 Subject Statistics:", file=sys.stderr)
+            print(f"    Total subjects checked: {stats.get('total_subjects', 0)}", file=sys.stderr)
             
             if stats.get('subjects_with_dwi', 0) > 0:
-                print(f"    Subjects with DWI data: {stats.get('subjects_with_dwi', 0)}")
+                print(f"    Subjects with DWI data: {stats.get('subjects_with_dwi', 0)}", file=sys.stderr)
                 
                 # Session-specific statistics
                 session_stats = stats.get('session_statistics', {})
                 if session_stats:
-                    print(f"  📋 Session-specific Issues:")
+                    print(f"  📋 Session-specific Issues:", file=sys.stderr)
                     for session, session_data in sorted(session_stats.items()):
                         missing_count = len(session_data.get('missing_subjects', []))
                         total_count = session_data.get('total_subjects', 0)
                         if missing_count > 0:
-                            print(f"    {session}: Missing in {missing_count} subjects")
+                            print(f"    {session}: Missing in {missing_count} subjects", file=sys.stderr)
                             if logging.getLogger().getEffectiveLevel() == logging.DEBUG:
                                 missing_subjects = session_data.get('missing_subjects', [])
-                                print(f"      Affected subjects: {', '.join(missing_subjects[:5])}")
+                                print(f"      Affected subjects: {', '.join(missing_subjects[:5])}", file=sys.stderr)
                                 if len(missing_subjects) > 5:
-                                    print(f"      ... and {len(missing_subjects) - 5} more")
+                                    print(f"      ... and {len(missing_subjects) - 5} more", file=sys.stderr)
                 
                 # Subjects with missing sessions
                 missing_sessions = stats.get('subjects_with_missing_sessions', [])
                 if missing_sessions:
-                    print(f"    Subjects with missing sessions: {len(missing_sessions)}")
+                    print(f"    Subjects with missing sessions: {len(missing_sessions)}", file=sys.stderr)
                     if logging.getLogger().getEffectiveLevel() == logging.DEBUG:
-                        print(f"      Affected subjects: {', '.join(missing_sessions[:5])}")
+                        print(f"      Affected subjects: {', '.join(missing_sessions[:5])}", file=sys.stderr)
                         if len(missing_sessions) > 5:
-                            print(f"      ... and {len(missing_sessions) - 5} more")
+                            print(f"      ... and {len(missing_sessions) - 5} more", file=sys.stderr)
             
             # Subjects with no DWI data
             no_dwi_subjects = stats.get('subjects_with_no_dwi', [])
             if no_dwi_subjects:
-                print(f"    Subjects with no DWI data: {len(no_dwi_subjects)}")
+                print(f"    Subjects with no DWI data: {len(no_dwi_subjects)}", file=sys.stderr)
                 if logging.getLogger().getEffectiveLevel() == logging.DEBUG:
-                    print(f"      Subjects: {', '.join(no_dwi_subjects[:5])}")
+                    print(f"      Subjects: {', '.join(no_dwi_subjects[:5])}", file=sys.stderr)
                     if len(no_dwi_subjects) > 5:
-                        print(f"      ... and {len(no_dwi_subjects) - 5} more")
+                        print(f"      ... and {len(no_dwi_subjects) - 5} more", file=sys.stderr)
         
         elif pipeline_name == 'qsirecon' and stats:
-            print(f"  📊 Reconstruction Statistics:")
-            print(f"    Total subjects checked: {stats.get('total_subjects', 0)}")
-            print(f"    Subjects with DWI data: {stats.get('subjects_with_dwi', 0)}")
+            print(f"  📊 Reconstruction Statistics:", file=sys.stderr)
+            print(f"    Total subjects checked: {stats.get('total_subjects', 0)}", file=sys.stderr)
+            print(f"    Subjects with DWI data: {stats.get('subjects_with_dwi', 0)}", file=sys.stderr)
             
             recon_pipelines = stats.get('recon_pipelines_found', [])
             if recon_pipelines:
-                print(f"    Reconstruction pipelines found: {len(recon_pipelines)}")
-                print(f"      Pipelines: {', '.join(recon_pipelines)}")
+                print(f"    Reconstruction pipelines found: {len(recon_pipelines)}", file=sys.stderr)
+                print(f"      Pipelines: {', '.join(recon_pipelines)}", file=sys.stderr)
                 
-                print(f"  📋 Pipeline-specific Results:")
+                print(f"  📋 Pipeline-specific Results:", file=sys.stderr)
                 subjects_by_pipeline = stats.get('subjects_by_pipeline', {})
                 missing_by_pipeline = stats.get('missing_subjects_by_pipeline', {})
                 
@@ -1073,17 +1463,17 @@ class BIDSOutputValidator:
                     missing_count = len(missing_by_pipeline.get(pipeline, []))
                     total_dwi = stats.get('subjects_with_dwi', 0)
                     
-                    print(f"    {pipeline}:")
-                    print(f"      Subjects processed: {found_count}/{total_dwi}")
+                    print(f"    {pipeline}:", file=sys.stderr)
+                    print(f"      Subjects processed: {found_count}/{total_dwi}", file=sys.stderr)
                     if missing_count > 0:
-                        print(f"      Missing subjects: {missing_count}")
+                        print(f"      Missing subjects: {missing_count}", file=sys.stderr)
                         if logging.getLogger().getEffectiveLevel() == logging.DEBUG:
                             missing_subjects = missing_by_pipeline.get(pipeline, [])
-                            print(f"        Missing: {', '.join(missing_subjects[:5])}")
+                            print(f"        Missing: {', '.join(missing_subjects[:5])}", file=sys.stderr)
                             if len(missing_subjects) > 5:
-                                print(f"        ... and {len(missing_subjects) - 5} more")
+                                print(f"        ... and {len(missing_subjects) - 5} more", file=sys.stderr)
             else:
-                print(f"    No reconstruction pipelines found in derivatives structure")
+                print(f"    No reconstruction pipelines found in derivatives structure", file=sys.stderr)
 
 
 def extract_missing_subjects_from_results(results: Dict) -> Set[str]:
@@ -1098,7 +1488,7 @@ def extract_missing_subjects_from_results(results: Dict) -> Set[str]:
                     # Extract subject ID from missing item description
                     # Look for patterns like "sub-123" in the item string
                     import re
-                    match = re.search(r'sub-\d+', item)
+                    match = re.search(r'sub-\w+', item)
                     if match:
                         missing_subjects.add(match.group())
     

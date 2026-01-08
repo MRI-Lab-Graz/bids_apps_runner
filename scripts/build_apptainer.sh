@@ -4,6 +4,8 @@
 OUTPUT_DIR=""
 APPTAINER_TMPDIR=""
 DOCKERFILE=""
+DOCKER_REPO_OVERRIDE=""
+DOCKER_TAG_OVERRIDE=""
 
 NO_TEMP_DEL=false
 APPTAINER_BASE_TMPDIR=""
@@ -56,6 +58,8 @@ usage() {
     echo "  -d DOCKERFILE   🐳 Provide a Dockerfile to build the container."
     echo "                  When specified, the script will use Docker to build an image"
     echo "                  from this Dockerfile and then convert it to an Apptainer image."
+    echo "  --docker-repo   📦 (non-interactive) Docker repository to convert (e.g., nipreps/fmriprep)"
+    echo "  --docker-tag    🏷️  Tag to convert (when repo provided, default selection is skipped)"
     echo "  -h              ℹ️  Display this help message and exit."
     echo
     echo "Examples 💡:"
@@ -90,13 +94,33 @@ fi
 
 # Pre-parse long options (getopts doesn't support them)
 ARGS=()
-for arg in "$@"; do
-    case "$arg" in
+while [ $# -gt 0 ]; do
+    case "$1" in
         --no-temp-del)
             NO_TEMP_DEL=true
+            shift
+            ;;
+        --docker-repo=*)
+            DOCKER_REPO_OVERRIDE="${1#--docker-repo=}"
+            shift
+            ;;
+        --docker-repo)
+            shift
+            DOCKER_REPO_OVERRIDE="$1"
+            shift
+            ;;
+        --docker-tag=*)
+            DOCKER_TAG_OVERRIDE="${1#--docker-tag=}"
+            shift
+            ;;
+        --docker-tag)
+            shift
+            DOCKER_TAG_OVERRIDE="$1"
+            shift
             ;;
         *)
-            ARGS+=("$arg")
+            ARGS+=("$1")
+            shift
             ;;
     esac
 done
@@ -245,6 +269,24 @@ if [ -n "$DOCKERFILE" ]; then
     # Create the output directory if it doesn't exist
     mkdir -p "$OUTPUT_DIR"
 
+    if [ -n "$DOCKER_REPO_OVERRIDE" ]; then
+        DOCKER_REPO="$DOCKER_REPO_OVERRIDE"
+        echo "Using provided Docker repository: $DOCKER_REPO"
+    else
+        echo "Select a BIDS App (Docker Hub repo) to build 📦:"
+        PS3="Please enter your choice (number): "
+        select APP in "${APPS[@]}"; do
+            if [[ "$APP" == "Custom" ]]; then
+                read -p "Enter Docker image repository (e.g., 'pennbbl/qsiprep'): " DOCKER_REPO
+                break
+            elif [[ -n "$APP" ]]; then
+                DOCKER_REPO="$APP"
+                break
+            else
+                echo "❌ Invalid selection. Please try again."
+            fi
+        done
+    fi
     # Log file for build output
     LOG_FILE="${OUTPUT_PATH%.sif}.log"
 
@@ -319,15 +361,24 @@ if [ ${#TAGS[@]} -eq 0 ]; then
 fi
 
 # Present the list of tags to the user for selection
-echo "Available tags for '${DOCKER_REPO}':"
-select TAG in "${TAGS[@]}"; do
-    if [[ -n "$TAG" ]]; then
-        echo "You selected tag: $TAG"
-        break
-    else
-        echo "Invalid selection. Please try again."
+if [ -n "$DOCKER_TAG_OVERRIDE" ]; then
+    TAG="$DOCKER_TAG_OVERRIDE"
+    if ! printf '%s\n' "${TAGS[@]}" | grep -Fxq "$TAG"; then
+        echo "Error: Provided tag '$TAG' not found for repository '${DOCKER_REPO}'."
+        exit 1
     fi
-done
+    echo "Using provided tag: $TAG"
+else
+    echo "Available tags for '${DOCKER_REPO}':"
+    select TAG in "${TAGS[@]}"; do
+        if [[ -n "$TAG" ]]; then
+            echo "You selected tag: $TAG"
+            break
+        else
+            echo "Invalid selection. Please try again."
+        fi
+    done
+fi
 
 # Define the output path for the Apptainer image
 OUTPUT_PATH="${OUTPUT_DIR}/${IMAGE_NAME}_${TAG}.sif"

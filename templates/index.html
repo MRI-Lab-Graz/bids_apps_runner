@@ -53,6 +53,11 @@
         .footer-link { color: var(--accent-color); text-decoration: none; font-weight: 600; }
         .footer-link:hover { text-decoration: underline; }
 
+        .tab-panel { display: none; }
+        .tab-button { border-radius: 30px; font-weight: 600; }
+        .utility-status { display: none; border-radius: 8px; padding: 12px 18px; min-height: 48px; font-weight: 600; }
+        .utility-log { background: #0f172a; color: #f8fafc; border-radius: 10px; padding: 18px; border: 1px solid #1d2939; min-height: 180px; font-family: 'Consolas', 'Menlo', monospace; white-space: pre-wrap; overflow-y: auto; }
+
         #browseModal { display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
         .modal-content-dir { background: white; margin: 5% auto; width: 90%; max-width: 850px; border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,0.2); height: 85vh; display: flex; flex-direction: column; }
         .modal-header-dir { padding: 20px 30px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
@@ -60,6 +65,10 @@
         .dir-item { padding: 10px 15px; cursor: pointer; border-radius: 6px; display: flex; align-items: center; margin-bottom: 4px; transition: background 0.2s; font-family: monospace; }
         .dir-item:hover { background: #eef7ff; color: var(--accent-color); }
         .dir-item i { margin-right: 12px; font-size: 1.1rem; }
+        
+        .report-item { transition: all 0.2s; border: 1px solid #eee; }
+        .report-item:hover { transform: translateX(5px); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .border-bottom-dotted { border-bottom: 1px dotted #ccc; }
     </style>
 </head>
 <body>
@@ -76,7 +85,15 @@
     </nav>
 
     <div class="container container-main">
-        <div class="card">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div class="btn-group" role="tablist">
+                <button class="btn btn-primary tab-button active" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)">Run BIDS App</button>
+                <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)">Check App Output</button>
+                <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)">Build Apptainer</button>
+            </div>
+        </div>
+        <div id="runnerTab" class="tab-panel" style="display:block;">
+            <div class="card">
             <div class="card-header">
                 Configuration & Launch
             </div>
@@ -258,6 +275,134 @@
             </div>
         </div>
     </div>
+        <div id="checkTab" class="tab-panel">
+            <div class="card">
+                <div class="card-header">Check App Output</div>
+                <div class="card-body">
+                    <p class="text-muted mb-3">Validate derivative outputs before reprocessing. Run the CLI checker directly from the GUI.</p>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">BIDS Dataset Folder</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="validation_bids_folder" placeholder="/data/bids">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('validation_bids_folder')">...</button>
+                            </div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Derivatives Folder</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="validation_derivatives_folder" placeholder="/data/derivatives">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('validation_derivatives_folder')">...</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row align-items-end">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Pipeline / App (e.g. fmriprep)</label>
+                            <div class="input-group">
+                                <select class="form-select" id="validation_pipeline">
+                                    <option value="">Auto-detected / All</option>
+                                    <option value="fmriprep">fMRIPrep</option>
+                                    <option value="qsiprep">QSIPrep</option>
+                                    <option value="mriqc">MRIQC</option>
+                                    <option value="qsirecon">QSIRECON</option>
+                                    <option value="freesurfer">FreeSurfer</option>
+                                    <option value="cat12">CAT12</option>
+                                </select>
+                                <button type="button" class="btn btn-outline-primary" title="Scan folders for pipelines" onclick="scanValidationPipelines()">Scan</button>
+                            </div>
+                        </div>
+                        <div class="col-md-6 mb-3 d-flex align-items-center gap-3">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="validation_verbose">
+                                <label class="form-check-label" for="validation_verbose">Verbose</label>
+                            </div>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="validation_quiet">
+                                <label class="form-check-label" for="validation_quiet">Quiet</label>
+                            </div>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="validation_missing_only">
+                                <label class="form-check-label" for="validation_missing_only">List Missing Only</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mb-3">
+                        <button class="btn btn-primary" id="runValidationBtn" type="button" onclick="runOutputCheck()">Run Validation</button>
+                        <button class="btn btn-outline-secondary" type="button" onclick="clearValidationOutput()">Reset</button>
+                    </div>
+                    <div id="validationStatusBox" class="utility-status"></div>
+                    
+                    <div id="validationDetailsResults"></div>
+                    
+                    <div class="mt-3" id="validationLogHeader" style="display:none;">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="text-muted small fw-bold uppercase">System Console Logs</span>
+                            <button class="btn btn-sm btn-link text-decoration-none p-0" type="button" onclick="toggleValidationLog()">
+                                <i class="fas fa-eye-slash me-1"></i><span id="logToggleText">Hide Logs</span>
+                            </button>
+                        </div>
+                    </div>
+                    <pre id="validationOutput" class="utility-log"></pre>
+                </div>
+            </div>
+        </div>
+
+        <div id="buildTab" class="tab-panel">
+            <div class="card">
+                <div class="card-header">Build Apptainer Image</div>
+                <div class="card-body">
+                    <p class="text-muted mb-3">Convert Docker images or Dockerfiles into Apptainer containers without leaving the browser.</p>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Docker Repository</label>
+                            <input type="text" class="form-control" id="build_docker_repo" placeholder="nipreps/fmriprep">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Tag</label>
+                            <input type="text" class="form-control" id="build_docker_tag" placeholder="latest">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Output Directory</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="build_output_dir" placeholder="/data/local/container">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('build_output_dir')">...</button>
+                            </div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Temporary Directory</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="build_tmp_dir" placeholder="/tmp/apptainer_build">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('build_tmp_dir')">...</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row align-items-end">
+                        <div class="col-md-8 mb-3">
+                            <label class="form-label">Dockerfile (optional)</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="build_dockerfile" placeholder="/path/to/Dockerfile">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('build_dockerfile')">...</button>
+                            </div>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <div class="form-check form-switch mb-0">
+                                <input class="form-check-input" type="checkbox" id="build_keep_temp">
+                                <label class="form-check-label" for="build_keep_temp">Preserve temp dir</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2 mb-3">
+                        <button class="btn btn-accent" id="buildApptainerBtn" type="button" onclick="startApptainerBuild()">Start Build</button>
+                    </div>
+                    <div id="buildStatusBox" class="utility-status"></div>
+                    <pre id="buildOutput" class="utility-log mt-3"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Modals -->
     <div id="configModal" style="display:none; position:fixed; z-index:1001; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5); backdrop-filter: blur(2px);">
@@ -266,6 +411,28 @@
             <div id="configList" style="max-height:300px; overflow-y:auto; margin-bottom: 20px; border: 1px solid #eee; border-radius: 8px;"></div>
             <div class="text-end">
                 <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('configModal').style.display='none'">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="reportModal" class="modal" style="display:none; position:fixed; z-index:2000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.8); backdrop-filter: blur(8px);">
+        <div class="modal-content" style="background: white; margin: 2% auto; width: 95%; height: 90vh; border-radius: 12px; display: flex; flex-direction: column;">
+            <div class="modal-header d-flex justify-content-between align-items-center p-3 border-bottom">
+                <h5 class="mb-0 fw-bold text-primary"><i class="fas fa-file-invoice me-2"></i>BIDS App HTML Report Viewer</h5>
+                <button type="button" class="btn-close" onclick="closeReportModal()"></button>
+            </div>
+            <div class="modal-body p-0 flex-grow-1 d-flex">
+                <div id="reportListSidebar" style="width: 280px; border-right: 1px solid #eee; overflow-y: auto; background: #f8f9fa;" class="p-3">
+                    <h6 class="small fw-bold text-muted mb-3">Available Reports</h6>
+                    <div id="reportListItems"></div>
+                </div>
+                <div id="reportIframeContainer" class="flex-grow-1 bg-white">
+                    <iframe id="reportIframe" style="width: 100%; height: 100%; border: none;"></iframe>
+                    <div id="reportPlaceholder" class="h-100 d-flex flex-column align-items-center justify-content-center text-muted">
+                        <i class="fas fa-file-contract fa-4x mb-3 opacity-25"></i>
+                        <p>Select a subject from the list to view their interactive report.</p>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -733,6 +900,575 @@
                 showStatus("Failed to load config details.", true);
             }
         }
+
+        function switchTab(tabId, button) {
+            document.querySelectorAll('.tab-panel').forEach(panel => panel.style.display = 'none');
+            const panel = document.getElementById(tabId);
+            if (panel) {
+                panel.style.display = 'block';
+                
+                // Sync fields between tabs if empty
+                if (tabId === 'checkTab') {
+                    if (!document.getElementById('validation_bids_folder').value && document.getElementById('bids_folder').value) {
+                        document.getElementById('validation_bids_folder').value = document.getElementById('bids_folder').value;
+                    }
+                    if (!document.getElementById('validation_derivatives_folder').value && document.getElementById('output_folder').value) {
+                        document.getElementById('validation_derivatives_folder').value = document.getElementById('output_folder').value;
+                    }
+                } else if (tabId === 'buildTab') {
+                    if (!document.getElementById('build_output_dir').value && document.getElementById('container_folder').value) {
+                        document.getElementById('build_output_dir').value = document.getElementById('container_folder').value;
+                    }
+                    if (!document.getElementById('build_tmp_dir').value && document.getElementById('tmp_folder').value) {
+                        document.getElementById('build_tmp_dir').value = document.getElementById('tmp_folder').value;
+                    }
+                }
+            }
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('btn-primary');
+                btn.classList.add('btn-outline-primary');
+            });
+            if (button) {
+                button.classList.remove('btn-outline-primary');
+                button.classList.add('btn-primary');
+            }
+        }
+
+        function _setUtilityStatus(element, message, isError=false) {
+            if (!element) return;
+            if (!message) {
+                element.style.display = 'none';
+                return;
+            }
+            element.style.display = 'block';
+            element.innerText = message;
+            element.style.background = isError ? '#fff5f5' : '#eef4ff';
+            element.style.color = isError ? '#c92a2a' : '#1f3d7a';
+            element.style.border = `1px solid ${isError ? '#f5c2c7' : '#b6d4fe'}`;
+        }
+
+        async function runOutputCheck() {
+            const statusEl = document.getElementById('validationStatusBox');
+            const logEl = document.getElementById('validationOutput');
+            const btn = document.getElementById('runValidationBtn');
+            const bids = document.getElementById('validation_bids_folder').value.trim();
+            const deriv = document.getElementById('validation_derivatives_folder').value.trim();
+            if (!bids || !deriv) {
+                _setUtilityStatus(statusEl, 'Provide both the BIDS dataset and derivatives folders.', true);
+                return;
+            }
+            btn.disabled = true;
+            btn.innerText = 'Running...';
+            _setUtilityStatus(statusEl, 'Running validation...', false);
+            const resDiv = document.getElementById('validationDetailsResults');
+            if (resDiv) resDiv.innerHTML = '';
+            try {
+                const resp = await fetch('/run_output_check', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        bids_dir: bids,
+                        derivatives_dir: deriv,
+                        pipeline: document.getElementById('validation_pipeline').value,
+                        verbose: document.getElementById('validation_verbose').checked,
+                        quiet: document.getElementById('validation_quiet').checked,
+                        list_missing: document.getElementById('validation_missing_only').checked
+                    })
+                });
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    _setUtilityStatus(statusEl, data.error || 'Validation failed.', true);
+                } else {
+                    const summary = data.parsed?.summary;
+                    const pipelines = data.parsed?.pipelines || {};
+                    const message = summary ? `Checked ${summary.total_pipelines} pipeline(s), failed: ${summary.failed}.` : 'Validation completed';
+                    _setUtilityStatus(statusEl, message, !data.success);
+                    
+                        // Detailed results rendering
+                    if (data.parsed && data.parsed.pipelines) {
+                        const missingSubjects = new Set();
+                        let hasResults = false;
+                        
+                        // Check if we have any successful pipeline that might have reports
+                        for (const [p, res] of Object.entries(data.parsed.pipelines)) {
+                            if (res.status === 'passed' || res.total_missing < 10) hasResults = true; 
+                        }
+                        
+                        if (hasResults) {
+                            const btn = document.getElementById('viewReportsBtn');
+                            if (btn) btn.style.display = 'block';
+                        }
+                        let html = `<div class="mt-3 p-3 border rounded bg-white shadow-sm">
+                                    <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-3">
+                                        <h6 class="mb-0 fw-bold"><i class="fas fa-stethoscope me-1 text-primary"></i> Validation Health Report</h6>
+                                        <div class="d-flex gap-2">
+                                            <button id="viewReportsBtn" class="btn btn-sm btn-outline-info" style="display:none;" onclick="loadReportsList()">View HTML Reports</button>
+                                            <button id="useMissingBtn" class="btn btn-sm btn-outline-warning" style="display:none;" onclick="applyMissingToRunner()">Use Missing Subjects in Runner</button>
+                                        </div>
+                                    </div>
+                                    
+                                    <div id="validationSummaryBar" class="mb-4">
+                                        <div class="d-flex justify-content-between small fw-bold mb-1">
+                                            <span>GLOBAL DATA COMPLETENESS</span>
+                                            <span id="globalCompletnessPct">0%</span>
+                                        </div>
+                                        <div class="progress shadow-sm" style="height: 20px; background-color: #e9ecef;">
+                                            <div id="globalProgressBarFound" class="progress-bar bg-success progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%">Found</div>
+                                            <div id="globalProgressBarMissing" class="progress-bar bg-danger" role="progressbar" style="width: 0%">Missing</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div id="subjectGallery" class="mb-4">
+                                        <div class="small fw-bold text-muted mb-2 uppercase" style="font-size: 0.7rem;">Subject Status Grid</div>
+                                        <div id="subjectGrid" class="d-flex flex-wrap gap-1" style="max-height: 200px; overflow-y: auto; padding: 5px; background: #f8f9fa; border-radius: 4px; border: 1px inset #eee;">
+                                            <!-- Grid populated dynamically -->
+                                        </div>
+                                        <div class="mt-2 d-flex gap-3 small">
+                                            <span><span class="badge bg-success" style="width:12px; height:12px; padding:0;">&nbsp;</span> All Passed</span>
+                                            <span><span class="badge bg-danger" style="width:12px; height:12px; padding:0;">&nbsp;</span> Issues Found</span>
+                                            <span><span class="badge bg-secondary" style="width:12px; height:12px; padding:0;">&nbsp;</span> Not Validated</span>
+                                        </div>
+                                    </div>
+
+                                    <ul class="list-group list-group-flush">`;
+                        for (const [p, res] of Object.entries(data.parsed.pipelines)) {
+                            const statusCls = res.status === 'passed' ? 'text-success' : 'text-danger';
+                            const icon = res.status === 'passed' ? 'fa-check-circle' : 'fa-times-circle';
+                            html += `<li class="list-group-item">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <span><i class="fas ${icon} ${statusCls} me-2"></i><strong>${p.toUpperCase()}</strong></span>
+                                            <span class="badge ${res.status === 'passed' ? 'bg-success' : 'bg-danger'} rounded-pill">
+                                                ${res.missing_items ? res.missing_items.length : 0} missing
+                                            </span>
+                                        </div>`;
+                            
+                            // Pipeline Metadata Badge
+                            if (res.stats && res.stats.metadata) {
+                                const m = res.stats.metadata;
+                                if (m.tool !== 'Unknown' || m.version !== 'Unknown') {
+                                    html += `<div class="mt-1 mb-2 d-flex flex-wrap gap-1 align-items-center">
+                                                <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle rounded-pill small" title="${m.description}">
+                                                    <i class="fas fa-tag me-1"></i>${m.tool} v${m.version}
+                                                </span>
+                                                <span class="badge bg-light text-muted border rounded-pill small">
+                                                    BIDS ${m.bids_version}
+                                                </span>
+                                                ${m.env ? `<span class="badge bg-info-subtle text-info border border-info-subtle rounded-pill small"><i class="fas fa-microchip me-1"></i>${m.env}</span>` : ''}
+                                                ${m.settings ? `<small class="text-muted ms-1" style="font-size: 0.7rem;" title="${m.settings}"><i class="fas fa-cog me-1"></i>${m.settings.length > 50 ? m.settings.substring(0, 50) + '...' : m.settings}</small>` : ''}
+                                             </div>`;
+                                }
+                            }
+                            
+                            // Render Statistics if available
+                            if (res.stats && Object.keys(res.stats).length > 0) {
+                                html += `<div class="mt-2 p-2 bg-light border-start border-primary border-4 rounded">
+                                            <h6 class="small fw-bold text-primary mb-2"><i class="fas fa-chart-bar me-1"></i> Pipeline Metrics</h6>
+                                            <div class="row g-2 text-center">
+                                                <div class="col-4">
+                                                    <div class="border rounded bg-white p-1">
+                                                        <div class="small text-muted">Total</div>
+                                                        <div class="fw-bold">${res.stats.total_subjects || 0}</div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-4">
+                                                    <div class="border rounded bg-white p-1">
+                                                        <div class="small text-muted">Ready</div>
+                                                        <div class="fw-bold text-success">${(res.stats.subjects_with_dwi || res.stats.subjects_with_bold || res.stats.subjects_with_segmentation || res.stats.subjects_with_reports || 0)}</div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-4">
+                                                    <div class="border rounded bg-white p-1">
+                                                        <div class="small text-muted">Issues</div>
+                                                        <div class="fw-bold text-danger">${(res.stats.subjects_failed ? res.stats.subjects_failed.length : 0) || (res.stats.subjects_with_no_dwi ? res.stats.subjects_with_no_dwi.length : (res.stats.subjects_with_no_bold ? res.stats.subjects_with_no_bold.length : 0))}</div>
+                                                    </div>
+                                                </div>
+                                            </div>`;
+                                
+                                // CAT12 specific detailed stats
+                                if (p === 'cat12' && res.stats.subjects_failed && res.stats.subjects_failed.length > 0) {
+                                    html += `<div class="mt-2 small text-danger"><i class="fas fa-exclamation-circle me-1"></i> ${res.stats.subjects_failed.length} subjects have explicit failure markers.</div>`;
+                                }
+
+                                // Session level stats
+                                if (res.stats.session_statistics) {
+                                    html += `<div class="mt-2 small">
+                                                <table class="table table-sm table-bordered bg-white mb-0" style="font-size: 0.8rem;">
+                                                    <thead class="table-light">
+                                                        <tr><th>Session</th><th>Found</th><th>Missing</th></tr>
+                                                    </thead>
+                                                    <tbody>`;
+                                    for (const [sess, sdata] of Object.entries(res.stats.session_statistics)) {
+                                        const missingCount = sdata.missing_subjects ? sdata.missing_subjects.length : 0;
+                                        html += `<tr>
+                                                    <td class="fw-bold">${sess}</td>
+                                                    <td>${sdata.total_subjects}</td>
+                                                    <td class="${missingCount > 0 ? 'text-danger fw-bold' : 'text-success'}">${missingCount}</td>
+                                                 </tr>`;
+                                    }
+                                    html += `</tbody></table></div>`;
+                                }
+                                
+                                // Missing subjects with DWI but no output?
+                                if (res.stats.subjects_with_missing_sessions && res.stats.subjects_with_missing_sessions.length > 0) {
+                                    html += `<div class="mt-2 small text-danger"><i class="fas fa-exclamation-triangle me-1"></i> ${res.stats.subjects_with_missing_sessions.length} subjects have coverage issues.</div>`;
+                                }
+                                
+                                // QSIRecon specific detailed stats
+                                if (p === 'qsirecon' && res.stats.recon_pipelines_found) {
+                                    html += `<div class="mt-2 small border-top pt-2">
+                                                <div class="fw-bold mb-1 text-secondary">Reconstruction Pipelines:</div>`;
+                                    res.stats.recon_pipelines_found.forEach(rp => {
+                                        const found = (res.stats.subjects_by_pipeline && res.stats.subjects_by_pipeline[rp]) ? res.stats.subjects_by_pipeline[rp].length : 0;
+                                        const total = res.stats.subjects_with_dwi || 0;
+                                        const pct = total > 0 ? Math.round((found/total)*100) : 0;
+                                        html += `<div class="mb-1">
+                                                    <div class="d-flex justify-content-between mb-1">
+                                                        <span>${rp}</span>
+                                                        <span>${found}/${total} subjects</span>
+                                                    </div>
+                                                    <div class="progress" style="height: 6px;">
+                                                        <div class="progress-bar ${pct === 100 ? 'bg-success' : 'bg-warning'}" role="progressbar" style="width: ${pct}%"></div>
+                                                    </div>
+                                                 </div>`;
+                                    });
+                                    html += `</div>`;
+                                }
+
+                                html += `</div>`;
+                            }
+
+                            /* Analysis Log Health */
+                            if (res.stats && res.stats.log_stats && (res.stats.log_stats.errors > 0 || res.stats.log_stats.warnings > 0)) {
+                                const ls = res.stats.log_stats;
+                                html += `<div class="mt-2 p-2 bg-white border rounded shadow-sm">
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <h6 class="small fw-bold mb-0"><i class="fas fa-file-medical-alt me-1 text-primary"></i> Analysis Log Health</h6>
+                                                <div>
+                                                    ${ls.errors > 0 ? `<span class="badge bg-danger me-1" title="Critical issues detected in logs">${ls.errors} Errors</span>` : ''}
+                                                    ${ls.warnings > 0 ? `<span class="badge bg-warning text-dark" title="Non-critical warnings in logs">${ls.warnings} Warnings</span>` : ''}
+                                                </div>
+                                            </div>`;
+                                
+                                if (ls.error_list && ls.error_list.length > 0) {
+                                    html += `<div class="mb-2">
+                                                <div class="small fw-bold text-danger mb-1" style="font-size: 0.65rem;">CRITICAL LOG ENTRIES:</div>
+                                                <div class="p-1 bg-danger-subtle border border-danger-subtle rounded small overflow-auto" style="max-height: 120px; font-family: 'Courier New', Courier, monospace; font-size: 0.65rem; line-height: 1.2;">
+                                                    ${ls.error_list.map(e => `<div class="border-bottom border-danger-subtle py-1 text-danger-emphasis">${e}</div>`).join('')}
+                                                </div>
+                                             </div>`;
+                                }
+                                
+                                if (ls.warning_list && ls.warning_list.length > 0) {
+                                    html += `<div>
+                                                <div class="small fw-bold text-warning-emphasis mb-1" style="font-size: 0.65rem;">NOTABLE WARNINGS:</div>
+                                                <div class="p-1 bg-warning-subtle border border-warning-subtle rounded small overflow-auto" style="max-height: 120px; font-family: 'Courier New', Courier, monospace; font-size: 0.65rem; line-height: 1.2;">
+                                                    ${ls.warning_list.map(w => `<div class="border-bottom border-warning-subtle py-1 text-dark">${w}</div>`).join('')}
+                                                </div>
+                                             </div>`;
+                                }
+                                
+                                html += `</div>`;
+                            }
+
+                            if (res.missing_items && res.missing_items.length > 0) {
+                                html += `<div class="mt-2 p-2 border rounded bg-white"><small class="text-muted d-block mb-1">Detailed Failures:</small><small class="text-muted">`;
+                                res.missing_items.forEach(m => {
+                                    const match = m.match(/sub-\w+/);
+                                    if (match) missingSubjects.add(match[0]);
+                                });
+                                // User requested clustered IDs in text, but here we can show grouped summaries if possible
+                                // For now, just keep a cleaner version of the items
+                                res.missing_items.slice(0, 8).forEach(m => {
+                                    const firstLine = m.split('\n')[0].trim();
+                                    html += `<div class="mb-1 pb-1 border-bottom-dotted border-secondary" style="border-bottom: 1px dotted #ccc;">- ${firstLine}</div>`;
+                                });
+                                if (res.missing_items.length > 8) html += `<div class="text-center">... and ${res.missing_items.length - 8} more issues</div>`;
+                                html += `</small></div>`;
+                            }
+                            html += `</li>`;
+                        }
+                        html += `</ul></div>`;
+                        
+                        document.getElementById('validationDetailsResults').innerHTML = html;
+                        
+                        // Populate Status Grid
+                        const grid = document.getElementById('subjectGrid');
+                        if (grid) {
+                            grid.innerHTML = '';
+                            const allSubjs = new Set();
+                            const failedSubjs = new Set();
+                            
+                            // Collect from pipelines
+                            for (const [p, res] of Object.entries(data.parsed.pipelines)) {
+                                if (res.stats && res.stats.all_subjects_list) {
+                                    res.stats.all_subjects_list.forEach(s => allSubjs.add(s));
+                                }
+                                if (res.missing_items) {
+                                    res.missing_items.forEach(m => {
+                                        const match = m.match(/sub-\w+/);
+                                        if (match) {
+                                            failedSubjs.add(match[0]);
+                                            allSubjs.add(match[0]);
+                                        }
+                                    });
+                                }
+                            }
+                            
+                            console.log("Subject Grid Population:", { 
+                                pipelines: Object.keys(data.parsed.pipelines), 
+                                totalUniqueSubjects: allSubjs.size,
+                                failedCount: failedSubjs.size
+                            });
+
+                            if (allSubjs.size > 0) {
+                                const allCount = allSubjs.size;
+                                const failedCount = failedSubjs.size;
+                                const passedCount = allCount - failedCount;
+                                const pct = Math.round((passedCount / allCount) * 100);
+                                
+                                document.getElementById('globalCompletnessPct').innerText = `${pct}% (${passedCount}/${allCount})`;
+                                document.getElementById('globalProgressBarFound').style.width = `${pct}%`;
+                                document.getElementById('globalProgressBarMissing').style.width = `${100-pct}%`;
+                                
+                                Array.from(allSubjs).sort().forEach(s => {
+                                    const isFailed = failedSubjs.has(s);
+                                    const box = document.createElement('span');
+                                    box.className = `badge ${isFailed ? 'bg-danger' : 'bg-success'}`;
+                                    box.style.width = '14px';
+                                    box.style.display = 'inline-block';
+                                    box.style.height = '14px';
+                                    box.style.padding = '0';
+                                    box.style.borderRadius = '2px';
+                                    box.style.cursor = 'help';
+                                    box.title = s + (isFailed ? ' - Issues Found' : ' - Passed');
+                                    box.innerHTML = '&nbsp;';
+                                    // Empty box, hover for Subject ID
+                                    grid.appendChild(box);
+                                });
+                            } else {
+                                grid.innerHTML = '<div class="text-muted small">No subjects identified for grid.</div>';
+                            }
+                        }
+
+                        if (missingSubjects.size > 0) {
+                            const btn = document.getElementById('useMissingBtn');
+                            if (btn) {
+                                btn.style.display = 'block';
+                                btn.dataset.subjects = Array.from(missingSubjects).join(' ');
+                            }
+                        }
+                        
+                        // If parsing succeeded, hide the raw log by default but show the header
+                        document.getElementById('validationLogHeader').style.display = 'block';
+                        document.getElementById('validationOutput').style.display = 'none';
+                        document.getElementById('logToggleText').innerText = 'Show Logs';
+                    }
+                }
+                
+                // Combine stderr and stdout for the log box, but prioritize stderr for human logs
+                let logText = (data.stderr || "") + (data.stdout || "");
+                
+                // Filter out the JSON part from stdout if we parsed it successfully
+                if (data.parsed && logText.includes('{') && logText.includes('}')) {
+                    // Simple way to try to hide the JSON block from the visual console log if it was parsed
+                    try {
+                        const firstBrace = logText.indexOf('{');
+                        const lastBrace = logText.lastIndexOf('}');
+                        if (firstBrace !== -1 && lastBrace !== -1) {
+                            logText = logText.substring(0, firstBrace) + "[JSON Results Parsed Above]\n" + logText.substring(lastBrace + 1);
+                        }
+                    } catch(e) {}
+                }
+                
+                if (data.log_file) {
+                    logText += (logText ? '\n\n' : '') + `Log saved at: ${data.log_file}`;
+                }
+                logEl.innerText = logText;
+                
+                // If it failed or was not parsed, always show logs
+                if (!data.parsed) {
+                    document.getElementById('validationLogHeader').style.display = 'block';
+                    document.getElementById('validationOutput').style.display = 'block';
+                    document.getElementById('logToggleText').innerText = 'Hide Logs';
+                }
+            } catch (err) {
+                _setUtilityStatus(statusEl, 'Validation request failed: ' + err.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = 'Run Validation';
+            }
+        }
+
+        function clearValidationOutput() {
+            document.getElementById('validationOutput').innerText = '';
+            document.getElementById('validation_verbose').checked = false;
+            _setUtilityStatus(document.getElementById('validationStatusBox'), '');
+            const resDiv = document.getElementById('validationDetailsResults');
+            if (resDiv) resDiv.innerHTML = '';
+            document.getElementById('validationLogHeader').style.display = 'none';
+            document.getElementById('validationOutput').style.display = 'block';
+        }
+
+        function toggleValidationLog() {
+            const log = document.getElementById('validationOutput');
+            const toggleText = document.getElementById('logToggleText');
+            if (log.style.display === 'none') {
+                log.style.display = 'block';
+                toggleText.innerText = 'Hide Logs';
+            } else {
+                log.style.display = 'none';
+                toggleText.innerText = 'Show Logs';
+            }
+        }
+
+        function applyMissingToRunner() {
+            const btn = document.getElementById('useMissingBtn');
+            const subjects = btn.dataset.subjects;
+            if (subjects) {
+                document.getElementById('runner_subjects').value = subjects;
+                switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
+                showStatus(`Applied ${subjects.split(' ').length} missing subjects to Runner filter.`);
+            }
+        }
+
+        async function loadReportsList() {
+            const deriv = document.getElementById('validation_derivatives_folder').value.trim();
+            const pipeline = document.getElementById('validation_pipeline').value;
+            
+            _setUtilityStatus(document.getElementById('validationStatusBox'), 'Scanning for HTML reports...', false);
+            try {
+                const resp = await fetch('/list_reports', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ derivatives_dir: deriv, pipeline: pipeline })
+                });
+                const data = await resp.json();
+                
+                if (data.reports && data.reports.length > 0) {
+                    document.getElementById('reportModal').style.display = 'block';
+                    document.body.style.overflow = 'hidden';
+                    
+                    const list = document.getElementById('reportListItems');
+                    list.innerHTML = '';
+                    data.reports.forEach(r => {
+                        const d = document.createElement('div');
+                        d.className = 'p-2 border-bottom mb-1 rounded bg-white report-item';
+                        d.style.cursor = 'pointer';
+                        d.style.fontSize = '0.85rem';
+                        d.onmouseover = () => d.style.background = '#eef7ff';
+                        d.onmouseout = () => d.style.background = 'white';
+                        d.innerHTML = `<i class="fas fa-file-alt text-info me-2"></i><strong>${r.subject}</strong><br><small class="text-muted">${r.name}</small>`;
+                        d.onclick = () => {
+                            document.querySelectorAll('.report-item').forEach(i => i.style.border = '1px solid #eee');
+                            d.style.border = '2px solid var(--accent-color)';
+                            openReport(r.path);
+                        };
+                        list.appendChild(d);
+                    });
+                     _setUtilityStatus(document.getElementById('validationStatusBox'), `Found ${data.reports.length} reports.`, false);
+                } else {
+                    _setUtilityStatus(document.getElementById('validationStatusBox'), 'No HTML reports found in derivatives.', true);
+                }
+            } catch (e) {
+                console.error("Reports scan failed", e);
+            }
+        }
+
+        function openReport(path) {
+            document.getElementById('reportPlaceholder').style.display = 'none';
+            document.getElementById('reportIframe').style.display = 'block';
+            document.getElementById('reportIframe').src = `/view_report?path=${encodeURIComponent(path)}`;
+        }
+
+        function closeReportModal() {
+            document.getElementById('reportModal').style.display = 'none';
+            document.body.style.overflow = 'auto';
+            document.getElementById('reportIframe').src = 'about:blank';
+            document.getElementById('reportPlaceholder').style.display = 'flex';
+        }
+
+        async function scanValidationPipelines() {
+            const bids = document.getElementById('validation_bids_folder').value.trim();
+            const deriv = document.getElementById('validation_derivatives_folder').value.trim();
+            if (!bids || !deriv) {
+                _setUtilityStatus(document.getElementById('validationStatusBox'), 'Set BIDS and Derivatives folders first.', true);
+                return;
+            }
+            try {
+                const resp = await fetch('/detect_validation_pipelines', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ bids_dir: bids, derivatives_dir: deriv })
+                });
+                const data = await resp.json();
+                if (data.pipelines) {
+                    const sel = document.getElementById('validation_pipeline');
+                    sel.innerHTML = '<option value="">All detected pipelines</option>';
+                    data.pipelines.forEach(p => {
+                        const opt = new Option(p.charAt(0).toUpperCase() + p.slice(1), p);
+                        sel.add(opt);
+                    });
+                    _setUtilityStatus(document.getElementById('validationStatusBox'), `Found ${data.pipelines.length} pipelines.`);
+                } else if (data.error) {
+                    _setUtilityStatus(document.getElementById('validationStatusBox'), data.error, true);
+                }
+            } catch (e) {
+                console.error("Pipeline scan error:", e);
+            }
+        }
+
+        async function startApptainerBuild() {
+            const statusEl = document.getElementById('buildStatusBox');
+            const logEl = document.getElementById('buildOutput');
+            const btn = document.getElementById('buildApptainerBtn');
+            const payload = {
+                output_dir: document.getElementById('build_output_dir').value.trim(),
+                tmp_dir: document.getElementById('build_tmp_dir').value.trim(),
+                docker_repo: document.getElementById('build_docker_repo').value.trim(),
+                docker_tag: document.getElementById('build_docker_tag').value.trim(),
+                dockerfile: document.getElementById('build_dockerfile').value.trim(),
+                keep_temp: document.getElementById('build_keep_temp').checked
+            };
+            if (!payload.output_dir || !payload.tmp_dir) {
+                _setUtilityStatus(statusEl, 'Output and temporary directories are required.', true);
+                return;
+            }
+            if (!payload.dockerfile && (!payload.docker_repo || !payload.docker_tag)) {
+                _setUtilityStatus(statusEl, 'Provide a Docker repo/tag or a Dockerfile path.', true);
+                return;
+            }
+            btn.disabled = true;
+            btn.innerText = 'Building...';
+            _setUtilityStatus(statusEl, 'Starting Apptainer build...', false);
+            try {
+                const resp = await fetch('/build_apptainer', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    _setUtilityStatus(statusEl, data.error || 'Build failed.', true);
+                } else {
+                    const message = data.output_image ? `Built ${data.output_image}` : 'Build completed';
+                    _setUtilityStatus(statusEl, message, !data.success);
+                }
+                let logText = data.stdout || data.stderr || '';
+                if (data.log_file) {
+                    logText += (logText ? '\n\n' : '') + `Log saved at: ${data.log_file}`;
+                }
+                logEl.innerText = logText;
+            } catch (err) {
+                _setUtilityStatus(statusEl, 'Build request failed: ' + err.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = 'Start Build';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
+        });
     </script>
 </body>
 </html>
