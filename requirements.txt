@@ -19,6 +19,10 @@ colorlog>=6.0.0
 
 # For better CLI experience and progress indication
 tqdm>=4.60.0
+
+# GUI Dependencies
+flask>=2.3.0
+waitress>=3.0.0
 click>=8.0.0
 
 # For YAML configuration support (optional enhancement)
