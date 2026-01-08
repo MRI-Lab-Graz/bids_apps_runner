@@ -98,3 +98,8 @@ If needed, you can change the validation timeout via:
 
    export BIDS_RUNNER_VALIDATE_TIMEOUT=30
 
+Graphical Interface
+-------------------
+
+A browser-based workflow supplementing the CLI is available via :doc:`gui`. Run `bash gui/start_gui.sh` or `python app_gui.py`, point your browser to `http://localhost:8080`, and use the form to scan containers, load per-app arguments, save configs, and launch `run_bids_apps.py` with the same flags described above. The GUI also tailors the help output from each container, surfaces validation toggles, and streams the runner logs back to the browser for live feedback.
+

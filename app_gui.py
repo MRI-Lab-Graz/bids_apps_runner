@@ -108,6 +108,34 @@ def check_container_version():
     
     return jsonify({'info': 'No newer version found or repo not identified'}), 200
 
+# Global state to track if a job was started in this GUI session
+GUI_SESSION_STARTED = False
+
+@app.route('/get_log', methods=['GET'])
+def get_log():
+    try:
+        # Find the most recent nohup log file
+        log_files = glob.glob(str(BASE_DIR / "nohup_bids_runner_*.log"))
+        if not log_files:
+            return jsonify({'content': '', 'filename': 'none'}), 200
+        
+        latest_log = max(log_files, key=os.path.getctime)
+        
+        # Use tail to get last 150 lines efficiently
+        result = subprocess.run(["tail", "-n", "150", latest_log], capture_output=True, text=True)
+        content = result.stdout
+        
+        # Strip ANSI escape sequences (colors)
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        content = ansi_escape.sub('', content)
+            
+        return jsonify({
+            'filename': os.path.basename(latest_log),
+            'content': content
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/health')
 def health():
     return "Flask is running and responding!", 200
@@ -120,9 +148,13 @@ def get_app_help():
     
     try:
         # Run container help
+        print(f"[GUI] Fetching help for {container}...", flush=True)
         cmd = ['apptainer', 'run', '--containall', container, '--help']
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
         output = result.stdout + result.stderr
+        
+        if result.returncode != 0:
+            print(f"[GUI] Apptainer help returned exit code {result.returncode}", flush=True)
         
         # IMPROVED: Clean up output (remove usage summary from the top to prevent it from confusing the parser)
         # Usually headers start with a capitalized word followed by colon, e.g., "Options:"
@@ -139,19 +171,25 @@ def get_app_help():
             header = lines[0].strip().rstrip(':')
             
             # Skip usage/help summary sections
-            if any(x in header.lower() for x in ['usage', 'synopsis', 'description', 'positional']):
+            if any(x in header.lower() for x in ['usage', 'synopsis', 'description']):
                 continue
                 
             content = '\n'.join(lines[1:])
             
             # Only process sections that look like they have definitions
-            if '  --' not in part: continue
+            if '--' not in part: continue
 
             options = []
-            # Split by flags that are at the beginning of a line (with 2 spaces)
-            arg_blocks = re.split(r'\n\s{2,}(?=--)', "\n  " + content)
+            # Split by flags that are at the beginning of a line (with 2+ spaces or start of block)
+            arg_blocks = re.split(r'\n\s*(?=--)', "\n" + content)
             
             for block in arg_blocks:
+                block = block.strip()
+                if not block.startswith('--'): 
+                    # Try to find a flag anyway if it's not at the start
+                    flag_match = re.search(r'(--[a-zA-Z0-9-]+)', block)
+                    if not flag_match: continue
+                
                 # Extract first flag found in the definition line
                 flag_match = re.search(r'(--[a-zA-Z0-9-]+)', block)
                 if not flag_match: continue
@@ -222,7 +260,8 @@ def get_app_help():
 
         return jsonify({
             'sections': sections,
-            'app_info': {'name': app_name, 'url': doc_url}
+            'app_info': {'name': app_name, 'url': doc_url},
+            'raw_help': output if not sections else None
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -270,8 +309,10 @@ def list_containers():
         return jsonify({'error': 'No folder provided'}), 400
     
     try:
+        # Expand user path if needed
+        folder_path = os.path.expanduser(folder)
         # Search for .sif and .simg files
-        containers = glob.glob(os.path.join(folder, "*.sif")) + glob.glob(os.path.join(folder, "*.simg"))
+        containers = glob.glob(os.path.join(folder_path, "*.sif")) + glob.glob(os.path.join(folder_path, "*.simg"))
         containers = [os.path.basename(c) for c in containers]
         return jsonify({'containers': sorted(containers)})
     except Exception as e:
@@ -324,6 +365,7 @@ def save_config():
 
 @app.route('/run_app', methods=['POST'])
 def run_app():
+    global GUI_SESSION_STARTED
     config_path = request.json.get('config_path')
     runner_args = request.json.get('runner_args', [])
     if not config_path:
@@ -372,6 +414,8 @@ def run_app():
         print(f"[GUI] Executing: {' '.join(cmd)}")
         subprocess.Popen(cmd, cwd=BASE_DIR)
         
+        GUI_SESSION_STARTED = True
+        
         return jsonify({'message': f'BIDS App Runner started in background. Command: {" ".join(cmd)}'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -404,7 +448,19 @@ def kill_job():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    import socket
     port = 8080
+    max_tries = 20
+    
+    # Simple loop to find an available port
+    for _ in range(max_tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(('0.0.0.0', port)) != 0:
+                # Port is available
+                break
+            else:
+                port += 1
+    
     print("--------------------------------------------------------")
     print(f"  BIDS App Runner GUI starting on http://localhost:{port}")
     print(f"  Note: If local, open http://localhost:{port}")

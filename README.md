@@ -198,6 +198,16 @@ python run_bids_apps.py -x config.json --pilot --dry-run
 python run_bids_apps.py -x config.json --pilot --debug
 ```
 
+## Browser-based GUI
+
+The project ships with a lightweight Flask/Waitress application (`app_gui.py` plus `templates/index.html`) so you can build configurations and drive `run_bids_apps.py` from a browser. Launch the GUI with `bash gui/start_gui.sh` (or `python app_gui.py`) and point your browser at `http://localhost:8080` to:
+
+- scan a directory for Apptainer/Singularity images, check for newer releases, and load container-specific help automatically
+- assemble BIDS, derivatives, and temp folders along with runner overrides (subjects, pilot, dry-run, validation, etc.)
+- peek at live runner logs, start/stop the background job, and reuse previously saved configs
+
+The interface fetches the container's `--help` output to surface pipeline-specific arguments, links directly to the upstream documentation, and runs `run_bids_apps.py` in the background via `--nohup`. Read the GUI reference on Read the Docs to see how the REST endpoints, log tailing, and help parsing work.
+
 ## Installation
 
 1. **Clone the repository**

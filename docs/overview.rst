@@ -1,7 +1,7 @@
 Overview
 ========
 
-This repository provides two main workflows:
+This repository provides three main workflows:
 
 1. **Build Apptainer containers from Docker images**
 
@@ -9,6 +9,7 @@ This repository provides two main workflows:
 
 2. **Run BIDS Apps based on JSON configuration files**
 
+3. **Visually assemble configs and launch runs from the GUI** (see :doc:`gui`).
    Use :file:`run_bids_apps.py` to execute a BIDS App container against a BIDS dataset with all paths/options specified in a JSON config.
 
 Key ideas
@@ -25,4 +26,6 @@ What’s in the repo
 - :file:`run_bids_apps.py` – local runner (multiprocessing) driven by a JSON config.
 - :file:`run_bids_apps_hpc.py` – SLURM/DataLad-oriented runner for HPC.
 - :file:`check_app_output.py` – validate derivatives and generate "missing subject" reports.
+- :file:`app_gui.py` + :file:`templates/index.html` – browser-based interface that wraps configuration, container help, and runner controls.
+- :file:`gui/start_gui.sh` – helper script that exports the project path and launches the GUI.
 

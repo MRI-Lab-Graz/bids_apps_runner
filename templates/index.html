@@ -3,385 +3,344 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BIDS App Runner GUI</title>
+    <title>BIDS App Runner - MRI-Lab Graz</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/all.min.css">
     <style>
-        body { background-color: #f4f7f6; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; color: #333; }
-        .container { max-width: 1100px; margin: 0 auto; }
-        .card { background: white; border: 1px solid #dee2e6; padding: 0; margin-bottom: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.07); overflow: hidden; }
-        .card-header { background: #2c3e50; color: white; padding: 15px 20px; font-weight: 600; font-size: 1.1rem; }
-        .card-body { padding: 25px; }
-        .section-header { border-bottom: 2px solid #3498db; margin: 30px 0 15px 0; padding-bottom: 8px; color: #2c3e50; font-weight: 700; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px; }
-        .btn { padding: 10px 18px; cursor: pointer; border: none; border-radius: 5px; font-weight: 600; transition: all 0.2s; font-size: 0.9rem; }
-        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
-        .btn-primary { background: #3498db; color: white; }
-        .btn-success { background: #27ae60; color: white; }
-        .btn-danger { background: #e74c3c; color: white; }
-        .btn-warning { background: #f39c12; color: white; }
-        .btn-outline-secondary { background: #f8f9fa; color: #495057; border: 1px solid #ced4da; }
-        .btn-outline-secondary:hover { background: #e9ecef; }
-        .form-label { display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.9rem; color: #495057; }
-        .form-control, .form-select { width: 100%; padding: 10px; border: 1px solid #ced4da; border-radius: 5px; box-sizing: border-box; font-size: 0.95rem; }
-        .input-group { display: flex; align-items: stretch; gap: 0; }
-        .input-group .form-control { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-        .input-group .btn { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: none; }
-        .row { display: flex; flex-wrap: wrap; margin: 0 -12px; }
-        .col-md-6 { width: 50%; padding: 0 12px; box-sizing: border-box; }
-        .col-md-4 { width: 33.33%; padding: 0 12px; box-sizing: border-box; }
-        .col-md-8 { width: 66.66%; padding: 0 12px; box-sizing: border-box; }
-        .mb-3 { margin-bottom: 20px; }
-        #browseModal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); backdrop-filter: blur(2px); }
-        .modal-content-dir { background: white; margin: 5vh auto; padding: 0; width: 90%; max-width: 800px; border-radius: 10px; height: 85vh; display: flex; flex-direction: column; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
-        .modal-header-dir { background: #f8f9fa; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #dee2e6; padding: 15px 25px; border-radius: 10px 10px 0 0; }
-        .modal-body-dir { overflow-y: auto; flex-grow: 1; padding: 20px 25px; }
-        .dir-item { padding: 12px 15px; cursor: pointer; border-bottom: 1px solid #f1f3f5; font-family: 'Courier New', Courier, monospace; display: flex; align-items: center; transition: background 0.1s; border-radius: 4px; }
-        .dir-item:hover { background: #e7f3ff; color: #007bff; }
-        .dir-item-icon { margin-right: 15px; font-size: 1.3rem; }
-        #currentPathDisplay { background: #fff5f5; color: #c92a2a; padding: 12px 15px; border: 1px solid #ffa8a8; margin-bottom: 15px; border-radius: 6px; word-break: break-all; font-family: monospace; font-weight: bold; }
-        .opt-section { margin-bottom: 12px; border: 1px solid #dee2e6; border-radius: 8px; overflow: hidden; }
-        .opt-section-header { background: #f8f9fa; padding: 12px 20px; cursor: pointer; font-weight: 700; font-size: 0.95rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; transition: background 0.2s; color: #495057; }
-        .opt-section-header:hover { background: #e9ecef; }
-        .opt-section-content { display: none; padding: 20px; background: white; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 15px; }
+        :root {
+            --primary-color: #2c3e50;
+            --accent-color: #3498db;
+            --bg-color: #f4f7f6;
+            --card-bg: #ffffff;
+        }
+        body { background-color: var(--bg-color); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding-bottom: 50px; }
+        .navbar { background-color: var(--primary-color); color: white; margin-bottom: 30px; border-bottom: 4px solid var(--accent-color); padding: 15px 0; }
+        .navbar-brand { font-weight: 700; color: white !important; font-size: 1.5rem; }
+        .branding-sub { font-size: 0.85rem; opacity: 0.8; margin-top: -2px; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); margin-bottom: 25px; overflow: hidden; }
+        .card-header { background-color: #fff; border-bottom: 1px solid #f0f0f0; font-weight: 700; color: var(--primary-color); padding: 15px 25px; }
+        .section-header { border-bottom: 2px solid var(--accent-color); margin: 30px 0 15px 0; padding-bottom: 8px; color: var(--primary-color); font-weight: 700; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px; }
+        .btn { border-radius: 6px; font-weight: 600; padding: 10px 20px; transition: all 0.2s; }
+        .btn-primary { background-color: var(--accent-color); border: none; }
+        .btn-primary:hover { background-color: #2980b9; transform: translateY(-1px); }
+        .btn-accent { background-color: #8e44ad; color: white; border: none; }
+        .btn-accent:hover { background-color: #7d3c98; transform: translateY(-1px); color: white; }
+        .form-label { font-weight: 600; color: #495057; font-size: 0.9rem; margin-bottom: 8px; }
+        .form-control, .form-select { border-radius: 6px; padding: 10px 12px; border: 1px solid #dee2e6; }
+        .form-control:focus, .form-select:focus { box-shadow: 0 0 0 0.25rem rgba(52, 152, 219, 0.15); border-color: var(--accent-color); }
+        
+        /* Terminal Styling */
+        .terminal-container { margin-top: 40px; }
+        .terminal-header { background: #333; color: #efefef; padding: 10px 20px; border-radius: 8px 8px 0 0; display: flex; justify-content: space-between; align-items: center; font-family: sans-serif; font-size: 0.9rem; }
+        #terminal {
+            background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 0 0 8px 8px; 
+            height: 400px; overflow-y: auto; font-family: 'Consolas', 'Monaco', 'Courier New', monospace; 
+            font-size: 0.85rem; border: 1px solid #333; margin: 0; white-space: pre-wrap; 
+            word-wrap: break-word; line-height: 1.5;
+        }
+        
+        .opt-section { border: 1px solid #f0f0f0; margin-bottom: 12px; border-radius: 8px; overflow: hidden; }
+        .opt-section-header { background: #fcfcfc; padding: 12px 20px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: 600; border-bottom: 1px solid #f0f0f0; transition: background 0.2s; }
+        .opt-section-header:hover { background: #f8f9fa; }
+        .opt-section-header i { transition: transform 0.3s ease; color: #adb5bd; }
+        .opt-section-content { display: none; padding: 20px; background: #fff; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 15px; }
         .opt-section.active .opt-section-content { display: grid; }
-        .opt-section.active .opt-section-header { border-bottom: 1px solid #3498db; background: #e7f3ff; color: #004085; }
+        .opt-section.active .opt-section-header { background: #eef7ff; color: var(--accent-color); border-bottom-color: var(--accent-color); }
+        .opt-section.active .opt-section-header i { transform: rotate(180deg); color: var(--accent-color); }
+        
+        .footer { margin-top: 60px; padding: 40px 0; background: #fff; border-top: 1px solid #eee; }
+        .footer h6 { color: var(--primary-color); font-weight: 700; }
+        .footer-link { color: var(--accent-color); text-decoration: none; font-weight: 600; }
+        .footer-link:hover { text-decoration: underline; }
+
+        #browseModal { display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
+        .modal-content-dir { background: white; margin: 5% auto; width: 90%; max-width: 850px; border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,0.2); height: 85vh; display: flex; flex-direction: column; }
+        .modal-header-dir { padding: 20px 30px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        .modal-body-dir { flex-grow: 1; overflow-y: auto; padding: 20px 30px; }
+        .dir-item { padding: 10px 15px; cursor: pointer; border-radius: 6px; display: flex; align-items: center; margin-bottom: 4px; transition: background 0.2s; font-family: monospace; }
+        .dir-item:hover { background: #eef7ff; color: var(--accent-color); }
+        .dir-item i { margin-right: 12px; font-size: 1.1rem; }
     </style>
 </head>
 <body>
-    <div style="background: #2c3e50; color: white; padding: 20px; font-size: 1.5rem; font-weight: 700; text-align: center; margin-bottom: 30px; border-radius: 0 0 15px 15px;">
-        BIDS App Runner Configuration
-    </div>
-    <div class="container">
+    <nav class="navbar">
+        <div class="container d-flex justify-content-between align-items-center">
+            <div>
+                <a class="navbar-brand" href="#"><i class="fas fa-layer-group me-2"></i>BIDS App Runner</a>
+                <div class="branding-sub">Advanced Workflow Control • MRI-Lab Graz</div>
+            </div>
+            <div class="text-end d-none d-md-block">
+                <a href="https://github.com/MRI-Lab-Graz/bids_apps_runner" target="_blank" class="btn btn-outline-light btn-sm"><i class="fab fa-github me-1"></i> GitHub Repo</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container container-main">
         <div class="card">
-            <div class="card-header">Configure Runner Parameters</div>
+            <div class="card-header">
+                Configuration & Launch
+            </div>
             <div class="card-body">
-                <form id="configForm">
-                    <div class="section-header">1. Data Paths</div>
+                <form id="runnerForm">
+                    <div class="section-header">1. Data Locations</div>
                     <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">BIDS Dataset Folder</label>
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Path to raw BIDS data (must contain dataset_description.json)">BIDS Dataset Folder</label>
                             <div class="input-group">
-                                <input type="text" id="bids_folder" class="form-control">
+                                <input type="text" id="bids_folder" class="form-control" placeholder="/path/to/rawdata">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('bids_folder')">...</button>
                             </div>
                         </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Output Folder</label>
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Where derivative results will be saved">Output Folder</label>
                             <div class="input-group">
-                                <input type="text" id="output_folder" class="form-control">
+                                <input type="text" id="output_folder" class="form-control" placeholder="/path/to/derivatives">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('output_folder')">...</button>
                             </div>
                         </div>
                     </div>
                     <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Work/Temp Folder</label>
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Temporary space for intermediate files (recommended for performance)">Work/Temp Folder</label>
                             <div class="input-group">
-                                <input type="text" id="tmp_folder" class="form-control">
+                                <input type="text" id="tmp_folder" class="form-control" placeholder="/path/to/temp">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('tmp_folder')">...</button>
                             </div>
                         </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Templateflow (Optional)</label>
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Local directory for pre-downloaded TemplateFlow resources (Optional)">Templateflow (Optional)</label>
                             <div class="input-group">
                                 <input type="text" id="templateflow_dir" class="form-control">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('templateflow_dir')">...</button>
                             </div>
                         </div>
                     </div>
-                    <div class="section-header">2. Container Selection</div>
-                    <div class="row">
-                        <div class="col-md-8 mb-3">
+
+                    <div class="section-header">2. Container Settings</div>
+                    <div class="row align-items-end">
+                        <div class="col-md-6 mb-4">
                             <label class="form-label">Apptainer Images Folder</label>
                             <div class="input-group">
                                 <input type="text" id="container_folder" class="form-control">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('container_folder')">...</button>
-                                <button type="button" class="btn btn-warning" onclick="scanContainers()">Scan</button>
+                                <button type="button" class="btn btn-primary" onclick="scanContainers()">Scan</button>
                             </div>
                         </div>
-                        <div class="col-md-4 mb-3">
-                            <label class="form-label">Select App</label>
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label">Select App Image</label>
                             <div class="input-group">
                                 <select id="container_select" class="form-select" onchange="checkAppVersion()"></select>
-                                <button type="button" id="fetchHelpBtn" class="btn btn-primary" style="display:none;" onclick="fetchAppOptions()">Fetch Options</button>
+                                <button type="button" id="fetchHelpBtn" class="btn btn-accent" style="display:none;" onclick="fetchAppOptions()">Load Options</button>
                             </div>
-                            <div id="versionAlert" style="margin-top: 5px; font-size: 0.85rem; display: none;"></div>
+                            <div id="versionAlert" style="margin-top: 8px; font-size: 0.85rem; display: none;"></div>
                         </div>
                     </div>
+
                     <div id="dynamicOptionsSection" style="display: none;">
                         <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
-                            <span>App Specific Options</span>
-                            <a id="docLink" href="#" target="_blank" style="font-size: 0.8rem; color: #3498db;">📖 Doc</a>
+                            <span>App-Specific Arguments</span>
+                            <a id="docLink" href="#" target="_blank" class="footer-link" style="font-size: 0.8rem;"><i class="fas fa-book me-1"></i> Documentation</a>
                         </div>
                         <div id="optionsContainer"></div>
                     </div>
-                    <div class="section-header">3. Execution Details</div>
+
+                    <div class="section-header">3. Execution Parameters</div>
                     <div class="row">
-                        <div class="col-md-4 mb-3">
+                        <div class="col-md-4 mb-4">
                             <label class="form-label">Analysis Level</label>
                             <select class="form-select" id="analysis_level">
                                 <option value="participant">Participant</option>
                                 <option value="group">Group</option>
                             </select>
                         </div>
-                        <div class="col-md-4 mb-3">
+                        <div class="col-md-4 mb-4">
                             <label class="form-label">Parallel Jobs</label>
                             <input type="number" class="form-control" id="jobs" value="1">
                         </div>
-                        <div class="col-md-4 mb-3">
+                        <div class="col-md-4 mb-4">
                             <label class="form-label">Config Filename</label>
                             <input type="text" class="form-control" id="config_name" placeholder="config.json">
                         </div>
                     </div>
 
-                    <div class="section-header">4. Runner Options</div>
+                    <div class="section-header">4. Runner Overrides</div>
                     <div class="row">
-                        <div class="col-md-4 mb-3">
+                        <div class="col-md-3 mb-4">
                             <label class="form-label">Log Level</label>
-                            <select class="form-select runner-opt" id="runner_log_level" data-flag="--log-level">
+                            <select class="form-select runner-opt" id="runner_log_level" data-flag="--log-level" title="Set logging level for the runner script (default: INFO)">
                                 <option value="INFO">INFO</option>
                                 <option value="DEBUG">DEBUG</option>
                                 <option value="WARNING">WARNING</option>
                                 <option value="ERROR">ERROR</option>
                             </select>
-                            <small style="color:#666; font-style:italic;">Detail level of the terminal output.</small>
                         </div>
-                        <div class="col-md-8 mb-3">
-                            <label class="form-label">Specific Subjects (Space separated)</label>
-                            <input type="text" class="form-control runner-opt" id="runner_subjects" data-flag="--subjects" placeholder="sub-01 sub-02">
-                            <small style="color:#666; font-style:italic;">Optional: Only process these IDs (e.g. sub-01 sub-02).</small>
+                        <div class="col-md-9 mb-4">
+                            <label class="form-label">Filter Subjects (IDs separated by space)</label>
+                            <input type="text" class="form-control runner-opt" id="runner_subjects" data-flag="--subjects" placeholder="sub-01 sub-02" title="Process only specified subjects (e.g., sub-001 sub-002)">
                         </div>
                     </div>
-                    <div class="row" style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 0 0 20px 0; border: 1px solid #dee2e6;">
+
+                    <div class="row g-3" style="background: #fdfdfd; padding: 20px; border-radius: 10px; border: 1px solid #f0f0f0; margin: 0 0 30px 0;">
                         <div class="col-md-3">
-                            <label style="display:block; margin-bottom:2px; font-weight:600;"><input type="checkbox" class="runner-opt" data-flag="--validate"> Validate Outputs</label>
-                            <small style="display:block; font-size:0.75rem; color:#666; margin-bottom:12px;">Generate reports after processing.</small>
-
-                            <label style="display:block; margin-bottom:2px; font-weight:600;"><input type="checkbox" class="runner-opt" data-flag="--validate-only"> Validate Only</label>
-                            <small style="display:block; font-size:0.75rem; color:#666; margin-bottom:12px;">Skip app run, only check outputs.</small>
-
-                            <label style="display:block; margin-bottom:2px; font-weight:600;"><input type="checkbox" class="runner-opt" data-flag="--dry-run"> Dry Run</label>
-                            <small style="display:block; font-size:0.75rem; color:#666;">Preview commands without running.</small>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input runner-opt" type="checkbox" id="v_out" data-flag="--validate">
+                                <label class="form-check-label" for="v_out" title="Validate outputs after processing and generate reports">Validate Outputs</label>
+                                <div class="text-muted" style="font-size: 0.7rem;">Post-run validation</div>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input runner-opt" type="checkbox" id="v_only" data-flag="--validate-only">
+                                <label class="form-check-label" for="v_only" title="Only validate outputs, skip processing">Validate Only</label>
+                                <div class="text-muted" style="font-size: 0.7rem;">Skip processing</div>
+                            </div>
                         </div>
                         <div class="col-md-3">
-                            <label style="display:block; margin-bottom:2px; font-weight:600;"><input type="checkbox" class="runner-opt" data-flag="--force"> Force Reprocess</label>
-                            <small style="display:block; font-size:0.75rem; color:#666; margin-bottom:12px;">Overwrite existing output files.</small>
-
-                            <label style="display:block; margin-bottom:2px; font-weight:600;"><input type="checkbox" class="runner-opt" data-flag="--pilot"> Pilot Mode</label>
-                            <small style="display:block; font-size:0.75rem; color:#666;">Test run on 1 random subject.</small>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input runner-opt" type="checkbox" id="force" data-flag="--force">
+                                <label class="form-check-label" for="force" title="Force reprocessing of subjects even if output exists">Force Overwrite</label>
+                                <div class="text-muted" style="font-size: 0.7rem;">Ignore markers</div>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input runner-opt" type="checkbox" id="pilot" data-flag="--pilot">
+                                <label class="form-check-label" for="pilot" title="Pilot mode: process only one randomly selected subject (forces jobs=1)">Pilot (1 Sub)</label>
+                                <div class="text-muted" style="font-size: 0.7rem;">Quick test run</div>
+                            </div>
                         </div>
                         <div class="col-md-3">
-                            <label style="display:block; margin-bottom:2px; font-weight:600;"><input type="checkbox" class="runner-opt" data-flag="--debug"> Debug Mode</label>
-                            <small style="display:block; font-size:0.75rem; color:#666; margin-bottom:12px;">Show detailed container logs.</small>
-
-                            <label style="display:block; margin-bottom:2px; font-weight:600;"><input type="checkbox" class="runner-opt" data-flag="--reprocess-missing"> Reprocess Missing</label>
-                            <small style="display:block; font-size:0.75rem; color:#666;">Auto-run subjects with no outputs.</small>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input runner-opt" type="checkbox" id="debug" data-flag="--debug">
+                                <label class="form-check-label" for="debug" title="Enable debug mode with detailed container execution logs">Debug Logs</label>
+                                <div class="text-muted" style="font-size: 0.7rem;">Verbose output</div>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input runner-opt" type="checkbox" id="dry" data-flag="--dry-run">
+                                <label class="form-check-label" for="dry" title="Show commands that would be run without executing them">Dry Run</label>
+                                <div class="text-muted" style="font-size: 0.7rem;">Simulation only</div>
+                            </div>
                         </div>
                         <div class="col-md-3">
-                            <label style="display:block; margin-bottom:2px; font-weight:600;"><input type="checkbox" class="runner-opt" data-flag="--clean-success-markers"> Clean Markers</label>
-                            <small style="display:block; font-size:0.75rem; color:#666;">Force fresh detection of progress.</small>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input runner-opt" type="checkbox" id="remiss" data-flag="--reprocess-missing">
+                                <label class="form-check-label" for="remiss" title="Automatically reprocess subjects with missing outputs (implies --validate)">Reprocess Missing</label>
+                                <div class="text-muted" style="font-size: 0.7rem;">Auto-recovery</div>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input runner-opt" type="checkbox" id="clean_markers" data-flag="--clean-success-markers">
+                                <label class="form-check-label" for="clean_markers" title="Remove all success markers (forces fresh detection of already processed subjects)">Clean Markers</label>
+                                <div class="text-muted" style="font-size: 0.7rem;">Reset progress</div>
+                            </div>
                         </div>
                     </div>
-                    
-                    <div id="statusAlert" style="display:none; padding: 10px; margin: 10px 0; border-radius: 5px; text-align: center; font-weight: bold;"></div>
 
-                    <div style="margin-top: 40px; text-align: center; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
-                        <button class="btn btn-primary" type="button" onclick="loadExistingConfig()">📂 Load Config</button>
-                        <button class="btn btn-success" type="button" onclick="handleSaveAndRun(false)">💾 Save Only</button>
-                        <button class="btn btn-danger" type="button" onclick="handleSaveAndRun(true)">🚀 Save & Run Now</button>
-                        <button class="btn btn-warning" id="runApp" style="display: none;" type="button" onclick="executeNow()">⚡ Run (Cached)</button>
-                        <button class="btn btn-danger" id="killBtn" type="button" style="background:#000; color:#fff;" onclick="killApp()">🛑 Stop runner</button>
+                    <div id="statusAlert" style="display:none; padding: 15px; margin-bottom: 25px; border-radius: 8px; text-align: center; font-weight: 600;"></div>
+
+                    <div class="d-flex flex-wrap gap-2 justify-content-center">
+                        <button class="btn btn-outline-primary" type="button" onclick="loadExistingConfig()"><i class="fas fa-folder-open me-2"></i>Load Config</button>
+                        <button class="btn btn-outline-success" type="button" onclick="handleSaveAndRun(false)"><i class="fas fa-save me-2"></i>Save Only</button>
+                        <button class="btn btn-danger px-4" type="button" onclick="handleSaveAndRun(true)"><i class="fas fa-play-circle me-2"></i>Save & Start Runner</button>
+                        <button class="btn btn-warning" id="runApp" style="display: none;" type="button" onclick="executeNow()"><i class="fas fa-bolt me-2"></i>Run (Cached)</button>
+                        <button class="btn btn-dark" id="killBtn" type="button" onclick="killApp()"><i class="fas fa-stop-circle me-2"></i>Stop Execution</button>
                     </div>
                 </form>
+
+                <!-- Terminal -->
+                <div class="terminal-container">
+                    <div class="terminal-header">
+                        <span><i class="fas fa-terminal me-2"></i>Console Output [<span id="logFilename">none</span>]</span>
+                        <div class="d-flex align-items-center">
+                            <div class="form-check form-switch mb-0">
+                                <input class="form-check-input" type="checkbox" id="autoScroll" checked>
+                                <label class="form-check-label ms-1" for="autoScroll">Live Feed</label>
+                            </div>
+                        </div>
+                    </div>
+                    <pre id="terminal"></pre>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Config Selector Modal -->
-    <div id="configModal" style="display:none; position:fixed; z-index:1001; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5);">
-        <div style="background:white; margin:10% auto; padding:20px; width:80%; max-width:500px; border-radius:8px;">
-            <h3>Select Configuration to Load</h3>
-            <div id="configList" style="max-height:300px; overflow-y:auto; margin: 15px 0; border: 1px solid #ddd; border-radius: 4px;"></div>
-            <div style="text-align:right;">
-                <button class="btn btn-outline-secondary" onclick="document.getElementById('configModal').style.display='none'">Cancel</button>
+    <!-- Modals -->
+    <div id="configModal" style="display:none; position:fixed; z-index:1001; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5); backdrop-filter: blur(2px);">
+        <div style="background:white; margin:10% auto; padding:30px; width:90%; max-width:500px; border-radius:12px; box-shadow: 0 10px 25px rgba(0,0,0,0.2);">
+            <h4 class="mb-3">Select Configuration</h4>
+            <div id="configList" style="max-height:300px; overflow-y:auto; margin-bottom: 20px; border: 1px solid #eee; border-radius: 8px;"></div>
+            <div class="text-end">
+                <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('configModal').style.display='none'">Cancel</button>
             </div>
         </div>
     </div>
 
-    <!-- Directory Browser Modal -->
     <div id="browseModal">
         <div class="modal-content-dir">
             <div class="modal-header-dir">
-                <h3>Folder Browser</h3>
-                <span onclick="closeBrowser()" style="cursor:pointer; font-size: 24px;">&times;</span>
+                <h5 class="mb-0"><i class="fas fa-folder-tree me-2 text-primary"></i>Folder Browser</h5>
+                <button type="button" class="btn-close" onclick="closeBrowser()"></button>
             </div>
-            <div style="padding: 15px 25px;"><div id="currentPathDisplay"></div></div>
+            <div class="px-4 pt-3"><div id="currentPathDisplay"></div></div>
             <div class="modal-body-dir" id="dirListing"></div>
-            <div style="padding: 20px; border-top: 1px solid #ddd; display: flex; justify-content: space-between;">
-                <button class="btn btn-outline-secondary" onclick="goUp()">Go Up</button>
-                <button class="btn btn-success" onclick="selectCurrentDir()">Select Current Folder</button>
+            <div class="p-4 border-top d-flex justify-content-between">
+                <button class="btn btn-outline-secondary" onclick="goUp()"><i class="fas fa-level-up-alt me-2"></i>Parent Folder</button>
+                <button class="btn btn-success" onclick="selectCurrentDir()"><i class="fas fa-check-circle me-2"></i>Select Current</button>
             </div>
         </div>
     </div>
+
+    <footer class="footer">
+        <div class="container text-center">
+            <div class="row">
+                <div class="col-md-4 mb-4">
+                    <h6>MRI-Lab Graz</h6>
+                    <p>8010 Graz, Austria</p>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <h6>Contact</h6>
+                    <strong>Karl Koschutnig</strong><br>
+                    <a href="mailto:karl.koschutnig@uni-graz.at" class="footer-link">karl.koschutnig@uni-graz.at</a>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <h6>Project</h6>
+                    <a href="https://github.com/MRI-Lab-Graz/bids_apps_runner" target="_blank" class="footer-link"><i class="fab fa-github me-1"></i> Source Code</a><br>
+                    <span style="font-size: 0.8rem; opacity: 0.6;">© 2026 BIDS App Runner</span>
+                </div>
+            </div>
+        </div>
+    </footer>
 
     <script>
         let currentTargetId = '';
         let browserCurrentPath = '/data/local/software';
         let lastSavedPath = '';
+        let initialLoad = true;
 
-        function showStatus(msg, isError=false) {
-            const el = document.getElementById('statusAlert');
-            el.innerText = msg;
-            el.style.display = 'block';
-            el.style.background = isError ? '#f8d7da' : '#d4edda';
-            el.style.color = isError ? '#721c24' : '#155724';
-            setTimeout(() => { el.style.display = 'none'; }, 5000);
-        }
-
-        async function loadExistingConfig() {
-            const resp = await fetch('/list_configs');
-            const data = await resp.json();
-            const list = document.getElementById('configList');
-            list.innerHTML = '';
-            data.configs.forEach(cfg => {
-                const d = document.createElement('div');
-                d.className = 'dir-item';
-                d.style.padding = '10px';
-                d.innerText = cfg;
-                d.onclick = () => loadConfigDetails(cfg);
-                list.appendChild(d);
-            });
-            document.getElementById('configModal').style.display = 'block';
-        }
-
-        async function loadConfigDetails(filename) {
-            document.getElementById('configModal').style.display = 'none';
+        async function refreshLogs() {
+            if (!document.getElementById('autoScroll').checked) return;
             try {
-                const resp = await fetch(`/get_config?name=${filename}`);
+                const resp = await fetch('/get_log');
+                if (!resp.ok) return;
                 const data = await resp.json();
-                const cfg = data.config;
+                const term = document.getElementById('terminal');
                 
-                document.getElementById('bids_folder').value = cfg.common.bids_folder || '';
-                document.getElementById('output_folder').value = cfg.common.output_folder || '';
-                document.getElementById('tmp_folder').value = cfg.common.tmp_folder || '';
-                document.getElementById('templateflow_dir').value = cfg.common.templateflow_dir || '';
-                document.getElementById('jobs').value = cfg.common.jobs || 1;
-                document.getElementById('analysis_level').value = cfg.app.analysis_level || 'participant';
-                document.getElementById('config_name').value = filename;
-
-                const containerPath = cfg.common.container;
-                if (containerPath) {
-                    const folder = containerPath.substring(0, containerPath.lastIndexOf('/'));
-                    const name = containerPath.substring(containerPath.lastIndexOf('/') + 1);
-                    document.getElementById('container_folder').value = folder;
-                    await scanContainers();
-                    document.getElementById('container_select').value = name;
-                    await fetchAppOptions();
-                    
-                    const options = cfg.app.options || [];
-                    for (let i = 0; i < options.length; i++) {
-                        const flag = options[i];
-                        if (flag.startsWith('--') || flag.startsWith('-')) {
-                            const els = document.querySelectorAll(`[data-flag="${flag}"]`);
-                            if (els.length > 0) {
-                                const nextVal = options[i+1];
-                                if (nextVal && !nextVal.startsWith('-')) {
-                                    els.forEach(el => {
-                                        if (el.classList.contains('dynamic-opt-multi')) {
-                                            let j = i + 1;
-                                            while(j < options.length && !options[j].startsWith('-')) {
-                                                const subEl = document.querySelector(`.dynamic-opt-multi[data-flag="${flag}"][value="${options[j]}"]`);
-                                                if (subEl) subEl.checked = true;
-                                                j++;
-                                            }
-                                            i = j - 1; 
-                                        } else {
-                                            el.value = nextVal;
-                                            i++;
-                                        }
-                                    });
-                                } else {
-                                    els.forEach(el => { if (el.type === 'checkbox') el.checked = true; });
-                                }
-                            }
-                        }
+                if (data.content) {
+                    const isAtBottom = term.scrollHeight - term.clientHeight <= term.scrollTop + 5;
+                    term.innerText = data.content;
+                    document.getElementById('logFilename').innerText = data.filename || 'none';
+                    if (isAtBottom) term.scrollTop = term.scrollHeight;
+                } else if (!data.content && data.filename === 'none') {
+                    if (initialLoad) {
+                        term.innerText = '[System initialized. Waiting for task...]\n';
+                        initialLoad = false;
                     }
                 }
-                
-                // Track current path and show run button
-                const respConfig = await fetch('/save_config', { 
-                    method: 'POST', 
-                    headers: { 'Content-Type': 'application/json' }, 
-                    body: JSON.stringify({ 
-                        filename: filename, 
-                        config: cfg 
-                    }) 
-                });
-                const saveRes = await respConfig.json();
-                lastSavedPath = saveRes.path;
-                document.getElementById('runApp').style.display = 'inline-block';
-                
-                showStatus("Config loaded and ready to run!");
-            } catch (err) {
-                showStatus("Error loading config: " + err.message, true);
-            }
-        }
-
-        function openBrowser(id) {
-            currentTargetId = id;
-            const currentVal = document.getElementById(id).value;
-            loadDirectory(currentVal || browserCurrentPath);
-            document.getElementById('browseModal').style.display = 'block';
-        }
-        function closeBrowser() { document.getElementById('browseModal').style.display = 'none'; }
-        
-        async function loadDirectory(path) {
-            const list = document.getElementById('dirListing');
-            list.innerHTML = 'Loading...';
-            try {
-                const resp = await fetch('/list_dirs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
-                const data = await resp.json();
-                browserCurrentPath = data.current_path;
-                document.getElementById('currentPathDisplay').innerText = browserCurrentPath;
-                list.innerHTML = '';
-                data.items.forEach(item => {
-                    const d = document.createElement('div');
-                    d.className = 'dir-item';
-                    d.innerHTML = '📁 ' + item.name;
-                    d.onclick = () => loadDirectory(item.path);
-                    list.appendChild(d);
-                });
             } catch (e) {
-                list.innerHTML = '<div style="color:red">Error loading directory</div>';
+                console.error("Log refresh failed", e);
             }
         }
-        function goUp() {
-            const parts = browserCurrentPath.split('/').filter(p => p.length > 0);
-            parts.pop();
-            loadDirectory('/' + parts.join('/'));
-        }
-        function selectCurrentDir() {
-            document.getElementById(currentTargetId).value = browserCurrentPath;
-            closeBrowser();
-        }
-
-        async function scanContainers() {
-            const f = document.getElementById('container_folder').value;
-            if (!f) return;
-            const resp = await fetch('/list_containers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: f }) });
-            const data = await resp.json();
-            const s = document.getElementById('container_select');
-            s.innerHTML = '';
-            if (data.containers) {
-                data.containers.forEach(c => { s.add(new Option(c, c)); });
-                checkAppVersion();
-            }
-            document.getElementById('fetchHelpBtn').style.display = 'block';
-        }
+        setInterval(refreshLogs, 3000);
 
         async function checkAppVersion() {
             const f = document.getElementById('container_folder').value;
             const c = document.getElementById('container_select').value;
             if (!c) return;
-            
             const alertEl = document.getElementById('versionAlert');
             alertEl.style.display = 'none';
 
@@ -392,16 +351,120 @@
                     body: JSON.stringify({ container: f + '/' + c })
                 });
                 const data = await resp.json();
-                
                 if (data.is_newer) {
-                    alertEl.innerHTML = `<span style="color: #e67e22; font-weight: bold;">⚠️ New version available: <a href="${data.changelog_url}" target="_blank" style="color: #d35400;"><u>${data.latest}</u></a></span> <span style="font-size: 0.75rem; color: #666;">(current: ${data.current})</span>`;
+                    alertEl.innerHTML = `<span style="color: #e67e22; font-weight: bold;"><i class="fas fa-exclamation-triangle me-1"></i> Update: <a href="${data.changelog_url}" target="_blank" style="color: #d35400;">${data.latest}</a> available</span>`;
                     alertEl.style.display = 'block';
                 } else if (data.latest) {
-                    alertEl.innerHTML = `<span style="color: #27ae60; font-weight: bold;">✅ Up to date (<a href="${data.changelog_url}" target="_blank" style="color: #27ae60;">${data.latest}</a>)</span>`;
+                    alertEl.innerHTML = `<span style="color: #27ae60; font-weight: bold;"><i class="fas fa-check-circle me-1"></i> Vers. ${data.latest} up-to-date</span>`;
                     alertEl.style.display = 'block';
                 }
+            } catch (e) {}
+        }
+
+        async function openBrowser(id) {
+            console.log("Opening browser for target:", id);
+            currentTargetId = id;
+            const currentVal = document.getElementById(id).value;
+            try {
+                await loadDirectory(currentVal || browserCurrentPath);
+                document.getElementById('browseModal').style.display = 'block';
+                document.body.style.overflow = 'hidden'; 
+            } catch (err) {
+                console.error("Failed to open browser:", err);
+                showStatus("Error: Could not list directory. Check console.", true);
+            }
+        }
+
+        async function loadDirectory(path) {
+            console.log("Fetching directory listing for:", path);
+            try {
+                const resp = await fetch('/list_dirs', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ path: path }) 
+                });
+                
+                if (!resp.ok) throw new Error(`HTTP error! status: ${resp.status}`);
+                
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+
+                browserCurrentPath = data.current_path;
+                const list = document.getElementById('dirListing');
+                list.innerHTML = '';
+                document.getElementById('currentPathDisplay').innerText = browserCurrentPath;
+                
+                if (data.items && data.items.length > 0) {
+                    data.items.forEach(item => {
+                        const d = document.createElement('div');
+                        d.className = 'dir-item';
+                        const icon = item.name === '..' ? 'fa-arrow-left' : 'fa-folder';
+                        d.innerHTML = `<i class="fas ${icon} text-warning"></i> ${item.name}`;
+                        d.onclick = () => loadDirectory(item.path);
+                        list.appendChild(d);
+                    });
+                } else {
+                    list.innerHTML = `<div class="text-center p-5 text-muted">
+                        <i class="fas fa-search mb-3 d-block" style="font-size: 2rem; opacity: 0.3;"></i>
+                        No subdirectories found in current path.
+                    </div>`;
+                }
             } catch (e) {
-                console.error("Version check failed", e);
+                console.error("Directory browse error:", e);
+                const list = document.getElementById('dirListing');
+                list.innerHTML = `<div class="alert alert-danger m-4">
+                    <strong>Error:</strong> Failed to load folder contents.<br>
+                    <small>${e.message}</small>
+                </div>`;
+                throw e;
+            }
+        }
+
+        function closeBrowser() { 
+            document.getElementById('browseModal').style.display = 'none'; 
+            document.body.style.overflow = 'auto';
+        }
+
+        function goUp() {
+            const parts = browserCurrentPath.split('/').filter(p => p.length > 0);
+            if (parts.length > 0) {
+                parts.pop();
+                loadDirectory('/' + parts.join('/'));
+            } else {
+                loadDirectory('/');
+            }
+        }
+
+        function selectCurrentDir() {
+            if (currentTargetId) {
+                document.getElementById(currentTargetId).value = browserCurrentPath;
+            }
+            closeBrowser();
+        }
+
+        async function scanContainers() {
+            const f = document.getElementById('container_folder').value;
+            if (!f) {
+                showStatus("Please specify the containers folder first.", true);
+                return;
+            }
+            try {
+                const resp = await fetch('/list_containers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: f }) });
+                const data = await resp.json();
+                if (data.error) { showStatus(data.error, true); return; }
+                
+                const s = document.getElementById('container_select');
+                s.innerHTML = '';
+                if (data.containers && data.containers.length > 0) {
+                    data.containers.forEach(c => s.add(new Option(c, c)));
+                    checkAppVersion();
+                    document.getElementById('fetchHelpBtn').style.display = 'block';
+                } else {
+                    showStatus("No containers (.sif/.simg) found in that folder.", true);
+                }
+            } catch (e) {
+                console.error("Scan error:", e);
+                showStatus("Failed to scan containers.", true);
             }
         }
 
@@ -409,57 +472,73 @@
             const f = document.getElementById('container_folder').value;
             const c = document.getElementById('container_select').value;
             if (!c) return;
+
             const containerEl = document.getElementById('optionsContainer');
             document.getElementById('dynamicOptionsSection').style.display = 'block';
-            containerEl.innerHTML = '<div style="padding:20px; text-align:center;">Fetching help...</div>';
+            containerEl.innerHTML = '<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div><div class="mt-2">Analyzing container...</div></div>';
             
-            // Trigger version check in parallel
-            checkAppVersion();
+            try {
+                checkAppVersion();
+                const resp = await fetch('/get_app_help', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ container: f + '/' + c }) });
+                const data = await resp.json();
+                
+                if (data.error) {
+                    containerEl.innerHTML = `<div class="alert alert-warning m-4">Error fetching help: ${data.error}</div>`;
+                    return;
+                }
 
-            const resp = await fetch('/get_app_help', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ container: f + '/' + c }) });
-            const data = await resp.json();
-            if (data.app_info) { document.getElementById('docLink').href = data.app_info.url; }
-            containerEl.innerHTML = '';
-            if (data.sections) {
-                data.sections.forEach((sec, idx) => {
-                    const secDiv = document.createElement('div');
-                    secDiv.className = 'opt-section' + (idx === 0 ? ' active' : '');
-                    const h = document.createElement('div');
-                    h.className = 'opt-section-header';
-                    h.innerHTML = '<span>' + sec.title + '</span><span class="arrow">' + (idx === 0 ? '▼' : '▶') + '</span>';
-                    h.onclick = () => {
-                        const active = secDiv.classList.toggle('active');
-                        h.querySelector('.arrow').innerText = active ? '▼' : '▶';
-                    };
-                    const content = document.createElement('div');
-                    content.className = 'opt-section-content';
-                    sec.options.forEach(opt => {
-                        const item = document.createElement('div');
-                        item.style.padding = '10px'; item.style.background = '#fcfcfc'; item.style.display = 'flex'; item.style.flexDirection = 'column'; item.style.justifyContent = 'space-between';
-                        let input = '';
-                        if (opt.choices && opt.choices.length > 0) {
-                            if (opt.is_multiple) {
-                                let chks = '';
-                                opt.choices.forEach(ch => {
-                                    chks += '<label style="display:block"><input type="checkbox" class="dynamic-opt-multi" data-flag="' + opt.flag + '" value="' + ch + '"> ' + ch + '</label>';
-                                });
-                                input = '<label class="form-label">' + opt.name + '</label><div style="max-height:100px;overflow:auto;border:1px solid #ccc;padding:5px;background:white;">' + chks + '</div>';
+                if (data.app_info) document.getElementById('docLink').href = data.app_info.url;
+                containerEl.innerHTML = '';
+                
+                if (data.sections && data.sections.length > 0) {
+                    data.sections.forEach((sec, idx) => {
+                        const secDiv = document.createElement('div');
+                        secDiv.className = 'opt-section' + (idx === 0 ? ' active' : '');
+                        const h = document.createElement('div');
+                        h.className = 'opt-section-header';
+                        h.innerHTML = `<span>${sec.title}</span><i class="fas fa-caret-down"></i>`;
+                        h.onclick = () => {
+                            secDiv.classList.toggle('active');
+                        };
+                        const content = document.createElement('div');
+                        content.className = 'opt-section-content';
+                        sec.options.forEach(opt => {
+                            const item = document.createElement('div');
+                            item.className = 'p-3 border rounded bg-light d-flex flex-column';
+                            let input = '';
+                            if (opt.choices && opt.choices.length > 0) {
+                                if (opt.is_multiple) {
+                                    let chks = '';
+                                    opt.choices.forEach(ch => {
+                                        chks += `<div class="form-check"><input type="checkbox" class="form-check-input dynamic-opt-multi" data-flag="${opt.flag}" value="${ch}"> <label class="form-check-label">${ch}</label></div>`;
+                                    });
+                                    input = `<label class="form-label">${opt.name}</label><div style="max-height:120px;overflow:auto;border:1px solid #dee2e6;padding:10px;background:white;border-radius:6px;">${chks}</div>`;
+                                } else {
+                                    let opts = '<option value="">-- Default --</option>';
+                                    opt.choices.forEach(ch => opts += `<option value="${ch}">${ch}</option>`);
+                                    input = `<label class="form-label">${opt.name}</label><select class="dynamic-opt form-select" data-flag="${opt.flag}">${opts}</select>`;
+                                }
+                            } else if (opt.has_value) {
+                                input = `<label class="form-label">${opt.name}</label><input type="text" class="dynamic-opt form-control" data-flag="${opt.flag}">`;
                             } else {
-                                let opts = '<option value="">-- Default --</option>';
-                                opt.choices.forEach(ch => { opts += '<option value="' + ch + '">' + ch + '</option>'; });
-                                input = '<label class="form-label">' + opt.name + '</label><select class="dynamic-opt form-select" data-flag="' + opt.flag + '">' + opts + '</select>';
+                                input = `<div class="form-check mt-auto"><input type="checkbox" class="form-check-input dynamic-opt" data-flag="${opt.flag}"> <label class="form-check-label font-weight-bold">${opt.name}</label></div>`;
                             }
-                        } else if (opt.has_value) {
-                            input = '<label class="form-label">' + opt.name + '</label><input type="text" class="dynamic-opt form-control" data-flag="' + opt.flag + '">';
-                        } else {
-                            input = '<label style="font-weight:600; cursor:pointer;"><input type="checkbox" class="dynamic-opt" data-flag="' + opt.flag + '"> ' + opt.name + '</label>';
-                        }
-                        const desc = opt.description ? '<div style="font-size:0.7rem;color:#666;margin-top:8px;line-height:1.3;font-style:italic;border-top:1px solid #eee;padding-top:4px;">' + opt.description + '</div>' : '';
-                        item.innerHTML = input + desc;
-                        content.appendChild(item);
+                            const desc = opt.description ? `<div style="font-size:0.7rem;color:#777;margin-top:10px;line-height:1.4;border-top:1px solid #eee;padding-top:8px;">${opt.description}</div>` : '';
+                            item.innerHTML = input + desc;
+                            content.appendChild(item);
+                        });
+                        secDiv.appendChild(h); secDiv.appendChild(content); containerEl.appendChild(secDiv);
                     });
-                    secDiv.appendChild(h); secDiv.appendChild(content); containerEl.appendChild(secDiv);
-                });
+                } else {
+                    let msg = '<div class="text-center p-4">No specific options detected for this container.</div>';
+                    if (data.raw_help) {
+                        msg += `<div class="mt-3"><button class="btn btn-sm btn-outline-secondary" onclick="this.nextElementSibling.style.display='block'; this.style.display='none'">Show Raw Help Output</button>
+                               <pre style="display:none; text-align:left; font-size:0.7rem; background:#f8f9fa; padding:15px; margin-top:10px; border:1px solid #eee; border-radius:5px; max-height:300px; overflow:auto;">${data.raw_help}</pre></div>`;
+                    }
+                    containerEl.innerHTML = msg;
+                }
+            } catch (e) {
+                containerEl.innerHTML = `<div class="alert alert-danger m-4">Connection error. Could not retrieve container help.</div>`;
             }
         }
 
@@ -486,83 +565,174 @@
                 },
                 app: { analysis_level: document.getElementById('analysis_level').value, options: opts }
             };
-            
+
             const filename = document.getElementById('config_name').value || 'config.json';
             try {
                 const resp = await fetch('/save_config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename, config }) });
-                const data = await resp.json();
-                lastSavedPath = data.path;
-                document.getElementById('runApp').style.display = 'inline-block';
-                showStatus('Configuration saved!');
-                
-                if (shouldRun) {
-                    await executeNow();
+                const resData = await resp.json();
+                if (resData.message) {
+                    lastSavedPath = resData.path;
+                    showStatus(resData.message);
+                    if (shouldRun) executeNow();
+                    else document.getElementById('runApp').style.display = 'inline-block';
+                } else {
+                    showStatus(resData.error, true);
                 }
-            } catch (err) {
-                showStatus("Error saving: " + err.message, true);
+            } catch (e) {
+                showStatus("Failed to save config: " + e.message, true);
             }
         }
 
         async function executeNow() {
-            if (!confirm('Start BIDS App processing?')) return;
-            showStatus("Validating paths...", false);
-            
-            const runnerArgs = [];
+            if (!lastSavedPath) {
+                showStatus("No config file ready. Please save first.", true);
+                return;
+            }
+            const r_args = [];
             document.querySelectorAll('.runner-opt').forEach(el => {
                 const flag = el.dataset.flag;
-                if (el.type === 'checkbox') {
-                    if (el.checked) runnerArgs.push(flag);
-                } else if (el.value.trim()) {
-                    if (flag === '--subjects') {
-                        runnerArgs.push(flag);
-                        el.value.trim().split(/\s+/).forEach(s => runnerArgs.push(s));
-                    } else {
-                        runnerArgs.push(flag);
-                        runnerArgs.push(el.value.trim());
-                    }
-                }
+                if (el.type === 'checkbox') { if (el.checked) r_args.push(flag); }
+                else if (el.value.trim()) { r_args.push(flag); r_args.push(el.value.trim()); }
             });
 
+            showStatus("🚀 Starting BIDS App Runner...");
             try {
-                const resp = await fetch('/run_app', { 
-                    method: 'POST', 
-                    headers: { 'Content-Type': 'application/json' }, 
-                    body: JSON.stringify({ 
-                        config_path: lastSavedPath,
-                        runner_args: runnerArgs
-                    }) 
-                });
+                const resp = await fetch('/run_app', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ config_path: lastSavedPath, runner_args: r_args }) });
                 const data = await resp.json();
-                
-                if (resp.status === 400 && data.details) {
-                    alert("VALIDATION FAILED:\n\n" + data.details);
-                    showStatus("Validation failed. Check paths.", true);
-                } else if (!resp.ok) {
-                    throw new Error(data.error || 'Server error');
+                if (data.message) {
+                    showStatus(data.message);
+                    initialLoad = false;
                 } else {
-                    showStatus("🚀 Running: " + data.message.split('.')[0]);
-                    alert(data.message);
+                    showStatus(data.error + (data.details ? ": " + data.details : ""), true);
                 }
-            } catch (err) {
-                showStatus("Error: " + err.message, true);
-                alert("Execution Error: " + err.message);
+            } catch (e) {
+                showStatus("Execution request failed: " + e.message, true);
             }
         }
 
         async function killApp() {
-            if (!confirm('This will stop ALL running BIDS App processes started by this runner. Continue?')) return;
+            if (!confirm("Are you sure you want to terminate all runner processes and containers?")) return;
             try {
                 const resp = await fetch('/kill_job', { method: 'POST' });
                 const data = await resp.json();
-                alert(data.message);
-                showStatus("Stopped: " + data.message);
-            } catch (err) {
-                showStatus("Error stopping: " + err.message, true);
+                showStatus(data.message || data.error, !!data.error);
+            } catch (e) {
+                showStatus("Failed to send stop signal.", true);
             }
         }
 
-        // Remove old submit handler since we use handleSaveAndRun now
-        document.getElementById('configForm').addEventListener('submit', (e) => e.preventDefault());
+        function showStatus(msg, isError=false) {
+            const el = document.getElementById('statusAlert');
+            el.innerText = msg; el.style.display = 'block';
+            el.style.background = isError ? '#fff5f5' : '#ebfbee';
+            el.style.color = isError ? '#e03131' : '#2f9e44';
+            el.style.border = `1px solid ${isError ? '#ffa8a8' : '#b2f2bb'}`;
+            setTimeout(() => el.style.display = 'none', 8000);
+        }
+
+        async function loadExistingConfig() {
+            console.log("Loading existing configurations...");
+            try {
+                const resp = await fetch('/list_configs');
+                if (!resp.ok) throw new Error("Failed to list configs");
+                const data = await resp.json();
+                
+                const list = document.getElementById('configList');
+                list.innerHTML = '';
+                
+                if (data.configs && data.configs.length > 0) {
+                    data.configs.forEach(cfg => {
+                        const d = document.createElement('div');
+                        d.className = 'dir-item';
+                        d.innerHTML = `<i class="fas fa-file-code text-primary"></i> ${cfg}`;
+                        d.onclick = () => loadConfigDetails(cfg);
+                        list.appendChild(d);
+                    });
+                } else {
+                    list.innerHTML = '<div class="p-4 text-center text-muted">No configuration files found.</div>';
+                }
+                
+                document.getElementById('configModal').style.display = 'block';
+                document.body.style.overflow = 'hidden';
+            } catch (e) {
+                console.error("loadExistingConfig error:", e);
+                showStatus("Error loading configurations: " + e.message, true);
+            }
+        }
+
+        async function loadConfigDetails(filename) {
+            console.log("Loading details for:", filename);
+            document.getElementById('configModal').style.display = 'none';
+            document.body.style.overflow = 'auto';
+            
+            try {
+                const resp = await fetch(`/get_config?name=${encodeURIComponent(filename)}`);
+                const data = await resp.json();
+                const cfg = data.config;
+                
+                document.getElementById('bids_folder').value = cfg.common.bids_folder || '';
+                document.getElementById('output_folder').value = cfg.common.output_folder || '';
+                document.getElementById('tmp_folder').value = cfg.common.tmp_folder || '';
+                document.getElementById('templateflow_dir').value = cfg.common.templateflow_dir || '';
+                document.getElementById('jobs').value = cfg.common.jobs || 1;
+                document.getElementById('analysis_level').value = cfg.app.analysis_level || 'participant';
+                document.getElementById('config_name').value = filename;
+                
+                lastSavedPath = `/data/local/software/bids_apps_runner/configs/${filename}`;
+                document.getElementById('runApp').style.display = 'inline-block';
+
+                const containerPath = cfg.common.container;
+                if (containerPath) {
+                    const idx = containerPath.lastIndexOf('/');
+                    if (idx !== -1) {
+                        const folder = containerPath.substring(0, idx);
+                        const name = containerPath.substring(idx + 1);
+                        document.getElementById('container_folder').value = folder;
+                        await scanContainers();
+                        
+                        // If the container from config is not in the select (e.g. renamed or moved), add it
+                        const s = document.getElementById('container_select');
+                        let exists = Array.from(s.options).some(o => o.value === name);
+                        if (!exists) {
+                            s.add(new Option(name + " (not in folder)", name));
+                        }
+                        s.value = name;
+                        
+                        console.log("Auto-fetching help for loaded container...");
+                        await fetchAppOptions();
+                        
+                        const options = cfg.app.options || [];
+                        for (let i = 0; i < options.length; i++) {
+                            const opt = options[i];
+                            const el = document.querySelector(`[data-flag="${opt}"]`);
+                            if (!el) {
+                                const multiEls = document.querySelectorAll(`.dynamic-opt-multi[data-flag="${opt}"]`);
+                                if (multiEls.length > 0) {
+                                    while (i + 1 < options.length && !options[i+1].startsWith('-')) {
+                                        i++;
+                                        const val = options[i];
+                                        document.querySelectorAll(`.dynamic-opt-multi[data-flag="${opt}"][value="${val}"]`).forEach(checkedEl => checkedEl.checked = true);
+                                    }
+                                }
+                                continue;
+                            }
+                            if (el.type === 'checkbox') {
+                                el.checked = true;
+                            } else {
+                                if (i + 1 < options.length && !options[i+1].startsWith('-')) {
+                                    el.value = options[i+1];
+                                    i++;
+                                }
+                            }
+                        }
+                    }
+                }
+                showStatus("Configuration loaded: " + filename);
+            } catch (e) {
+                console.error("loadConfigDetails error:", e);
+                showStatus("Failed to load config details.", true);
+            }
+        }
     </script>
 </body>
 </html>
