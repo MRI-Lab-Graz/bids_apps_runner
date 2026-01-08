@@ -1,19 +1,25 @@
 __pycache__/
+
+# Logs and runtime output
 logs/
-nohup.out
-config.json
-validation_reports/
-.appsrunner/
-*.sif
-.DS_Store
-configs/
-logs/*
-validation_reports/
-cache/
+gui.log
 nohup*.log
-logs/
+nohup.out
+validation_reports/
+
+# Configuration and datasets
+config.json
+configs/
+cache/
 data/
 missing_qsiprep.json
+*.sif
 
-# Sphinx / Read the Docs build output
+# Virtual environments
+.appsrunner/
+
+# macOS
+.DS_Store
+
+# Documentation builds
 docs/_build/

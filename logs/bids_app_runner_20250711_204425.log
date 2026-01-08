@@ -1,6 +1,0 @@
-2025-07-11 20:44:25,959 - root - INFO - Logging to file: logs/bids_app_runner_20250711_204425.log
-2025-07-11 20:44:25,960 - root - INFO - BIDS App Runner 2.0.0 starting...
-2025-07-11 20:44:25,960 - root - INFO - Command line: run_bids_apps.py -x config.json --dry-run --log-level DEBUG
-2025-07-11 20:44:25,960 - root - INFO - Successfully loaded config from: config.json
-2025-07-11 20:44:25,960 - root - INFO - Validating common configuration...
-2025-07-11 20:44:25,960 - root - ERROR - Directory not found: /data/local/129_PK01/derivatives/qsiprep/
