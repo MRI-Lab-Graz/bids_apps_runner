@@ -50,6 +50,26 @@ def _find_python_interpreter():
 
 PYTHON_EXE = _find_python_interpreter()
 
+def check_system_dependencies():
+    """Check for availability of docker, apptainer, and singularity."""
+    docker_installed = shutil.which('docker') is not None
+    docker_running = False
+    if docker_installed:
+        try:
+            # Check if daemon is responsive
+            subprocess.run(['docker', 'info'], capture_output=True, timeout=2, check=True)
+            docker_running = True
+        except (subprocess.SubprocessError, FileNotFoundError):
+            docker_running = False
+
+    return {
+        'docker': docker_installed,
+        'docker_running': docker_running,
+        'apptainer': shutil.which('apptainer') is not None,
+        'singularity': shutil.which('singularity') is not None,
+        'datalad': shutil.which('datalad') is not None
+    }
+
 LOG_DIR = BASE_DIR / "logs"
 
 @app.before_request
