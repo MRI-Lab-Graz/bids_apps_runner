@@ -45,6 +45,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Ensure assets directories exist
+        run: |
+          mkdir -p static templates
+
       - name: Build binary
         run: |
           pyinstaller app_gui.py \
