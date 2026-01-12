@@ -17,33 +17,27 @@ from pathlib import Path
 from version import __version__
 from check_app_output import BIDSOutputValidator
 
-app = Flask(__name__)
+if getattr(sys, 'frozen', False):
+    # Running in a bundle
+    BUNDLE_DIR = Path(sys._MEIPASS)
+    app = Flask(__name__, 
+                template_folder=str(BUNDLE_DIR / "templates"),
+                static_folder=str(BUNDLE_DIR / "static"))
+else:
+    # Running in normal Python environment
+    BUNDLE_DIR = Path(__file__).resolve().parent
+    app = Flask(__name__)
+
 app.secret_key = "bids-app-runner-secret-key"
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['APP_VERSION'] = __version__
 
-def check_system_dependencies():
-    """Check for availability of docker, apptainer, and singularity."""
-    docker_installed = shutil.which('docker') is not None
-    docker_running = False
-    if docker_installed:
-        try:
-            # Check if daemon is responsive
-            subprocess.run(['docker', 'info'], capture_output=True, timeout=2, check=True)
-            docker_running = True
-        except (subprocess.SubprocessError, FileNotFoundError):
-            docker_running = False
+# Application base directory (for logs, configs, etc.)
+if getattr(sys, 'frozen', False):
+    BASE_DIR = Path(sys.executable).resolve().parent
+else:
+    BASE_DIR = BUNDLE_DIR
 
-    return {
-        'docker': docker_installed,
-        'docker_running': docker_running,
-        'apptainer': shutil.which('apptainer') is not None,
-        'singularity': shutil.which('singularity') is not None,
-        'datalad': shutil.which('datalad') is not None
-    }
-
-# Base directory for the project
-BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
 
 @app.before_request
@@ -835,11 +829,21 @@ def run_app():
             return jsonify({'error': 'Apptainer/Singularity requested but not found on system.'}), 400
 
         # 2. Launch run_bids_apps.py in background
-        script_path = BASE_DIR / "run_bids_apps.py"
+        if getattr(sys, 'frozen', False):
+            script_path = BUNDLE_DIR / "run_bids_apps.py"
+        else:
+            script_path = BASE_DIR / "run_bids_apps.py"
         
         # Build command
+        # Use sys.executable to ensure we use the same Python environment 
+        # (or the bundle itself if frozen)
+        python_exe = sys.executable if not getattr(sys, 'frozen', False) else "python3"
+        # Note: If frozen, we still need a python interpreter to run the script 
+        # unless we bundle the script as an executable.
+        # For now, we assume python3 is available in the target environment.
+        
         cmd = [
-            "python3", str(script_path),
+            python_exe, str(script_path),
             "-c", str(config_path),
         ]
         

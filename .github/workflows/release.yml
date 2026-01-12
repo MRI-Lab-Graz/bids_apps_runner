@@ -25,9 +25,7 @@ jobs:
             artifact_name: BIDSAppRunner-macos
           - os: windows-latest
             data_sep: ";"
-            pyinstaller_flags: "--onefile"
-            package_cmd: |
-              powershell -Command "Compress-Archive -Path dist\\BIDSAppRunner.exe -DestinationPath dist\\BIDSAppRunner.zip -Force"
+            pyinstaller_flags: "--onefile --windowed"
             artifact_path: dist/BIDSAppRunner.zip
             artifact_name: BIDSAppRunner-windows
 
@@ -43,24 +41,43 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
-
-      - name: Ensure assets directories exist
-        run: |
-          mkdir -p static templates
+          pip install -r requirements.txt
+          pip install pyinstaller
 
       - name: Build binary
         run: |
-          pyinstaller app_gui.py \
+          python -m PyInstaller app_gui.py \
             --name BIDSAppRunner \
             --clean \
             --noconfirm \
             ${{ matrix.pyinstaller_flags }} \
             --add-data "templates${{ matrix.data_sep }}templates" \
-            --add-data "static${{ matrix.data_sep }}static"
+            --add-data "static${{ matrix.data_sep }}static" \
+            --add-data "run_bids_apps.py${{ matrix.data_sep }}." \
+            --add-data "run_bids_apps_hpc.py${{ matrix.data_sep }}." \
+            --add-data "bids_validation_integration.py${{ matrix.data_sep }}." \
+            --add-data "check_app_output.py${{ matrix.data_sep }}." \
+            --add-data "version.py${{ matrix.data_sep }}." \
+            --collect-all flask \
+            --collect-all waitress \
+            --hidden-import engineio.async_drivers.threading
 
-      - name: Package artifact
-        run: ${{ matrix.package_cmd }}
+      - name: Package artifact (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          hdiutil create -volname "BIDSAppRunner" -srcfolder "dist/BIDSAppRunner.app" -ov -format UDZO "dist/BIDSAppRunner.dmg"
+
+      - name: Package artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/BIDSAppRunner.exe -DestinationPath dist/BIDSAppRunner.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-${{ github.ref_name }}
+          path: ${{ matrix.artifact_path }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
