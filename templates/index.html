@@ -159,32 +159,63 @@
 
                     <div class="section-header">2. Container Settings</div>
                     <div class="row align-items-end">
-                        <div class="col-md-3 mb-4">
-                            <label class="form-label">Container Engine</label>
-                            <select id="container_engine" class="form-select" onchange="toggleEngineFields()">
-                                <option value="apptainer" selected>Apptainer/Singularity</option>
-                                <option value="docker">Docker</option>
-                            </select>
-                        </div>
-                        <div class="col-md-4 mb-4" id="container_folder_group">
-                            <label class="form-label">Apptainer Images Folder</label>
-                            <div class="input-group">
-                                <input type="text" id="container_folder" class="form-control">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('container_folder')">...</button>
-                                <button type="button" class="btn btn-primary" onclick="scanContainers()">Scan</button>
+                        <div class="col-md-12 mb-4">
+                            <div class="card bg-light border-0 shadow-none">
+                                <div class="card-body p-3">
+                                    <div class="row align-items-end">
+                                        <div class="col-md-3">
+                                            <label class="form-label">Container Engine</label>
+                                            <select id="container_engine" class="form-select" onchange="toggleEngineFields()">
+                                                <option value="apptainer" selected>Apptainer / Singularity</option>
+                                                <option value="docker">Docker Hub</option>
+                                            </select>
+                                        </div>
+                                        
+                                        <!-- Apptainer Fields -->
+                                        <div class="col-md-9" id="apptainer_fields_container">
+                                            <div class="row align-items-end">
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Apptainer Images Folder (path/to/*.sif)</label>
+                                                    <div class="input-group">
+                                                        <input type="text" id="container_folder" class="form-control">
+                                                        <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('container_folder')">...</button>
+                                                        <button type="button" class="btn btn-primary" onclick="scanContainers()">Scan</button>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Select Local Image</label>
+                                                    <div class="input-group" id="container_select_group" style="display:flex;">
+                                                        <select id="container_select" class="form-select" onchange="checkAppVersion()"></select>
+                                                        <button type="button" id="fetchHelpBtn" class="btn btn-accent" style="display:none;" onclick="fetchAppOptions()">Load Options</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Docker Fields -->
+                                        <div class="col-md-9" id="docker_fields_container" style="display:none;">
+                                            <div class="row align-items-end">
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Docker Hub Repository</label>
+                                                    <div class="input-group">
+                                                        <input type="text" id="container_docker_repo" class="form-control" placeholder="e.g. nipreps/fmriprep">
+                                                        <button type="button" class="btn btn-primary" onclick="fetchDockerRepoTags()">Fetch Tags</button>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Select Version / Tag</label>
+                                                    <div class="input-group">
+                                                        <select id="container_docker_tag" class="form-select"></select>
+                                                        <button type="button" id="pullDockerBtn" class="btn btn-outline-info" onclick="pullDockerImage()"><i class="fas fa-download me-1"></i> Pull</button>
+                                                        <button type="button" class="btn btn-accent" onclick="fetchAppOptions()">Load Options</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                        <div class="col-md-5 mb-4">
-                            <label class="form-label" id="container_select_label">Select App Image</label>
-                            <div class="input-group" id="container_select_group">
-                                <select id="container_select" class="form-select" onchange="checkAppVersion()"></select>
-                                <button type="button" id="fetchHelpBtn" class="btn btn-accent" style="display:none;" onclick="fetchAppOptions()">Load Options</button>
-                            </div>
-                            <div class="input-group" id="container_input_group" style="display:none;">
-                                <input type="text" id="container_input" class="form-control" placeholder="e.g. nipreps/fmriprep:latest">
-                                <button type="button" class="btn btn-accent" onclick="fetchAppOptions()">Load Options</button>
-                            </div>
-                            <div id="versionAlert" style="margin-top: 8px; font-size: 0.85rem; display: none;"></div>
+                            <div id="versionAlert" style="margin-top: 8px; font-size: 0.85rem; display: none; padding-left: 15px;"></div>
                         </div>
                     </div>
 
@@ -578,7 +609,7 @@
                 console.error("Log refresh failed", e);
             }
         }
-        setInterval(refreshLogs, 3000);
+        setInterval(refreshLogs, 2000);
 
         async function checkAppVersion() {
             const f = document.getElementById('container_folder').value;
@@ -719,21 +750,15 @@
 
         function toggleEngineFields() {
             const engine = document.getElementById('container_engine').value;
-            const folderGroup = document.getElementById('container_folder_group');
-            const selectGroup = document.getElementById('container_select_group');
-            const inputGroup = document.getElementById('container_input_group');
-            const selectLabel = document.getElementById('container_select_label');
+            const apptainerFields = document.getElementById('apptainer_fields_container');
+            const dockerFields = document.getElementById('docker_fields_container');
 
             if (engine === 'docker') {
-                folderGroup.style.display = 'none';
-                selectGroup.style.display = 'none';
-                inputGroup.style.display = 'flex';
-                selectLabel.innerText = 'Docker Image Name';
+                apptainerFields.style.display = 'none';
+                dockerFields.style.display = 'block';
             } else {
-                folderGroup.style.display = 'block';
-                selectGroup.style.display = 'flex';
-                inputGroup.style.display = 'none';
-                selectLabel.innerText = 'Select App Image';
+                apptainerFields.style.display = 'block';
+                dockerFields.style.display = 'none';
             }
         }
 
@@ -763,11 +788,104 @@
             }
         }
 
+        async function fetchDockerRepoTags() {
+            const repo = document.getElementById('container_docker_repo').value.trim();
+            const tagSelect = document.getElementById('container_docker_tag');
+            
+            if (!repo) {
+                showStatus("Please enter a Docker Hub repository (e.g. nipreps/fmriprep)", true);
+                return;
+            }
+
+            tagSelect.innerHTML = '<option>Loading...</option>';
+            try {
+                const resp = await fetch('/get_docker_tags', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ repo: repo })
+                });
+                const data = await resp.json();
+                
+                if (data.tags && data.tags.length > 0) {
+                    tagSelect.innerHTML = '';
+                    data.tags.forEach(tag => {
+                        tagSelect.add(new Option(tag, tag));
+                    });
+                    showStatus(`Fetched ${data.tags.length} tags for ${repo}`);
+                } else if (data.error) {
+                    showStatus(data.error, true);
+                    tagSelect.innerHTML = '<option value="latest">latest (fallback)</option>';
+                }
+            } catch (e) {
+                showStatus("Failed to fetch Docker tags", true);
+                tagSelect.innerHTML = '<option value="latest">latest (fallback)</option>';
+            }
+        }
+
+        async function pullDockerImage() {
+            const repo = document.getElementById('container_docker_repo').value.trim();
+            const tag = document.getElementById('container_docker_tag').value;
+            if (!repo || !tag) {
+                showStatus("Select a repository and tag first", true);
+                return;
+            }
+            const image = `${repo}:${tag}`;
+            
+            // Visual feedback
+            const pullBtn = document.getElementById('pullDockerBtn');
+            const originalText = pullBtn ? pullBtn.innerHTML : "Pull";
+            if (pullBtn) {
+                pullBtn.disabled = true;
+                pullBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Pulling...';
+            }
+
+            showStatus(`Initiating pull for ${image}. Check the console below for progress.`);
+            
+            try {
+                const resp = await fetch('/pull_image', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ image: image, engine: 'docker' })
+                });
+                const data = await resp.json();
+                if (data.message) {
+                    showStatus(data.message + " Check Console Output for status.");
+                } else {
+                    showStatus(data.error, true);
+                    if (pullBtn) {
+                        pullBtn.disabled = false;
+                        pullBtn.innerHTML = originalText;
+                    }
+                }
+            } catch (e) {
+                showStatus("Failed to request image pull", true);
+                if (pullBtn) {
+                    pullBtn.disabled = false;
+                    pullBtn.innerHTML = originalText;
+                }
+            } finally {
+                // We keep it disabled for a bit to prevent double clicks, but re-enable after timeout
+                // or just let the user know it's a background process.
+                setTimeout(() => {
+                    if (pullBtn) {
+                        pullBtn.disabled = false;
+                        pullBtn.innerHTML = originalText;
+                    }
+                }, 5000);
+            }
+        }
+
         async function fetchAppOptions() {
             const engine = document.getElementById('container_engine').value;
             let container;
             if (engine === 'docker') {
-                container = document.getElementById('container_input').value.trim();
+                const repo = document.getElementById('container_docker_repo').value.trim();
+                const tag = document.getElementById('container_docker_tag').value;
+                if (!repo || !tag) {
+                    showStatus("Please enter a Docker repository and select a tag first.", true);
+                    return;
+                }
+                container = `${repo}:${tag}`;
             } else {
                 const f = document.getElementById('container_folder').value;
                 const c = document.getElementById('container_select').value;
@@ -798,7 +916,19 @@
                 const data = await resp.json();
                 
                 if (data.error) {
-                    containerEl.innerHTML = `<div class="alert alert-warning m-4">Error fetching help: ${data.error}</div>`;
+                    if (data.need_pull) {
+                        containerEl.innerHTML = `
+                            <div class="alert alert-info m-4 shadow-sm border-info" style="border-left: 5px solid;">
+                                <h5 class="alert-heading"><i class="fas fa-download me-2"></i> Local Image Check</h5>
+                                <p>${data.error}</p>
+                                <hr>
+                                <button class="btn btn-primary btn-sm" onclick="pullDockerImage()">
+                                    <i class="fas fa-arrow-down me-1"></i> Pull Image Now
+                                </button>
+                            </div>`;
+                    } else {
+                        containerEl.innerHTML = `<div class="alert alert-warning m-4">Error fetching help: ${data.error}</div>`;
+                    }
                     return;
                 }
 
@@ -951,7 +1081,9 @@
             const engine = document.getElementById('container_engine').value;
             let containerPath;
             if (engine === 'docker') {
-                containerPath = document.getElementById('container_input').value.trim();
+                const repo = document.getElementById('container_docker_repo').value.trim();
+                const tag = document.getElementById('container_docker_tag').value;
+                containerPath = `${repo}:${tag}`;
             } else {
                 containerPath = document.getElementById('container_folder').value + '/' + document.getElementById('container_select').value;
             }
@@ -1095,9 +1227,22 @@
                 const containerPath = cfg.common.container;
                 if (containerPath) {
                     if (engine === 'docker') {
-                        document.getElementById('container_input').value = containerPath;
+                        const parts = containerPath.split(':');
+                        const repo = parts[0];
+                        const tag = parts.length > 1 ? parts[1] : 'latest';
+                        
+                        document.getElementById('container_docker_repo').value = repo;
+                        // Pre-populate tag list with the saved tag so it can be selected immediately
+                        const tagSelect = document.getElementById('container_docker_tag');
+                        tagSelect.innerHTML = '';
+                        tagSelect.add(new Option(tag, tag));
+                        tagSelect.value = tag;
+
                         console.log("Auto-fetching help for Docker image...");
                         await fetchAppOptions();
+                        
+                        // Optionally, trigger a fetch of all tags in background
+                        fetchDockerRepoTags();
                     } else {
                         const idx = containerPath.lastIndexOf('/');
                         if (idx !== -1) {
@@ -1173,8 +1318,6 @@
                             if (typeof updateOptPreview === 'function') updateOptPreview(el);
                         }
                         document.getElementById('custom_args').value = unhandledArgs.join(' ');
-                    }
-                }
                 
                 // Load mounts
                 if (cfg.app.mounts) {

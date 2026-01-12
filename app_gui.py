@@ -14,11 +14,13 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 from waitress import serve
 from pathlib import Path
+from version import __version__
 from check_app_output import BIDSOutputValidator
 
 app = Flask(__name__)
 app.secret_key = "bids-app-runner-secret-key"
 app.config['TEMPLATES_AUTO_RELOAD'] = True
+app.config['APP_VERSION'] = __version__
 
 # Base directory for the project
 BASE_DIR = Path(__file__).resolve().parent
@@ -193,7 +195,7 @@ def get_log():
 
 @app.route('/health')
 def health():
-    return "Flask is running and responding!", 200
+    return f"Flask is running and responding! (v{__version__})", 200
 
 @app.route('/list_reports', methods=['POST'])
 def list_reports():
@@ -225,24 +227,6 @@ def list_reports():
         })
         
     return jsonify({'reports': reports})
-
-@app.route('/view_report')
-def view_report():
-    """Serves a BIDS App HTML report."""
-    path = request.args.get('path')
-    if not path or not path.endswith('.html'):
-         return "Invalid report path", 400
-    
-    p = Path(path)
-    if not p.exists():
-        return "Report not found", 404
-        
-    with open(p, 'r') as f:
-        content = f.read()
-        
-    # BIDS reports are self-contained but often use relative paths for images in rare cases.
-    # We might need to handle those or just serve the HTML.
-    return content
 
 @app.route('/run_output_check', methods=['POST'])
 def run_output_check():
@@ -331,6 +315,50 @@ def detect_validation_pipelines():
         validator = BIDSOutputValidator(bids_path, derivatives_path)
         pipelines = validator.discover_pipelines()
         return jsonify({'pipelines': pipelines})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/pull_image', methods=['POST'])
+def pull_image():
+    data = request.json
+    image = data.get('image')
+    engine = data.get('engine', 'docker')
+    
+    if not image:
+        return jsonify({'error': 'No image name provided'}), 400
+        
+    try:
+        print(f"[GUI] Pulling image: {image} using {engine}...", flush=True)
+        if engine == 'docker':
+            cmd = ['docker', 'pull', image]
+        else:
+            # For apptainer, pulling usually requires a destination path. 
+            # This is more complex so we might just focus on Docker for now
+            # as requested by the user.
+            return jsonify({'error': 'Pull only implemented for Docker engine'}), 400
+            
+        # Run in background to not block
+        def run_pull():
+            try:
+                print(f"[GUI] Pulling image: {image}...", flush=True)
+                # Use Popen to stream output to the log file (stdout)
+                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                for line in process.stdout:
+                    if line.strip():
+                        # Prepend [DOCKER] so user knows where it comes from
+                        print(f"[DOCKER] {line.strip()}", flush=True)
+                process.wait()
+                
+                if process.returncode == 0:
+                    print(f"[GUI] Successfully pulled {image}", flush=True)
+                else:
+                    print(f"[GUI] Docker pull failed for {image} with return code {process.returncode}", flush=True)
+            except Exception as e:
+                print(f"[GUI] Error pulling {image}: {str(e)}", flush=True)
+                
+        threading.Thread(target=run_pull).start()
+        
+        return jsonify({'message': f'Started pulling {image} in the background.'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -435,6 +463,14 @@ def get_app_help():
         # Run container help
         print(f"[GUI] Fetching help for {container} using {engine}...", flush=True)
         if engine == 'docker':
+            # Check if image exists locally first to avoid long timeouts/auto-pulls
+            inspect_cmd = ['docker', 'image', 'inspect', container]
+            inspect_result = subprocess.run(inspect_cmd, capture_output=True)
+            if inspect_result.returncode != 0:
+                return jsonify({
+                    'error': f'Docker image "{container}" not found locally. You must pull it before parameters can be analyzed.',
+                    'need_pull': True
+                }), 400
             cmd = ['docker', 'run', '--rm', container, '--help']
         else:
             cmd = ['apptainer', 'run', '--containall', container, '--help']
@@ -828,7 +864,7 @@ if __name__ == '__main__':
             else:
                 port += 1
     
-    print(f"🌐 Starting BIDS App Runner GUI")
+    print(f"🌐 Starting BIDS App Runner GUI v{__version__}")
     print(f"🔗 URL: http://localhost:{port}")
     print(f"💡 Press Ctrl+C to stop the server\n")
     print(f"🚀 Running with Waitress server on 0.0.0.0:{port}")
