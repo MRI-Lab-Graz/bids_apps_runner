@@ -19,8 +19,6 @@ jobs:
           - os: macos-latest
             data_sep: ":"
             pyinstaller_flags: "--windowed"
-            package_cmd: |
-              hdiutil create -volname "BIDSAppRunner" -srcfolder "dist/BIDSAppRunner.app" -ov -format UDZO "dist/BIDSAppRunner.dmg"
             artifact_path: dist/BIDSAppRunner.dmg
             artifact_name: BIDSAppRunner-macos
           - os: windows-latest
@@ -46,6 +44,7 @@ jobs:
 
       - name: Build binary
         run: |
+          python -c "import os; os.makedirs('static', exist_ok=True); os.makedirs('templates', exist_ok=True)"
           python -m PyInstaller app_gui.py \
             --name BIDSAppRunner \
             --clean \
@@ -72,12 +71,6 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path dist/BIDSAppRunner.exe -DestinationPath dist/BIDSAppRunner.zip -Force
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}-${{ github.ref_name }}
-          path: ${{ matrix.artifact_path }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
