@@ -109,6 +109,9 @@
                 </div>
             </div>
             <div class="text-end d-none d-md-block">
+                <div id="system-status-pills" class="d-inline-block me-3">
+                    <!-- System status badges will be injected here -->
+                </div>
                 <a href="https://github.com/MRI-Lab-Graz/bids_apps_runner" target="_blank" class="btn btn-outline-light btn-sm"><i class="fab fa-github me-1"></i> GitHub Repo</a>
             </div>
         </div>
@@ -2076,9 +2079,55 @@
             }
         }
 
+        async function checkSystemStatus() {
+            const container = document.getElementById('system-status-pills');
+            if (!container) return;
+            
+            try {
+                const resp = await fetch('/check_system');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                
+                container.innerHTML = '';
+                
+                const tools = [
+                    { key: 'docker', icon: 'fab fa-docker', label: 'Docker' },
+                    { key: 'apptainer', icon: 'fas fa-box', label: 'Apptainer' },
+                    { key: 'singularity', icon: 'fas fa-box-open', label: 'Singularity' },
+                    { key: 'datalad', icon: 'fas fa-database', label: 'DataLad' }
+                ];
+                
+                tools.forEach(tool => {
+                    let available = data[tool.key];
+                    let label = tool.label;
+                    let extraStatus = "";
+                    
+                    if (tool.key === 'docker' && available && !data.docker_running) {
+                        available = false; // Treat as unavailable if not running
+                        extraStatus = " (Not Running)";
+                    }
+                    
+                    const badge = document.createElement('span');
+                    badge.className = `badge ${available ? 'bg-success' : 'bg-danger'} ms-1`;
+                    badge.style.opacity = available ? '1' : '0.6';
+                    badge.innerHTML = `<i class="${tool.icon} me-1"></i> ${label}${extraStatus}`;
+                    
+                    let title = available ? `${label} is available` : `${label} is NOT found in PATH`;
+                    if (tool.key === 'docker' && data.docker && !data.docker_running) {
+                        title = "Docker is installed but the daemon is NOT RUNNING.";
+                    }
+                    badge.title = title;
+                    container.appendChild(badge);
+                });
+            } catch (err) {
+                console.error("System check failed:", err);
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
             toggleEngineFields();
+            checkSystemStatus();
 
             // Clear tags if repo changes
             const buildRepoInput = document.getElementById('build_docker_repo');

@@ -22,6 +22,26 @@ app.secret_key = "bids-app-runner-secret-key"
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['APP_VERSION'] = __version__
 
+def check_system_dependencies():
+    """Check for availability of docker, apptainer, and singularity."""
+    docker_installed = shutil.which('docker') is not None
+    docker_running = False
+    if docker_installed:
+        try:
+            # Check if daemon is responsive
+            subprocess.run(['docker', 'info'], capture_output=True, timeout=2, check=True)
+            docker_running = True
+        except (subprocess.SubprocessError, FileNotFoundError):
+            docker_running = False
+
+    return {
+        'docker': docker_installed,
+        'docker_running': docker_running,
+        'apptainer': shutil.which('apptainer') is not None,
+        'singularity': shutil.which('singularity') is not None,
+        'datalad': shutil.which('datalad') is not None
+    }
+
 # Base directory for the project
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
@@ -196,6 +216,11 @@ def get_log():
 @app.route('/health')
 def health():
     return f"Flask is running and responding! (v{__version__})", 200
+
+@app.route('/check_system', methods=['GET'])
+def check_system():
+    """Endpoint to check system dependencies."""
+    return jsonify(check_system_dependencies())
 
 @app.route('/list_reports', methods=['POST'])
 def list_reports():
@@ -796,6 +821,18 @@ def run_app():
                 'error': 'Validation Failed',
                 'details': 'The following paths do not exist:\n' + '\n'.join(missing)
             }), 400
+
+        # Check container engine availability
+        engine = common.get('container_engine', 'apptainer')
+        if engine == 'docker':
+            if not shutil.which('docker'):
+                return jsonify({'error': 'Docker requested but not found on system.'}), 400
+            try:
+                subprocess.run(['docker', 'info'], capture_output=True, timeout=2, check=True)
+            except (subprocess.SubprocessError, FileNotFoundError):
+                return jsonify({'error': 'Docker is installed but the DAEMON IS NOT RUNNING. Please start Docker Desktop.'}), 400
+        elif engine == 'apptainer' and not (shutil.which('apptainer') or shutil.which('singularity')):
+            return jsonify({'error': 'Apptainer/Singularity requested but not found on system.'}), 400
 
         # 2. Launch run_bids_apps.py in background
         script_path = BASE_DIR / "run_bids_apps.py"
