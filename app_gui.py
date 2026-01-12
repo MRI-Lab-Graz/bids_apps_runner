@@ -38,6 +38,18 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = BUNDLE_DIR
 
+def _find_python_interpreter():
+    """Find a Python 3 interpreter in the current environment."""
+    if not getattr(sys, 'frozen', False):
+        return sys.executable
+    # In frozen mode, look for common python names in PATH
+    for cmd in ["python3", "python", "python.exe"]:
+        if shutil.which(cmd):
+            return cmd
+    return "python3" # Fallback
+
+PYTHON_EXE = _find_python_interpreter()
+
 LOG_DIR = BASE_DIR / "logs"
 
 @app.before_request
@@ -835,15 +847,8 @@ def run_app():
             script_path = BASE_DIR / "run_bids_apps.py"
         
         # Build command
-        # Use sys.executable to ensure we use the same Python environment 
-        # (or the bundle itself if frozen)
-        python_exe = sys.executable if not getattr(sys, 'frozen', False) else "python3"
-        # Note: If frozen, we still need a python interpreter to run the script 
-        # unless we bundle the script as an executable.
-        # For now, we assume python3 is available in the target environment.
-        
         cmd = [
-            python_exe, str(script_path),
+            PYTHON_EXE, str(script_path),
             "-c", str(config_path),
         ]
         

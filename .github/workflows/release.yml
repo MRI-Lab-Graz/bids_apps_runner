@@ -43,6 +43,7 @@ jobs:
           pip install pyinstaller
 
       - name: Build binary
+        shell: bash
         run: |
           python -c "import os; os.makedirs('static', exist_ok=True); os.makedirs('templates', exist_ok=True)"
           python -m PyInstaller app_gui.py \
@@ -56,6 +57,7 @@ jobs:
             --add-data "run_bids_apps_hpc.py${{ matrix.data_sep }}." \
             --add-data "bids_validation_integration.py${{ matrix.data_sep }}." \
             --add-data "check_app_output.py${{ matrix.data_sep }}." \
+            --add-data "check_system_deps.py${{ matrix.data_sep }}." \
             --add-data "version.py${{ matrix.data_sep }}." \
             --collect-all flask \
             --collect-all waitress \
