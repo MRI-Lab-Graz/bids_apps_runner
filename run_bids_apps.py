@@ -448,10 +448,19 @@ def validate_common_config(cfg):
     """Validate common configuration section."""
     logging.info("Validating common configuration...")
     
-    # Check for Apptainer or Singularity
-    if not (shutil.which("apptainer") or shutil.which("singularity")):
-        logging.error("Neither 'apptainer' nor 'singularity' found in PATH")
-        sys.exit("ERROR: Apptainer/Singularity is required but not found")
+    # Check for requested container engine
+    engine = cfg.get("container_engine", "apptainer")
+    if engine == "docker":
+        if not shutil.which("docker"):
+            logging.error("Docker requested but 'docker' command not found in PATH")
+            sys.exit("ERROR: Docker is required but not found")
+        logging.info("Using Docker as container engine")
+    else:
+        # Default to Apptainer/Singularity
+        if not (shutil.which("apptainer") or shutil.which("singularity")):
+            logging.error("Neither 'apptainer' nor 'singularity' found in PATH")
+            sys.exit("ERROR: Apptainer/Singularity is required but not found")
+        logging.info("Using Apptainer/Singularity as container engine")
     
     required = ["bids_folder", "output_folder", "tmp_folder", "container", "templateflow_dir"]
     missing = []
@@ -483,7 +492,7 @@ def validate_common_config(cfg):
     
     # Validate container file exists
     container_path = cfg["container"]
-    if not os.path.isfile(container_path):
+    if engine != "docker" and not os.path.isfile(container_path):
         logging.error(f"Container file not found: {container_path}")
         sys.exit(f"ERROR: Missing container file: {container_path}")
     
@@ -855,18 +864,21 @@ def run_container(cmd, env=None, dry_run=False, debug=False, subject=None, log_d
         
         # Fast validation: static checks + container probe that doesn't start the BIDS app.
         try:
-            logging.info("Validating command syntax...")
-            static_err = validate_apptainer_cmd_static(cmd)
-            if static_err:
-                logging.warning("❌ Command validation failed!")
-                logging.warning(f"Validation error: {static_err}")
-            else:
-                ok, detail = validate_container_fast(cmd, env=env)
-                if ok:
-                    logging.info("✅ Command syntax validated successfully")
-                else:
+            if cmd[0] == "apptainer":
+                logging.info("Validating command syntax...")
+                static_err = validate_apptainer_cmd_static(cmd)
+                if static_err:
                     logging.warning("❌ Command validation failed!")
-                    logging.warning(f"Validation error: {detail}")
+                    logging.warning(f"Validation error: {static_err}")
+                else:
+                    ok, detail = validate_container_fast(cmd, env=env)
+                    if ok:
+                        logging.info("✅ Command syntax validated successfully")
+                    else:
+                        logging.warning("❌ Command validation failed!")
+                        logging.warning(f"Validation error: {detail}")
+            elif cmd[0] == "docker":
+                logging.info("Dry run: Docker command generated. Skipping specific validation.")
         except subprocess.TimeoutExpired:
             logging.warning("⚠️ Command validation timed out")
         except Exception as e:
@@ -1164,32 +1176,56 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
             get_subject_data_datalad(common["bids_folder"], subject, dry_run)
         
         # Build container command
-        cmd = ["apptainer", "run"]
+        engine = common.get("container_engine", "apptainer")
         
-        # Add app-specific apptainer arguments
-        if app.get("apptainer_args"):
-            safe_args = sanitize_apptainer_args(app["apptainer_args"])
-            cmd.extend(safe_args)
-            logging.debug(f"Added apptainer args: {safe_args}")
+        if engine == "docker":
+            cmd = ["docker", "run", "--rm"]
+            
+            # Add environment variables
+            cmd.extend(["-e", "TEMPLATEFLOW_HOME=/templateflow"])
+            
+            # Add bind mounts
+            for mnt in build_common_mounts(common, tmp_dir):
+                cmd.extend(["-v", mnt])
+            
+            # Add custom mounts
+            for mount in app.get("mounts", []):
+                if mount.get("source") and mount.get("target"):
+                    cmd.extend(["-v", f"{mount['source']}:{mount['target']}"])
+                    logging.debug(f"Added custom mount: {mount['source']}:{mount['target']}")
+            
+            # Add container image name
+            cmd.append(common["container"])
         else:
-            cmd.append("--containall")
-        
-        # Add bind mounts
-        for mnt in build_common_mounts(common, tmp_dir):
-            cmd.extend(["-B", mnt])
-        
-        # Add custom mounts
-        for mount in app.get("mounts", []):
-            if mount.get("source") and mount.get("target"):
-                cmd.extend(["-B", f"{mount['source']}:{mount['target']}"])
-                logging.debug(f"Added custom mount: {mount['source']}:{mount['target']}")
-        
-        # Add environment variables
-        cmd.extend([
-            "--env", f"TEMPLATEFLOW_HOME=/templateflow",
-            common["container"],
-            "/bids", "/output", app.get("analysis_level", "participant")
-        ])
+            # Default to Apptainer
+            cmd = ["apptainer", "run"]
+            
+            # Add app-specific apptainer arguments (only for apptainer)
+            if app.get("apptainer_args"):
+                safe_args = sanitize_apptainer_args(app["apptainer_args"])
+                cmd.extend(safe_args)
+                logging.debug(f"Added apptainer args: {safe_args}")
+            else:
+                cmd.append("--containall")
+            
+            # Add bind mounts
+            for mnt in build_common_mounts(common, tmp_dir):
+                cmd.extend(["-B", mnt])
+            
+            # Add custom mounts
+            for mount in app.get("mounts", []):
+                if mount.get("source") and mount.get("target"):
+                    cmd.extend(["-B", f"{mount['source']}:{mount['target']}"])
+                    logging.debug(f"Added custom mount: {mount['source']}:{mount['target']}")
+            
+            # Add environment variables
+            cmd.extend(["--env", "TEMPLATEFLOW_HOME=/templateflow"])
+            
+            # Add container image path
+            cmd.append(common["container"])
+
+        # Add common BIDS app arguments (same for both engines)
+        cmd.extend(["/bids", "/output", app.get("analysis_level", "participant")])
         
         # Add app-specific options
         if app.get("options"):

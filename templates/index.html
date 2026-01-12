@@ -69,14 +69,44 @@
         .report-item { transition: all 0.2s; border: 1px solid #eee; }
         .report-item:hover { transform: translateX(5px); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .border-bottom-dotted { border-bottom: 1px dotted #ccc; }
+
+        /* Navbar Tab Styling */
+        .navbar .tab-button {
+            border-radius: 20px;
+            padding: 6px 18px;
+            font-size: 0.85rem;
+            border-width: 2px;
+            transition: all 0.2s;
+        }
+        .navbar .btn-outline-primary {
+            color: #fff;
+            border-color: rgba(255,255,255,0.2);
+        }
+        .navbar .btn-outline-primary:hover {
+            background: rgba(255,255,255,0.1);
+            border-color: #fff;
+            color: #fff;
+        }
+        .navbar .btn-primary {
+            background-color: var(--accent-color);
+            border-color: var(--accent-color);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        }
     </style>
 </head>
 <body>
     <nav class="navbar">
         <div class="container d-flex justify-content-between align-items-center">
-            <div>
-                <a class="navbar-brand" href="#"><i class="fas fa-layer-group me-2"></i>BIDS App Runner</a>
-                <div class="branding-sub">Advanced Workflow Control • MRI-Lab Graz</div>
+            <div class="d-flex align-items-center">
+                <div class="me-4">
+                    <a class="navbar-brand" href="#"><i class="fas fa-layer-group me-2"></i>BIDS App Runner</a>
+                    <div class="branding-sub">Advanced Workflow Control • MRI-Lab Graz</div>
+                </div>
+                <div class="btn-group ms-3" role="tablist">
+                    <button class="btn btn-primary tab-button active" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)">Run BIDS App</button>
+                    <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)">Check App Output</button>
+                    <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)">Build Apptainer</button>
+                </div>
             </div>
             <div class="text-end d-none d-md-block">
                 <a href="https://github.com/MRI-Lab-Graz/bids_apps_runner" target="_blank" class="btn btn-outline-light btn-sm"><i class="fab fa-github me-1"></i> GitHub Repo</a>
@@ -85,13 +115,6 @@
     </nav>
 
     <div class="container container-main">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <div class="btn-group" role="tablist">
-                <button class="btn btn-primary tab-button active" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)">Run BIDS App</button>
-                <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)">Check App Output</button>
-                <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)">Build Apptainer</button>
-            </div>
-        </div>
         <div id="runnerTab" class="tab-panel" style="display:block;">
             <div class="card">
             <div class="card-header">
@@ -129,13 +152,21 @@
                             <div class="input-group">
                                 <input type="text" id="templateflow_dir" class="form-control">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('templateflow_dir')">...</button>
+                                <button type="button" class="btn btn-primary" onclick="openTemplateFlowPicker()"><i class="fas fa-search me-1"></i> Scan</button>
                             </div>
                         </div>
                     </div>
 
                     <div class="section-header">2. Container Settings</div>
                     <div class="row align-items-end">
-                        <div class="col-md-6 mb-4">
+                        <div class="col-md-3 mb-4">
+                            <label class="form-label">Container Engine</label>
+                            <select id="container_engine" class="form-select" onchange="toggleEngineFields()">
+                                <option value="apptainer" selected>Apptainer/Singularity</option>
+                                <option value="docker">Docker</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4 mb-4" id="container_folder_group">
                             <label class="form-label">Apptainer Images Folder</label>
                             <div class="input-group">
                                 <input type="text" id="container_folder" class="form-control">
@@ -143,11 +174,15 @@
                                 <button type="button" class="btn btn-primary" onclick="scanContainers()">Scan</button>
                             </div>
                         </div>
-                        <div class="col-md-6 mb-4">
-                            <label class="form-label">Select App Image</label>
-                            <div class="input-group">
+                        <div class="col-md-5 mb-4">
+                            <label class="form-label" id="container_select_label">Select App Image</label>
+                            <div class="input-group" id="container_select_group">
                                 <select id="container_select" class="form-select" onchange="checkAppVersion()"></select>
                                 <button type="button" id="fetchHelpBtn" class="btn btn-accent" style="display:none;" onclick="fetchAppOptions()">Load Options</button>
+                            </div>
+                            <div class="input-group" id="container_input_group" style="display:none;">
+                                <input type="text" id="container_input" class="form-control" placeholder="e.g. nipreps/fmriprep:latest">
+                                <button type="button" class="btn btn-accent" onclick="fetchAppOptions()">Load Options</button>
                             </div>
                             <div id="versionAlert" style="margin-top: 8px; font-size: 0.85rem; display: none;"></div>
                         </div>
@@ -161,7 +196,21 @@
                         <div id="optionsContainer"></div>
                     </div>
 
-                    <div class="section-header">3. Execution Parameters</div>
+                    <div class="section-header">3. Custom Options & Mounts</div>
+                    <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Additional command-line arguments passed directly to the BIDS App (e.g., --fs-license-file /fs/license.txt --output-spaces MNI152NLin2009cAsym:res-native)">Custom App Arguments</label>
+                            <textarea id="custom_args" class="form-control" rows="3" placeholder="--fs-license-file /fs/license.txt&#10;--output-spaces MNI152NLin2009cAsym:res-native"></textarea>
+                            <div class="text-muted small mt-1">One argument per line or space-separated.</div>
+                        </div>
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Additional bind mounts for the container (e.g., /usr/local/freesurfer:/fs)">Custom Bind Mounts (source:target)</label>
+                            <textarea id="custom_mounts" class="form-control" rows="3" placeholder="/usr/local/freesurfer:/fs"></textarea>
+                            <div class="text-muted small mt-1">One mount per line (SourcePath:TargetPath).</div>
+                        </div>
+                    </div>
+
+                    <div class="section-header">4. Execution Parameters</div>
                     <div class="row">
                         <div class="col-md-4 mb-4">
                             <label class="form-label">Analysis Level</label>
@@ -356,11 +405,16 @@
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Docker Repository</label>
-                            <input type="text" class="form-control" id="build_docker_repo" placeholder="nipreps/fmriprep">
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="build_docker_repo" placeholder="nipreps/fmriprep">
+                                <button type="button" class="btn btn-outline-primary" onclick="fetchDockerTags()">Fetch Tags</button>
+                            </div>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Tag</label>
-                            <input type="text" class="form-control" id="build_docker_tag" placeholder="latest">
+                            <select class="form-select" id="build_docker_tag">
+                                <option value="latest">latest</option>
+                            </select>
                         </div>
                     </div>
                     <div class="row">
@@ -432,6 +486,28 @@
                         <i class="fas fa-file-contract fa-4x mb-3 opacity-25"></i>
                         <p>Select a subject from the list to view their interactive report.</p>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tfModal" style="display:none; position:fixed; z-index:1001; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5); backdrop-filter: blur(2px);">
+        <div style="background:white; margin:5% auto; padding:30px; width:90%; max-width:800px; border-radius:12px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height: 80vh; display: flex; flex-direction: column;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4 class="mb-0">TemplateFlow Browser</h4>
+                <button type="button" class="btn-close" onclick="document.getElementById('tfModal').style.display='none'"></button>
+            </div>
+            <p class="text-muted small mb-3">Detected templates in your local TemplateFlow directory. Select templates and resolutions to add to your output spaces configuration.</p>
+            
+            <div id="tfList" style="flex-grow: 1; overflow-y:auto; margin-bottom: 20px; border: 1px solid #eee; border-radius: 8px; padding: 15px;">
+                <div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div></div>
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center">
+                <div id="tfSelectionSummary" class="small fw-bold text-primary"></div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-outline-secondary" onclick="document.getElementById('tfModal').style.display='none'">Cancel</button>
+                    <button class="btn btn-success" onclick="applyTFSelection()">Apply to Output Spaces</button>
                 </div>
             </div>
         </div>
@@ -609,6 +685,58 @@
             closeBrowser();
         }
 
+        function updateOptPreview(el) {
+            const container = el.closest('.border');
+            const previewEl = container.querySelector('.opt-preview');
+            if (!previewEl) return;
+
+            let text = '';
+            const flag = el.dataset.flag;
+
+            if (el.classList.contains('dynamic-opt-bool')) {
+                const isNegated = el.dataset.negated === 'true';
+                const val = el.value; // 'enabled' or 'disabled'
+                
+                if (isNegated) {
+                    // Negated flag (e.g. skip-bids): Disabled choice means ADD flag
+                    text = (val === 'disabled') ? flag : '(omitted)';
+                } else {
+                    // Standard flag: Enabled choice means ADD flag
+                    text = (val === 'enabled') ? flag : '(omitted)';
+                }
+            } else if (el.tagName === 'SELECT') {
+                text = el.value ? `${flag} ${el.value}` : '(default)';
+            } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                const val = el.value.trim();
+                text = val ? `${flag} ${val.split(/[\s\n]+/)[0]}${val.includes(' ') || val.includes('\n') ? ' ...' : ''}` : '(empty)';
+            }
+
+            previewEl.innerText = text;
+            previewEl.classList.toggle('bg-primary', text !== '(omitted)' && text !== '(default)' && text !== '(empty)');
+            previewEl.classList.toggle('bg-secondary', text === '(omitted)' || text === '(default)' || text === '(empty)');
+            previewEl.style.opacity = (text === '(omitted)' || text === '(default)' || text === '(empty)') ? '0.5' : '1';
+        }
+
+        function toggleEngineFields() {
+            const engine = document.getElementById('container_engine').value;
+            const folderGroup = document.getElementById('container_folder_group');
+            const selectGroup = document.getElementById('container_select_group');
+            const inputGroup = document.getElementById('container_input_group');
+            const selectLabel = document.getElementById('container_select_label');
+
+            if (engine === 'docker') {
+                folderGroup.style.display = 'none';
+                selectGroup.style.display = 'none';
+                inputGroup.style.display = 'flex';
+                selectLabel.innerText = 'Docker Image Name';
+            } else {
+                folderGroup.style.display = 'block';
+                selectGroup.style.display = 'flex';
+                inputGroup.style.display = 'none';
+                selectLabel.innerText = 'Select App Image';
+            }
+        }
+
         async function scanContainers() {
             const f = document.getElementById('container_folder').value;
             if (!f) {
@@ -636,17 +764,37 @@
         }
 
         async function fetchAppOptions() {
-            const f = document.getElementById('container_folder').value;
-            const c = document.getElementById('container_select').value;
-            if (!c) return;
+            const engine = document.getElementById('container_engine').value;
+            let container;
+            if (engine === 'docker') {
+                container = document.getElementById('container_input').value.trim();
+            } else {
+                const f = document.getElementById('container_folder').value;
+                const c = document.getElementById('container_select').value;
+                if (!c) return;
+                container = f + '/' + c;
+            }
+            if (!container) return;
+
+            // Per-app defaults for boolean flags.
+            // These defaults apply only to dynamically-discovered (help-parsed) options.
+            const defaultCheckedFlags = new Set();
+            if (container.toLowerCase().includes('fmriprep')) {
+                // fMRIPrep: do not run FreeSurfer recon-all unless explicitly requested.
+                defaultCheckedFlags.add('--fs-no-reconall');
+            }
 
             const containerEl = document.getElementById('optionsContainer');
             document.getElementById('dynamicOptionsSection').style.display = 'block';
             containerEl.innerHTML = '<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div><div class="mt-2">Analyzing container...</div></div>';
             
             try {
-                checkAppVersion();
-                const resp = await fetch('/get_app_help', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ container: f + '/' + c }) });
+                if (engine === 'apptainer') checkAppVersion();
+                const resp = await fetch('/get_app_help', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ container: container, container_engine: engine }) 
+                });
                 const data = await resp.json();
                 
                 if (data.error) {
@@ -673,6 +821,8 @@
                             const item = document.createElement('div');
                             item.className = 'p-3 border rounded bg-light d-flex flex-column';
                             let input = '';
+                            let previewStr = '';
+
                             if (opt.choices && opt.choices.length > 0) {
                                 if (opt.is_multiple) {
                                     let chks = '';
@@ -683,16 +833,50 @@
                                 } else {
                                     let opts = '<option value="">-- Default --</option>';
                                     opt.choices.forEach(ch => opts += `<option value="${ch}">${ch}</option>`);
-                                    input = `<label class="form-label">${opt.name}</label><select class="dynamic-opt form-select" data-flag="${opt.flag}">${opts}</select>`;
+                                    input = `<label class="form-label">${opt.name}</label><select class="dynamic-opt form-select" data-flag="${opt.flag}" onchange="updateOptPreview(this)">${opts}</select>`;
                                 }
                             } else if (opt.has_value) {
-                                input = `<label class="form-label">${opt.name}</label><input type="text" class="dynamic-opt form-control" data-flag="${opt.flag}">`;
+                                if (opt.is_multiple) {
+                                    input = `<label class="form-label">${opt.name}</label><textarea class="dynamic-opt form-control" data-flag="${opt.flag}" placeholder="Enter values (one per line)" oninput="updateOptPreview(this)"></textarea>`;
+                                } else {
+                                    input = `<label class="form-label">${opt.name}</label><input type="text" class="dynamic-opt form-control" data-flag="${opt.flag}" oninput="updateOptPreview(this)">`;
+                                }
                             } else {
-                                input = `<div class="form-check mt-auto"><input type="checkbox" class="form-check-input dynamic-opt" data-flag="${opt.flag}"> <label class="form-check-label font-weight-bold">${opt.name}</label></div>`;
+                                // Boolean Flag: use Enabled/Disabled toggle for clarity
+                                const isDefaultChecked = defaultCheckedFlags.has(opt.flag);
+                                // For negated flags, "Checked" (Disabled) usually means adding the flag.
+                                // Logic: 
+                                //   Standard: Enabled (no flag) | Disabled (not possible usually unless default is on, but we follow standard CLI)
+                                //   Actually, let's keep it simple: 
+                                //   If standard flag: Enabled -> add flag, Disabled -> omit.
+                                //   If negated flag: Enabled -> omit flag, Disabled -> add flag.
+                                
+                                let options = '';
+                                if (opt.is_negated) {
+                                    // Default (Enabled) is "no flag", Disabled is "add flag"
+                                    options = `<option value="enabled"${!isDefaultChecked ? ' selected' : ''}>Enabled</option>
+                                               <option value="disabled"${isDefaultChecked ? ' selected' : ''}>Disabled</option>`;
+                                } else {
+                                    // Default (Disabled) is "no flag", Enabled is "add flag"
+                                    options = `<option value="disabled"${!isDefaultChecked ? ' selected' : ''}>Disabled</option>
+                                               <option value="enabled"${isDefaultChecked ? ' selected' : ''}>Enabled</option>`;
+                                }
+                                
+                                input = `<label class="form-label">${opt.name}</label>
+                                         <select class="dynamic-opt-bool form-select" data-flag="${opt.flag}" data-negated="${opt.is_negated}" onchange="updateOptPreview(this)">
+                                            ${options}
+                                         </select>`;
                             }
+                            
                             const desc = opt.description ? `<div style="font-size:0.7rem;color:#777;margin-top:10px;line-height:1.4;border-top:1px solid #eee;padding-top:8px;">${opt.description}</div>` : '';
-                            item.innerHTML = input + desc;
+                            const preview = `<div class="mt-2"><span class="badge bg-secondary opacity-50 font-monospace opt-preview" style="font-size:0.65rem;"></span></div>`;
+                            
+                            item.innerHTML = input + preview + desc;
                             content.appendChild(item);
+                            
+                            // Initialize preview
+                            const selectEl = item.querySelector('.dynamic-opt, .dynamic-opt-bool, .dynamic-opt-multi, input, textarea');
+                            if (selectEl) updateOptPreview(selectEl);
                         });
                         secDiv.appendChild(h); secDiv.appendChild(content); containerEl.appendChild(secDiv);
                     });
@@ -711,26 +895,82 @@
 
         async function handleSaveAndRun(shouldRun) {
             const opts = [];
+            // Handle standard inputs
             document.querySelectorAll('.dynamic-opt').forEach(el => {
-                if (el.type === 'checkbox') { if (el.checked) opts.push(el.dataset.flag); }
-                else if (el.value.trim()) { opts.push(el.dataset.flag); opts.push(el.value.trim()); }
+                if (el.type === 'checkbox') { 
+                    if (el.checked) opts.push(el.dataset.flag); 
+                } else if (el.value.trim()) {
+                    opts.push(el.dataset.flag);
+                    if (el.tagName === 'TEXTAREA') {
+                        // Split by newlines or spaces for multiple values
+                        const vals = el.value.trim().split(/[\s\n]+/);
+                        vals.forEach(v => { if(v) opts.push(v); });
+                    } else {
+                        opts.push(el.value.trim());
+                    }
+                }
             });
+
+            // Handle Boolean selection (Enabled/Disabled)
+            document.querySelectorAll('.dynamic-opt-bool').forEach(el => {
+                const flag = el.dataset.flag;
+                const isNegated = el.dataset.negated === 'true';
+                const val = el.value; // 'enabled' or 'disabled'
+
+                if (isNegated) {
+                    // For negated flag, "Disabled" means we add the skip/no flag
+                    if (val === 'disabled') opts.push(flag);
+                } else {
+                    // For standard flag, "Enabled" means we add it
+                    if (val === 'enabled') opts.push(flag);
+                }
+            });
+
             const multi = {};
             document.querySelectorAll('.dynamic-opt-multi').forEach(el => {
                 if (el.checked) { const f = el.dataset.flag; if (!multi[f]) multi[f] = []; multi[f].push(el.value); }
             });
             for (const f in multi) { opts.push(f); multi[f].forEach(v => opts.push(v)); }
             
+            // Add custom arguments from the textarea
+            const customArgsVal = document.getElementById('custom_args').value.trim();
+            if (customArgsVal) {
+                // Split by spaces but respect quotes would be better, but simple split for now
+                const args = customArgsVal.split(/[\s\n]+/);
+                args.forEach(a => { if(a) opts.push(a); });
+            }
+
+            const mounts = [];
+            document.getElementById('custom_mounts').value.split('\n').forEach(line => {
+                const parts = line.trim().split(':');
+                if (parts.length >= 2) {
+                    mounts.push({ source: parts[0].trim(), target: parts.slice(1).join(':').trim() });
+                }
+            });
+
+            const engine = document.getElementById('container_engine').value;
+            let containerPath;
+            if (engine === 'docker') {
+                containerPath = document.getElementById('container_input').value.trim();
+            } else {
+                containerPath = document.getElementById('container_folder').value + '/' + document.getElementById('container_select').value;
+            }
+
             const config = {
                 common: {
                     bids_folder: document.getElementById('bids_folder').value,
                     output_folder: document.getElementById('output_folder').value,
                     tmp_folder: document.getElementById('tmp_folder').value,
                     templateflow_dir: document.getElementById('templateflow_dir').value,
-                    container: document.getElementById('container_folder').value + '/' + document.getElementById('container_select').value,
+                    container_engine: engine,
+                    container: containerPath,
                     jobs: parseInt(document.getElementById('jobs').value) || 1
                 },
-                app: { analysis_level: document.getElementById('analysis_level').value, options: opts }
+                app: { 
+                    analysis_level: document.getElementById('analysis_level').value, 
+                    options: opts,
+                    mounts: mounts 
+                }
             };
 
             const filename = document.getElementById('config_name').value || 'config.json';
@@ -848,27 +1088,41 @@
                 lastSavedPath = `/data/local/software/bids_apps_runner/configs/${filename}`;
                 document.getElementById('runApp').style.display = 'inline-block';
 
+                const engine = cfg.common.container_engine || 'apptainer';
+                document.getElementById('container_engine').value = engine;
+                toggleEngineFields();
+
                 const containerPath = cfg.common.container;
                 if (containerPath) {
-                    const idx = containerPath.lastIndexOf('/');
-                    if (idx !== -1) {
-                        const folder = containerPath.substring(0, idx);
-                        const name = containerPath.substring(idx + 1);
-                        document.getElementById('container_folder').value = folder;
-                        await scanContainers();
-                        
-                        // If the container from config is not in the select (e.g. renamed or moved), add it
-                        const s = document.getElementById('container_select');
-                        let exists = Array.from(s.options).some(o => o.value === name);
-                        if (!exists) {
-                            s.add(new Option(name + " (not in folder)", name));
-                        }
-                        s.value = name;
-                        
-                        console.log("Auto-fetching help for loaded container...");
+                    if (engine === 'docker') {
+                        document.getElementById('container_input').value = containerPath;
+                        console.log("Auto-fetching help for Docker image...");
                         await fetchAppOptions();
-                        
-                        const options = cfg.app.options || [];
+                    } else {
+                        const idx = containerPath.lastIndexOf('/');
+                        if (idx !== -1) {
+                            const folder = containerPath.substring(0, idx);
+                            const name = containerPath.substring(idx + 1);
+                            document.getElementById('container_folder').value = folder;
+                            await scanContainers();
+                            
+                            // If the container from config is not in the select (e.g. renamed or moved), add it
+                            const s = document.getElementById('container_select');
+                            let exists = Array.from(s.options).some(o => o.value === name);
+                            if (!exists) {
+                                s.add(new Option(name + " (not in folder)", name));
+                            }
+                            s.value = name;
+                            
+                            console.log("Auto-fetching help for loaded container...");
+                            await fetchAppOptions();
+                        }
+                    }
+                }
+                
+                // Rest of the options parsing...
+                const options = cfg.app.options || [];
+                        const unhandledArgs = [];
                         for (let i = 0; i < options.length; i++) {
                             const opt = options[i];
                             const el = document.querySelector(`[data-flag="${opt}"]`);
@@ -880,20 +1134,54 @@
                                         const val = options[i];
                                         document.querySelectorAll(`.dynamic-opt-multi[data-flag="${opt}"][value="${val}"]`).forEach(checkedEl => checkedEl.checked = true);
                                     }
+                                } else {
+                                    // Not found in dynamic UI, move to custom args
+                                    if (opt.startsWith('-')) {
+                                        unhandledArgs.push(opt);
+                                        while (i + 1 < options.length && !options[i+1].startsWith('-')) {
+                                            i++;
+                                            unhandledArgs.push(options[i]);
+                                        }
+                                    }
                                 }
                                 continue;
                             }
-                            if (el.type === 'checkbox') {
+
+                            if (el.classList.contains('dynamic-opt-bool')) {
+                                // Logic: If the flag is PRESENT in config:
+                                //   Standard: Enabled (sets flag)
+                                //   Negated: Disabled (sets skip- flag)
+                                const isNegated = el.dataset.negated === 'true';
+                                el.value = isNegated ? 'disabled' : 'enabled';
+                            } else if (el.type === 'checkbox') {
                                 el.checked = true;
                             } else {
                                 if (i + 1 < options.length && !options[i+1].startsWith('-')) {
-                                    el.value = options[i+1];
-                                    i++;
+                                    if (el.tagName === 'TEXTAREA') {
+                                        const vals = [];
+                                        while (i + 1 < options.length && !options[i+1].startsWith('-')) {
+                                            i++;
+                                            vals.push(options[i]);
+                                        }
+                                        el.value = vals.join('\n');
+                                    } else {
+                                        el.value = options[i+1];
+                                        i++;
+                                    }
                                 }
                             }
+                            if (typeof updateOptPreview === 'function') updateOptPreview(el);
                         }
+                        document.getElementById('custom_args').value = unhandledArgs.join(' ');
                     }
                 }
+                
+                // Load mounts
+                if (cfg.app.mounts) {
+                    const mountLines = cfg.app.mounts.map(m => `${m.source}:${m.target}`);
+                    document.getElementById('custom_mounts').value = mountLines.join('\n');
+                }
+
                 showStatus("Configuration loaded: " + filename);
             } catch (e) {
                 console.error("loadConfigDetails error:", e);
@@ -926,11 +1214,13 @@
             }
             document.querySelectorAll('.tab-button').forEach(btn => {
                 btn.classList.remove('btn-primary');
+                btn.classList.remove('active');
                 btn.classList.add('btn-outline-primary');
             });
             if (button) {
                 button.classList.remove('btn-outline-primary');
                 button.classList.add('btn-primary');
+                button.classList.add('active');
             }
         }
 
@@ -1387,6 +1677,123 @@
             document.getElementById('reportPlaceholder').style.display = 'flex';
         }
 
+        async function openTemplateFlowPicker() {
+            const path = document.getElementById('templateflow_dir').value.trim();
+            if (!path) {
+                showStatus('Please set a TemplateFlow directory first.', true);
+                return;
+            }
+
+            document.getElementById('tfModal').style.display = 'block';
+            const list = document.getElementById('tfList');
+            list.innerHTML = '<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div><div class="mt-2">Scanning TemplateFlow...</div></div>';
+
+            try {
+                const resp = await fetch('/get_templateflow_templates', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ path: path })
+                });
+                const data = await resp.json();
+
+                if (data.templates && data.templates.length > 0) {
+                    let html = '<div class="row g-3">';
+                    data.templates.forEach(t => {
+                        html += `
+                            <div class="col-md-6">
+                                <div class="p-3 border rounded bg-light h-100">
+                                    <div class="fw-bold mb-2">${t.name}</div>
+                                    <div class="d-flex flex-wrap gap-1">
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input tf-sel" type="checkbox" data-tpl="${t.name}" value="${t.name}">
+                                            <label class="form-check-label small">Default</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input tf-sel" type="checkbox" data-tpl="${t.name}" data-res="native" value="${t.name}:res-native">
+                                            <label class="form-check-label small text-primary fw-bold">res-native</label>
+                                        </div>
+                                        ${t.resolutions.filter(r => r !== 'native').map(r => `
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input tf-sel" type="checkbox" data-tpl="${t.name}" data-res="${r}" value="${t.name}:res-${r}">
+                                                <label class="form-check-label small">res-${r}</label>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    html += '</div>';
+                    list.innerHTML = html;
+                    
+                    // Add change listeners
+                    document.querySelectorAll('.tf-sel').forEach(el => {
+                        el.addEventListener('change', updateTFSummary);
+                    });
+                } else if (data.error) {
+                    list.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                } else {
+                    list.innerHTML = '<div class="alert alert-warning">No templates found in this directory. Templates must be in tpl-&lt;name&gt; folders.</div>';
+                }
+            } catch (err) {
+                list.innerHTML = `<div class="alert alert-danger">Error: ${err.message}</div>`;
+            }
+        }
+
+        function updateTFSummary() {
+            const sels = Array.from(document.querySelectorAll('.tf-sel:checked')).map(el => el.value);
+            document.getElementById('tfSelectionSummary').innerText = sels.length > 0 ? `Selected: ${sels.join(', ')}` : '';
+        }
+
+        function applyTFSelection() {
+            const sels = Array.from(document.querySelectorAll('.tf-sel:checked')).map(el => el.value);
+            if (sels.length === 0) {
+                document.getElementById('tfModal').style.display = 'none';
+                return;
+            }
+
+            const spacesArgValue = sels.join(' ');
+            const spacesArgLine = `--output-spaces ${spacesArgValue}`;
+            
+            // 1. Check if the user is already using Custom Arguments and it contains --output-spaces
+            const customArgsEl = document.getElementById('custom_args');
+            let customVal = customArgsEl.value.trim();
+            
+            if (customVal.includes('--output-spaces')) {
+                // Update existing in custom args
+                customArgsEl.value = customVal.replace(/--output-spaces\s+([^\-]+|$)/, spacesArgLine + ' ');
+                document.getElementById('tfModal').style.display = 'none';
+                showStatus(`Updated TemplateFlow spaces in Custom Arguments.`);
+                return;
+            }
+
+            // 2. Look for --output-spaces in dynamic options
+            let appliedToDynamic = false;
+            document.querySelectorAll('.dynamic-opt, .dynamic-opt-multi').forEach(el => {
+                const flag = el.dataset.flag;
+                if (flag === '--output-spaces' || flag === '--space') {
+                    if (el.tagName === 'TEXTAREA') {
+                        el.value = sels.join('\n');
+                        appliedToDynamic = true;
+                    } else if (el.tagName === 'INPUT' && el.type === 'text') {
+                        el.value = spacesArgValue;
+                        appliedToDynamic = true;
+                    }
+                }
+            });
+
+            if (appliedToDynamic) {
+                document.getElementById('tfModal').style.display = 'none';
+                showStatus(`Applied ${sels.length} spaces to the App-Specific options section.`);
+                return;
+            }
+
+            // 3. Last resort: Append to custom args
+            customArgsEl.value = (customVal ? customVal + '\n' : '') + spacesArgLine;
+            document.getElementById('tfModal').style.display = 'none';
+            showStatus(`Added --output-spaces to Custom Arguments.`);
+        }
+
         async function scanValidationPipelines() {
             const bids = document.getElementById('validation_bids_folder').value.trim();
             const deriv = document.getElementById('validation_derivatives_folder').value.trim();
@@ -1414,6 +1821,66 @@
                 }
             } catch (e) {
                 console.error("Pipeline scan error:", e);
+            }
+        }
+
+        async function fetchDockerTags() {
+            const repo = document.getElementById('build_docker_repo').value.trim();
+            const tagSelect = document.getElementById('build_docker_tag');
+            const statusEl = document.getElementById('buildStatusBox');
+            
+            if (!repo) {
+                _setUtilityStatus(statusEl, 'Please enter a Docker repository first.', true);
+                return;
+            }
+
+            _setUtilityStatus(statusEl, `Fetching tags for ${repo}...`, false);
+            tagSelect.disabled = true;
+            tagSelect.innerHTML = '<option>Loading...</option>';
+
+            try {
+                const resp = await fetch('/get_docker_tags', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ repo: repo })
+                });
+                
+                if (!resp.ok) {
+                    const errorText = await resp.text();
+                    let errMsg = `Server returned ${resp.status}`;
+                    try {
+                        const errJson = JSON.parse(errorText);
+                        if (errJson.error) errMsg = errJson.error;
+                    } catch(e) {}
+                    _setUtilityStatus(statusEl, `Error: ${errMsg}`, true);
+                    tagSelect.innerHTML = '<option value="latest">latest</option>';
+                    return;
+                }
+
+                const data = await resp.json();
+                
+                if (data.tags && data.tags.length > 0) {
+                    tagSelect.innerHTML = '';
+                    data.tags.forEach(tag => {
+                        const opt = document.createElement('option');
+                        opt.value = tag;
+                        opt.innerText = tag;
+                        tagSelect.appendChild(opt);
+                    });
+                    _setUtilityStatus(statusEl, `Fetched ${data.tags.length} tags.`, false);
+                } else if (data.error) {
+                    _setUtilityStatus(statusEl, `Error: ${data.error}`, true);
+                    tagSelect.innerHTML = '<option value="latest">latest</option>';
+                } else {
+                    _setUtilityStatus(statusEl, 'No tags found for this repository.', true);
+                    tagSelect.innerHTML = '<option value="latest">latest</option>';
+                }
+            } catch (err) {
+                console.error("Fetch tags error:", err);
+                _setUtilityStatus(statusEl, `Failed to fetch tags: ${err.message || err}`, true);
+                tagSelect.innerHTML = '<option value="latest">latest</option>';
+            } finally {
+                tagSelect.disabled = false;
             }
         }
 
@@ -1468,6 +1935,18 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
+            toggleEngineFields();
+
+            // Clear tags if repo changes
+            const buildRepoInput = document.getElementById('build_docker_repo');
+            if (buildRepoInput) {
+                buildRepoInput.addEventListener('input', () => {
+                    const tagSelect = document.getElementById('build_docker_tag');
+                    if (tagSelect.options.length > 1 || (tagSelect.options.length === 1 && tagSelect.options[0].value !== 'latest')) {
+                        tagSelect.innerHTML = '<option value="latest">latest</option>';
+                    }
+                });
+            }
         });
     </script>
 </body>

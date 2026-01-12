@@ -1,0 +1,329 @@
+usage: fmriprep [-h] [--skip_bids_validation]
+                [--participant-label PARTICIPANT_LABEL [PARTICIPANT_LABEL ...]]
+                [--session-label SESSION_LABEL [SESSION_LABEL ...]]
+                [-t TASK_ID] [--echo-idx ECHO_IDX]
+                [--subject-anatomical-reference {first-lex,unbiased,sessionwise}]
+                [--bids-filter-file FILE] [-d PACKAGE=PATH [PACKAGE=PATH ...]]
+                [--bids-database-dir PATH] [--nprocs NPROCS]
+                [--omp-nthreads OMP_NTHREADS] [--mem MEMORY_MB] [--low-mem]
+                [--use-plugin FILE] [--sloppy] [--anat-only]
+                [--level {minimal,resampling,full}] [--boilerplate-only]
+                [--reports-only]
+                [--ignore {fieldmaps,slicetiming,sbref,t2w,flair,fmap-jacobian} [{fieldmaps,slicetiming,sbref,t2w,flair,fmap-jacobian} ...]]
+                [--force {bbr,no-bbr,syn-sdc,fmap-jacobian} [{bbr,no-bbr,syn-sdc,fmap-jacobian} ...]]
+                [--output-spaces [OUTPUT_SPACES ...]]
+                [--longitudinal LONGITUDINAL]
+                [--bold2anat-init {auto,t1w,t2w,header}]
+                [--bold2anat-dof {6,9,12}] [--force-bbr FORCE_BBR]
+                [--force-no-bbr FORCE_NO_BBR]
+                [--slice-time-ref SLICE_TIME_REF] [--dummy-scans DUMMY_SCANS]
+                [--fallback-total-readout-time FALLBACK_TOTAL_READOUT_TIME]
+                [--random-seed _RANDOM_SEED]
+                [--me-t2s-fit-method {curvefit,loglin}]
+                [--output-layout {bids,legacy}] [--me-output-echos]
+                [--aggregate-session-reports AGGR_SES_REPORTS]
+                [--medial-surface-nan] [--project-goodvoxels]
+                [--md-only-boilerplate] [--cifti-output [{91k,170k}]]
+                [--msm | --no-msm] [--return-all-components]
+                [--fd-spike-threshold REGRESSORS_FD_TH]
+                [--dvars-spike-threshold REGRESSORS_DVARS_TH]
+                [--skull-strip-template SKULL_STRIP_TEMPLATE]
+                [--skull-strip-fixed-seed]
+                [--skull-strip-t1w {auto,skip,force}] [--fmap-bspline]
+                [--fmap-no-demean] [--use-syn-sdc [{warn,error}]]
+                [--force-syn FORCE_SYN] [--fs-license-file FILE]
+                [--fs-subjects-dir PATH] [--submm-recon | --no-submm-recon]
+                [--fs-no-reconall] [--fs-no-resume] [--track-carbon]
+                [--country-code COUNTRY_CODE] [--version] [-v] [-w WORK_DIR]
+                [--clean-workdir] [--resource-monitor] [--config-file FILE]
+                [--write-graph] [--stop-on-first-crash] [--notrack]
+                [--debug {compcor,fieldmaps,pdb,all} [{compcor,fieldmaps,pdb,all} ...]]
+                bids_dir output_dir {participant}
+
+fMRIPrep: fMRI PREProcessing workflows v25.2.3
+
+positional arguments:
+  bids_dir              The root folder of a BIDS valid dataset (sub-XXXXX
+                        folders should be found at the top level in this
+                        folder).
+  output_dir            The output path for the outcomes of preprocessing and
+                        visual reports
+  {participant}         Processing stage to be run, only "participant" in the
+                        case of fMRIPrep (see BIDS-Apps specification).
+
+options:
+  -h, --help            show this help message and exit
+
+Options for filtering BIDS queries:
+  --skip_bids_validation, --skip-bids-validation
+                        Assume the input dataset is BIDS compliant and skip
+                        the validation (default: False)
+  --participant-label PARTICIPANT_LABEL [PARTICIPANT_LABEL ...], --participant_label PARTICIPANT_LABEL [PARTICIPANT_LABEL ...]
+                        A space delimited list of participant identifiers or a
+                        single identifier (the sub- prefix can be removed)
+                        (default: None)
+  --session-label SESSION_LABEL [SESSION_LABEL ...]
+                        A space delimited list of session identifiers or a
+                        single identifier (the ses- prefix can be removed)
+                        (default: None)
+  -t TASK_ID, --task-id TASK_ID
+                        Select a specific task to be processed (default: None)
+  --echo-idx ECHO_IDX   Select a specific echo to be processed in a multiecho
+                        series (default: None)
+  --subject-anatomical-reference {first-lex,unbiased,sessionwise}
+                        Method to produce the reference anatomical space:
+                        "first-lex" will use the first image in
+                        lexicographical order "unbiased" will construct an
+                        unbiased template from all images (previously "--
+                        longitudinal") "sessionwise" will independently
+                        process each session. If multiple runs are found, the
+                        behavior will be similar to "first-lex" for each
+                        session. (default: first-lex)
+  --bids-filter-file FILE
+                        A JSON file describing custom BIDS input filters using
+                        PyBIDS. For further details, please check out https://
+                        fmriprep.readthedocs.io/en/25.2.3/faq.html#how-do-I-
+                        select-only-certain-files-to-be-input-to-fMRIPrep
+                        (default: None)
+  -d PACKAGE=PATH [PACKAGE=PATH ...], --derivatives PACKAGE=PATH [PACKAGE=PATH ...]
+                        Search PATH(s) for pre-computed derivatives. These may
+                        be provided as named folders (e.g., `--derivatives
+                        smriprep=/path/to/smriprep`). (default: None)
+  --bids-database-dir PATH
+                        Path to a PyBIDS database folder, for faster indexing
+                        (especially useful for large datasets). Will be
+                        created if not present. (default: None)
+
+Options to handle performance:
+  --nprocs NPROCS, --nthreads NPROCS, --n_cpus NPROCS, --n-cpus NPROCS
+                        Maximum number of threads across all processes
+                        (default: None)
+  --omp-nthreads OMP_NTHREADS
+                        Maximum number of threads per-process (default: None)
+  --mem MEMORY_MB, --mem_mb MEMORY_MB, --mem-mb MEMORY_MB
+                        Upper bound memory limit for fMRIPrep processes
+                        (default: None)
+  --low-mem             Attempt to reduce memory usage (will increase disk
+                        usage in working directory) (default: False)
+  --use-plugin FILE, --nipype-plugin-file FILE
+                        Nipype plugin configuration file (default: None)
+  --sloppy              Use low-quality tools for speed - TESTING ONLY
+                        (default: False)
+
+Options for performing only a subset of the workflow:
+  --anat-only           Run anatomical workflows only (default: False)
+  --level {minimal,resampling,full}
+                        Processing level; may be 'minimal' (nothing that can
+                        be recomputed), 'resampling' (recomputable targets
+                        that aid in resampling) or 'full' (all target
+                        outputs). (default: full)
+  --boilerplate-only, --boilerplate_only
+                        Generate boilerplate only (default: False)
+  --reports-only        Only generate reports, don't run workflows. This will
+                        only rerun report aggregation, not reportlet
+                        generation for specific nodes. (default: False)
+
+Workflow configuration:
+  --ignore {fieldmaps,slicetiming,sbref,t2w,flair,fmap-jacobian} [{fieldmaps,slicetiming,sbref,t2w,flair,fmap-jacobian} ...]
+                        Ignore selected aspects of the input dataset to
+                        disable corresponding parts of the workflow (a space
+                        delimited list) (default: [])
+  --force {bbr,no-bbr,syn-sdc,fmap-jacobian} [{bbr,no-bbr,syn-sdc,fmap-jacobian} ...]
+                        Force selected processing choices, overriding
+                        automatic selections (a space delimited list). *
+                        [no-]bbr: Use/disable boundary-based registration for
+                        BOLD-to-T1w coregistration (No goodness-of-fit checks)
+                        * syn-sdc: Calculate SyN-SDC correction *in addition*
+                        to other fieldmaps (default: [])
+  --output-spaces [OUTPUT_SPACES ...]
+                        Standard and non-standard spaces to resample
+                        anatomical and functional images to. Standard spaces
+                        may be specified by the form
+                        ``<SPACE>[:cohort-<label>][:res-<resolution>][...]``,
+                        where ``<SPACE>`` is a keyword designating a spatial
+                        reference, and may be followed by optional, colon-
+                        separated parameters. Non-standard spaces imply
+                        specific orientations and sampling grids. Important to
+                        note, the ``res-*`` modifier does not define the
+                        resolution used for the spatial normalization. To
+                        generate no BOLD outputs, use this option without
+                        specifying any spatial references. For further
+                        details, please check out
+                        https://fmriprep.readthedocs.io/en/25.2.3/spaces.html
+                        (default: None)
+  --longitudinal LONGITUDINAL
+                        Deprecated - use `--subject-anatomical-reference
+                        unbiased` instead (default: None)
+  --bold2anat-init {auto,t1w,t2w,header}
+                        Method of initial BOLD to anatomical coregistration.
+                        If `auto`, a T2w image is used if available, otherwise
+                        the T1w image. `t1w` forces use of the T1w, `t2w`
+                        forces use of the T2w, and `header` uses the BOLD
+                        header information without an initial registration.
+                        (default: auto)
+  --bold2anat-dof {6,9,12}
+                        Degrees of freedom when registering BOLD to anatomical
+                        images. 6 degrees (rotation and translation) are used
+                        by default. (default: 6)
+  --force-bbr FORCE_BBR
+                        Deprecated - use `--force bbr` instead. (default:
+                        None)
+  --force-no-bbr FORCE_NO_BBR
+                        Deprecated - use `--force no-bbr` instead. (default:
+                        None)
+  --slice-time-ref SLICE_TIME_REF
+                        The time of the reference slice to correct BOLD values
+                        to, as a fraction acquisition time. 0 indicates the
+                        start, 0.5 the midpoint, and 1 the end of acquisition.
+                        The alias `start` corresponds to 0, and `middle` to
+                        0.5. The default value is 0.5. (default: 0.5)
+  --dummy-scans DUMMY_SCANS
+                        Number of nonsteady-state volumes. Overrides automatic
+                        detection. (default: None)
+  --fallback-total-readout-time FALLBACK_TOTAL_READOUT_TIME
+                        Fallback value for Total Readout Time (TRT)
+                        calculation. May be a number or "estimated". (default:
+                        None)
+  --random-seed _RANDOM_SEED
+                        Initialize the random seed for the workflow (default:
+                        None)
+  --me-t2s-fit-method {curvefit,loglin}
+                        The method by which to estimate T2* and S0 for multi-
+                        echo data. 'curvefit' uses nonlinear regression. It is
+                        more memory intensive, but also may be more accurate,
+                        than 'loglin'. 'loglin' uses log-linear regression. It
+                        is faster and less memory intensive, but may be less
+                        accurate. (default: curvefit)
+  --project-goodvoxels  Exclude voxels whose timeseries have locally high
+                        coefficient of variation from surface resampling. Only
+                        performed for GIFTI files mapped to a freesurfer
+                        subject (fsaverage or fsnative). (default: False)
+
+Options for modulating outputs:
+  --output-layout {bids,legacy}
+                        Organization of outputs. "bids" (default) places
+                        fMRIPrep derivatives directly in the output directory,
+                        and defaults to placing FreeSurfer derivatives in
+                        <output-dir>/sourcedata/freesurfer. "legacy" creates
+                        derivative datasets as subdirectories of outputs.
+                        (default: bids)
+  --me-output-echos     Output individual echo time series with slice, motion
+                        and susceptibility correction. Useful for further
+                        Tedana processing post-fMRIPrep. (default: False)
+  --aggregate-session-reports AGGR_SES_REPORTS
+                        Maximum number of sessions aggregated in one subject's
+                        visual report. If exceeded, visual reports are split
+                        by session. (default: 4)
+  --medial-surface-nan  Replace medial wall values with NaNs on functional
+                        GIFTI files. Only performed for GIFTI files mapped to
+                        a freesurfer subject (fsaverage or fsnative).
+                        (default: False)
+  --md-only-boilerplate
+                        Skip generation of HTML and LaTeX formatted citation
+                        with pandoc (default: False)
+  --cifti-output [{91k,170k}]
+                        Output preprocessed BOLD as a CIFTI dense timeseries.
+                        Optionally, the number of grayordinate can be
+                        specified (default is 91k, which equates to 2mm
+                        resolution) (default: False)
+  --msm, --no-msm       Enable or disable Multimodal Surface Matching surface
+                        registration. (default: True)
+
+Options relating to confounds:
+  --return-all-components
+                        Include all components estimated in CompCor
+                        decomposition in the confounds file instead of only
+                        the components sufficient to explain 50 percent of
+                        BOLD variance in each CompCor mask (default: False)
+  --fd-spike-threshold REGRESSORS_FD_TH
+                        Threshold for flagging a frame as an outlier on the
+                        basis of framewise displacement (default: 0.5)
+  --dvars-spike-threshold REGRESSORS_DVARS_TH
+                        Threshold for flagging a frame as an outlier on the
+                        basis of standardised DVARS (default: 1.5)
+
+Specific options for ANTs registrations:
+  --skull-strip-template SKULL_STRIP_TEMPLATE
+                        Select a template for skull-stripping with
+                        antsBrainExtraction (OASIS30ANTs, by default)
+                        (default: OASIS30ANTs)
+  --skull-strip-fixed-seed
+                        Do not use a random seed for skull-stripping - will
+                        ensure run-to-run replicability when used with --omp-
+                        nthreads 1 and matching --random-seed <int> (default:
+                        False)
+  --skull-strip-t1w {auto,skip,force}
+                        Perform T1-weighted skull stripping ('force' ensures
+                        skull stripping, 'skip' ignores skull stripping, and
+                        'auto' applies brain extraction based on the outcome
+                        of a heuristic to check whether the brain is already
+                        masked). (default: force)
+
+Specific options for handling fieldmaps:
+  --fmap-bspline        Fit a B-Spline field using least-squares
+                        (experimental) (default: False)
+  --fmap-no-demean      Do not remove median (within mask) from fieldmap
+                        (default: True)
+
+Specific options for SyN distortion correction:
+  --use-syn-sdc [{warn,error}]
+                        Use fieldmap-less distortion correction based on
+                        anatomical image; if unable, error (default) or warn
+                        based on optional argument. (default: False)
+  --force-syn FORCE_SYN
+                        Deprecated - use `--force syn-sdc` instead. (default:
+                        False)
+
+Specific options for FreeSurfer preprocessing:
+  --fs-license-file FILE
+                        Path to FreeSurfer license key file. Get it (for free)
+                        by registering at
+                        https://surfer.nmr.mgh.harvard.edu/registration.html
+                        (default: None)
+  --fs-subjects-dir PATH
+                        Path to existing FreeSurfer subjects directory to
+                        reuse. (default: OUTPUT_DIR/freesurfer) (default:
+                        None)
+  --submm-recon, --no-submm-recon
+                        Enable or disable sub-millimeter (hi-res)
+                        reconstruction. (default: True)
+  --fs-no-reconall      Disable FreeSurfer surface preprocessing. (default:
+                        True)
+  --fs-no-resume        EXPERT: Import pre-computed FreeSurfer reconstruction
+                        without resuming. The user is responsible for ensuring
+                        that all necessary files are present. (default: False)
+
+Options for carbon usage tracking:
+  --track-carbon        Tracks power draws using CodeCarbon package (default:
+                        False)
+  --country-code COUNTRY_CODE
+                        Country ISO code used by carbon trackers (default:
+                        CAN)
+
+Other options:
+  --version             show program's version number and exit
+  -v, --verbose         Increases log verbosity for each occurrence, debug
+                        level is -vvv (default: 0)
+  -w WORK_DIR, --work-dir WORK_DIR
+                        Path where intermediate results should be stored
+                        (default: None)
+  --clean-workdir       Clears working directory of contents. Use of this flag
+                        is not recommended when running concurrent processes
+                        of fMRIPrep. (default: False)
+  --resource-monitor    Enable Nipype's resource monitoring to keep track of
+                        memory and CPU usage (default: False)
+  --config-file FILE    Use pre-generated configuration file. Values in file
+                        will be overridden by command-line arguments.
+                        (default: None)
+  --write-graph         Write workflow graph. (default: False)
+  --stop-on-first-crash
+                        Force stopping on first crash, even if a work
+                        directory was specified. (default: False)
+  --notrack             Opt-out of sending tracking information of this run to
+                        the FMRIPREP developers. This information helps to
+                        improve FMRIPREP and provides an indicator of real
+                        world usage crucial for obtaining funding. (default:
+                        False)
+  --debug {compcor,fieldmaps,pdb,all} [{compcor,fieldmaps,pdb,all} ...]
+                        Debug mode(s) to enable. 'all' is alias for all
+                        available modes. (default: None)

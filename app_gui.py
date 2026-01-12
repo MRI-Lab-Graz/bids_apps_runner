@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import re
 import os
 import sys
@@ -7,6 +8,8 @@ import subprocess
 import requests
 import shutil
 import tempfile
+import webbrowser
+import threading
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 from waitress import serve
@@ -126,6 +129,39 @@ def check_container_version():
         })
     
     return jsonify({'info': 'No newer version found or repo not identified'}), 200
+
+@app.route('/get_docker_tags', methods=['POST'])
+def get_docker_tags():
+    data = request.json
+    if not data or 'repo' not in data:
+        return jsonify({'error': 'No repository provided'}), 400
+    
+    repo = data['repo']
+    print(f"[GUI] Fetching tags for repo: {repo}", flush=True)
+    
+    try:
+        # Some environments need a user-agent for Docker Hub
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        url = f"https://registry.hub.docker.com/v2/repositories/{repo}/tags?page_size=100&ordering=last_updated"
+        
+        # Try with a longer timeout and verify=True first, but handle SSLError
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+        except requests.exceptions.SSLError:
+            print(f"[DEBUG] SSL Error for {repo}, retrying without verification...", flush=True)
+            response = requests.get(url, headers=headers, timeout=15, verify=False)
+            
+        if response.status_code == 200:
+            data = response.json()
+            tags = [t['name'] for t in data.get('results', [])]
+            print(f"[GUI] Successfully found {len(tags)} tags for {repo}", flush=True)
+            return jsonify({'tags': tags})
+        else:
+            print(f"[GUI] Docker Hub returned status {response.status_code}: {response.text[:200]}", flush=True)
+            return jsonify({'error': f'Docker Hub error {response.status_code}'}), response.status_code
+    except Exception as e:
+        print(f"[DEBUG] Exception fetching tags for {repo}: {str(e)}", flush=True)
+        return jsonify({'error': str(e)}), 500
 
 # Global state to track if a job was started in this GUI session
 GUI_SESSION_STARTED = False
@@ -387,22 +423,32 @@ def build_apptainer():
 @app.route('/get_app_help', methods=['POST'])
 def get_app_help():
     container = request.json.get('container')
-    if not container or not os.path.exists(container):
-        return jsonify({'error': 'Valid container path required'}), 400
+    engine = request.json.get('container_engine', 'apptainer')
+    
+    if not container:
+        return jsonify({'error': 'Container name or path required'}), 400
+        
+    if engine == 'apptainer' and not os.path.exists(container):
+        return jsonify({'error': f'Apptainer image not found at: {container}'}), 400
     
     try:
         # Run container help
-        print(f"[GUI] Fetching help for {container}...", flush=True)
-        cmd = ['apptainer', 'run', '--containall', container, '--help']
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        print(f"[GUI] Fetching help for {container} using {engine}...", flush=True)
+        if engine == 'docker':
+            cmd = ['docker', 'run', '--rm', container, '--help']
+        else:
+            cmd = ['apptainer', 'run', '--containall', container, '--help']
+            
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         output = result.stdout + result.stderr
         
         if result.returncode != 0:
-            print(f"[GUI] Apptainer help returned exit code {result.returncode}", flush=True)
+            print(f"[GUI] {engine.capitalize()} help returned exit code {result.returncode}", flush=True)
         
         # IMPROVED: Clean up output (remove usage summary from the top to prevent it from confusing the parser)
-        # Usually headers start with a capitalized word followed by colon, e.g., "Options:"
-        parts = re.split(r'\n(?=[A-Z][a-z ]+:)', output)
+        # Headers in argparse usually start with a Capitalized string followed by a colon. 
+        # We allow letters, numbers, spaces, and punctuation like hyphens or parentheses.
+        parts = re.split(r'\n(?=[A-Z][A-Za-z0-9\-\(\) ]+:)', output)
         
         sections = []
         # Standard BIDS args to exclude (already handled by the GUI common section)
@@ -472,13 +518,51 @@ def get_app_help():
                 description = re.sub(r'\s+', ' ', description)
                 # Cleanup common artifacts
                 description = re.sub(r'\(default:.*?\)', '', description).strip()
+
+                # DROP: Skip flags explicitly marked as deprecated
+                if 'deprecated' in description.lower():
+                    continue
+
+                # Determine whether this option takes a value by inspecting the *signature* column
+                # of the first definition line, not the description text.
+                # Example signatures:
+                #   --fs-no-reconall
+                #   --output-spaces OUTPUT_SPACES [OUTPUT_SPACES ...]
+                #   --bids-filter-file FILE
+                definition_line = block_lines[0] if block_lines else block
+                # Split the line into columns: signature + description (2+ spaces)
+                columns = re.split(r'\s{2,}', definition_line.strip())
+                signature = columns[0] if columns else definition_line.strip()
+                # Extract the signature portion beginning at the flag (handles leading text)
+                sig_match = re.search(rf"{re.escape(flag)}(?:\s+[^\s].*)?$", signature)
+                signature_tail = sig_match.group(0) if sig_match else signature
+                sig_tokens = signature_tail.split()
+
+                has_value = False
+                if choices:
+                    has_value = True
+                elif sig_tokens and sig_tokens[0] == flag and len(sig_tokens) > 1:
+                    has_value = True
+
+                # Mark multi-value options (argparse prints "..." for nargs)
+                is_multiple = bool(re.search(r'\[.*\.\.\..*\]|\.\.\.', signature_tail))
+
+                # Clean up display name and identify negated flags
+                display_name = flag.lstrip('-')
+                is_negated = False
+                # Common negation patterns in BIDS apps
+                negation_match = re.search(r'^(no-|skip[-_]|without-|fs-no-)(.*)', display_name)
+                if negation_match and not has_value:
+                    is_negated = True
+                    # Use the positive part as the display name
+                    display_name = negation_match.group(2)
                 
-                has_value = len(choices) > 0 or bool(re.search(flag + r'\s+[A-Z_]{2,}', block))
-                is_multiple = bool(re.search(r'\(s\)|\[...\]|modes|choices', block, re.IGNORECASE))
+                display_name = display_name.replace('-', ' ').replace('_', ' ').title()
 
                 options.append({
                     'flag': flag,
-                    'name': flag.lstrip('-').replace('-', ' ').title(),
+                    'name': display_name,
+                    'is_negated': is_negated,
                     'choices': choices,
                     'description': description,
                     'has_value': has_value,
@@ -507,6 +591,45 @@ def get_app_help():
             'app_info': {'name': app_name, 'url': doc_url},
             'raw_help': output if not sections else None
         })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_templateflow_templates', methods=['POST'])
+def get_templateflow_templates():
+    tf_dir = request.json.get('path')
+    if not tf_dir or not os.path.exists(tf_dir):
+        return jsonify({'error': 'TemplateFlow directory not found'}), 400
+    
+    try:
+        templates = []
+        # Templates are usually in folders named tpl-<TemplateName>
+        for entry in os.scandir(tf_dir):
+            if entry.is_dir() and entry.name.startswith('tpl-'):
+                template_name = entry.name[4:]
+                # Check for resolutions/cohorts inside
+                resolutions = set()
+                res_pattern = re.compile(r'res-([a-zA-Z0-9]+)')
+                
+                # Walk a bit to find resolution files (e.g., in tpl-MNI/...)
+                # Limit depth to avoid massive hangs
+                try:
+                    for root, dirs, files in os.walk(entry.path):
+                        if root.count(os.sep) - entry.path.count(os.sep) > 2:
+                            continue
+                        for f in files:
+                            match = res_pattern.search(f)
+                            if match:
+                                resolutions.add(match.group(1))
+                        if len(resolutions) > 20: break 
+                except:
+                    pass
+                
+                templates.append({
+                    'name': template_name,
+                    'resolutions': sorted(list(resolutions))
+                })
+        
+        return jsonify({'templates': sorted(templates, key=lambda x: x['name'])})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -623,8 +746,8 @@ def run_app():
         common = cfg.get('common', {})
         paths_to_check = {
             'BIDS Folder': common.get('bids_folder'),
-            'Temp Folder': common.get('tmp_folder'),
-            'Container Image': common.get('container')
+            'Container Image': common.get('container'),
+            'Templateflow Folder': common.get('templateflow_dir')
         }
         
         missing = []
@@ -705,9 +828,16 @@ if __name__ == '__main__':
             else:
                 port += 1
     
-    print("--------------------------------------------------------")
-    print(f"  BIDS App Runner GUI starting on http://localhost:{port}")
-    print(f"  Note: If local, open http://localhost:{port}")
-    print(f"  Note: If remote, ensure port {port} is forwarded")
-    print("--------------------------------------------------------")
+    print(f"🌐 Starting BIDS App Runner GUI")
+    print(f"🔗 URL: http://localhost:{port}")
+    print(f"💡 Press Ctrl+C to stop the server\n")
+    print(f"🚀 Running with Waitress server on 0.0.0.0:{port}")
+    
+    # Automatically open the browser after a short delay
+    def open_browser():
+        webbrowser.open(f"http://localhost:{port}")
+        print("✅ Browser opened automatically")
+    
+    threading.Timer(1, open_browser).start()
+    
     serve(app, host='0.0.0.0', port=port, threads=4)
