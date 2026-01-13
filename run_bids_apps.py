@@ -23,6 +23,7 @@ import logging
 import signal
 import time
 import re
+import platform
 from datetime import datetime
 from pathlib import Path
 from typing import Set, Optional
@@ -1180,6 +1181,11 @@ def process_subject(subject, common, app, dry_run=False, force=False, debug=Fals
         
         if engine == "docker":
             cmd = ["docker", "run", "--rm"]
+            
+            # Apple Silicon support: Add platform flag for standard amd64 containers
+            if platform.system() == "Darwin" and platform.machine() == "arm64":
+                logging.info("Apple Silicon detected. Adding '--platform linux/amd64' for standard container compatibility.")
+                cmd.extend(["--platform", "linux/amd64"])
             
             # Add environment variables
             cmd.extend(["-e", "TEMPLATEFLOW_HOME=/templateflow"])

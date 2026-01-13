@@ -16,12 +16,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          - os: macos-13
+            arch: x86_64
             data_sep: ":"
-            pyinstaller_flags: "--windowed"
+            pyinstaller_flags: "--windowed --target-arch x86_64"
             artifact_path: dist/BIDSAppRunner.dmg
-            artifact_name: BIDSAppRunner-macos
+            artifact_name: BIDSAppRunner-macos-intel
+          - os: macos-latest
+            arch: arm64
+            data_sep: ":"
+            pyinstaller_flags: "--windowed --target-arch arm64"
+            artifact_path: dist/BIDSAppRunner.dmg
+            artifact_name: BIDSAppRunner-macos-apple-silicon
           - os: windows-latest
+            arch: x64
             data_sep: ";"
             pyinstaller_flags: "--onefile --windowed"
             artifact_path: dist/BIDSAppRunner.zip

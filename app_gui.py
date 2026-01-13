@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import re
 import os
+import platform
 import sys
 import json
 import glob
@@ -522,7 +523,10 @@ def get_app_help():
                     'error': f'Docker image "{container}" not found locally. You must pull it before parameters can be analyzed.',
                     'need_pull': True
                 }), 400
-            cmd = ['docker', 'run', '--rm', container, '--help']
+            if platform.system() == "Darwin" and platform.machine() == "arm64":
+                cmd = ['docker', 'run', '--rm', '--platform', 'linux/amd64', container, '--help']
+            else:
+                cmd = ['docker', 'run', '--rm', container, '--help']
         else:
             cmd = ['apptainer', 'run', '--containall', container, '--help']
             
