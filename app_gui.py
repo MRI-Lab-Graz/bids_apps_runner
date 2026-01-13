@@ -33,6 +33,31 @@ from pathlib import Path
 from version import __version__
 from check_app_output import BIDSOutputValidator
 
+def _fix_system_path():
+    """Ensure common paths are in PATH, especially when running as a bundled app on macOS."""
+    extra_paths = [
+        "/usr/local/bin", 
+        "/opt/homebrew/bin", 
+        "/opt/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin"
+    ]
+    current_path = os.environ.get("PATH", "").split(os.pathsep)
+    path_changed = False
+    for p in extra_paths:
+        if p not in current_path and os.path.exists(p):
+            current_path.append(p)
+            path_changed = True
+    
+    if path_changed:
+        os.environ["PATH"] = os.pathsep.join(current_path)
+        print(f"[GUI] Updated PATH to include common locations: {os.environ['PATH']}", flush=True)
+
+# Important to fix path before any shutil.which calls
+_fix_system_path()
+
 if getattr(sys, 'frozen', False):
     # Running in a bundle
     BUNDLE_DIR = Path(sys._MEIPASS)
@@ -73,9 +98,10 @@ def check_system_dependencies():
     if docker_installed:
         try:
             # Check if daemon is responsive
-            subprocess.run(['docker', 'info'], capture_output=True, timeout=2, check=True)
+            subprocess.run(['docker', 'info'], capture_output=True, timeout=5, check=True)
             docker_running = True
-        except (subprocess.SubprocessError, FileNotFoundError):
+        except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"[GUI] Docker check failed: {e}")
             docker_running = False
 
     return {

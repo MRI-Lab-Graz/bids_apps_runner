@@ -28,6 +28,29 @@ from datetime import datetime
 from pathlib import Path
 from typing import Set, Optional
 
+def _fix_system_path():
+    """Ensure common paths are in PATH, especially on macOS."""
+    extra_paths = [
+        "/usr/local/bin", 
+        "/opt/homebrew/bin", 
+        "/opt/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin"
+    ]
+    current_path = os.environ.get("PATH", "").split(os.pathsep)
+    path_changed = False
+    for p in extra_paths:
+        if p not in current_path and os.path.exists(p):
+            current_path.append(p)
+            path_changed = True
+    
+    if path_changed:
+        os.environ["PATH"] = os.pathsep.join(current_path)
+
+_fix_system_path()
+
 # Import validation integration
 try:
     from bids_validation_integration import (
@@ -1434,27 +1457,58 @@ def process_group(common, app, dry_run=False, debug=False):
                 run_datalad_command(cmd, cwd=common["bids_folder"], dry_run=dry_run)
         
         # Build container command
-        cmd = ["apptainer", "run"]
+        engine = common.get("container_engine", "apptainer")
         
-        # Add app-specific apptainer arguments
-        if app.get("apptainer_args"):
-            cmd.extend(sanitize_apptainer_args(app["apptainer_args"]))
+        if engine == "docker":
+            cmd = ["docker", "run", "--rm"]
+            
+            # Apple Silicon support: Add platform flag for standard amd64 containers
+            if platform.system() == "Darwin" and platform.machine() == "arm64":
+                logging.info("Apple Silicon detected. Adding '--platform linux/amd64' for standard container compatibility.")
+                cmd.extend(["--platform", "linux/amd64"])
+            
+            # Add environment variables
+            cmd.extend(["-e", "TEMPLATEFLOW_HOME=/templateflow"])
+            
+            # Add bind mounts
+            for mnt in build_common_mounts(common, tmp_dir):
+                cmd.extend(["-v", mnt])
+            
+            # Add custom mounts
+            for mount in app.get("mounts", []):
+                if mount.get("source") and mount.get("target"):
+                    cmd.extend(["-v", f"{mount['source']}:{mount['target']}"])
+            
+            # Add container image name
+            cmd.append(common["container"])
         else:
-            cmd.append("--containall")
-        
-        # Add bind mounts
-        for mnt in build_common_mounts(common, tmp_dir):
-            cmd.extend(["-B", mnt])
-        
-        # Add custom mounts
-        for mount in app.get("mounts", []):
-            if mount.get("source") and mount.get("target"):
-                cmd.extend(["-B", f"{mount['source']}:{mount['target']}"])
-        
-        # Add environment and container
+            # Default to Apptainer
+            cmd = ["apptainer", "run"]
+            
+            # Add app-specific apptainer arguments (only for apptainer)
+            if app.get("apptainer_args"):
+                safe_args = sanitize_apptainer_args(app["apptainer_args"])
+                cmd.extend(safe_args)
+            else:
+                cmd.append("--containall")
+            
+            # Add bind mounts
+            for mnt in build_common_mounts(common, tmp_dir):
+                cmd.extend(["-B", mnt])
+            
+            # Add custom mounts
+            for mount in app.get("mounts", []):
+                if mount.get("source") and mount.get("target"):
+                    cmd.extend(["-B", f"{mount['source']}:{mount['target']}"])
+            
+            # Add environment variables
+            cmd.extend(["--env", "TEMPLATEFLOW_HOME=/templateflow"])
+            
+            # Add container image path
+            cmd.append(common["container"])
+
+        # Add common BIDS app arguments (same for both engines)
         cmd.extend([
-            "--env", f"TEMPLATEFLOW_HOME=/templateflow",
-            common["container"],
             "/bids", "/output", app.get("analysis_level", "group"),
             "-w", "/tmp"
         ])

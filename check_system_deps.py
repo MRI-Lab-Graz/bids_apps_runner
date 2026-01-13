@@ -3,6 +3,30 @@ import shutil
 import sys
 import subprocess
 import os
+import platform
+
+def _fix_system_path():
+    """Ensure common paths are in PATH, especially on macOS."""
+    extra_paths = [
+        "/usr/local/bin", 
+        "/opt/homebrew/bin", 
+        "/opt/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin"
+    ]
+    current_path = os.environ.get("PATH", "").split(os.pathsep)
+    path_changed = False
+    for p in extra_paths:
+        if p not in current_path and os.path.exists(p):
+            current_path.append(p)
+            path_changed = True
+    
+    if path_changed:
+        os.environ["PATH"] = os.pathsep.join(current_path)
+
+_fix_system_path()
 
 def check_command(cmd, name):
     path = shutil.which(cmd)
