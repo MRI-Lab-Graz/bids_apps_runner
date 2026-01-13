@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.1.1
+- Fixed GitHub Actions workflow: Updated retired macOS Intel runner from `macos-13` to `macos-15`.
+
 ## v1.1.0
 - Added system dependency checker for Docker, Apptainer/Singularity, and DataLad.
 - New standalone `check_system_deps.py` script for command-line validation.
