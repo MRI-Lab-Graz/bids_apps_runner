@@ -73,11 +73,31 @@ app.secret_key = "bids-app-runner-secret-key"
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['APP_VERSION'] = __version__
 
-# Application base directory (for logs, configs, etc.)
+# Application base directory (for scripts, etc.)
 if getattr(sys, 'frozen', False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
     BASE_DIR = BUNDLE_DIR
+
+# Data directory (for logs, configs, etc.) - must be writable
+def _get_data_dir():
+    # If BASE_DIR is writable (e.g. during development), use it
+    try:
+        test_file = BASE_DIR / ".write_test"
+        test_file.touch()
+        test_file.unlink()
+        return BASE_DIR
+    except (PermissionError, OSError):
+        # Otherwise, use a standard user-writable location
+        if platform.system() == "Darwin":
+            d = Path.home() / "Library" / "Application Support" / "BIDSAppsRunner"
+        else:
+            d = Path.home() / ".bids_apps_runner"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+DATA_DIR = _get_data_dir()
+LOG_DIR = DATA_DIR / "logs"
 
 def _find_python_interpreter():
     """Find a Python 3 interpreter in the current environment."""
@@ -111,8 +131,6 @@ def check_system_dependencies():
         'singularity': shutil.which('singularity') is not None,
         'datalad': shutil.which('datalad') is not None
     }
-
-LOG_DIR = BASE_DIR / "logs"
 
 @app.before_request
 def log_request_info():
@@ -260,7 +278,7 @@ GUI_SESSION_STARTED = False
 def get_log():
     try:
         # Find the most recent nohup log file
-        log_files = glob.glob(str(BASE_DIR / "nohup_bids_runner_*.log"))
+        log_files = glob.glob(str(DATA_DIR / "nohup_bids_runner_*.log"))
         if not log_files:
             return jsonify({'content': '', 'filename': 'none'}), 200
         
@@ -424,7 +442,7 @@ def pull_image():
         _ensure_logs_dir()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Use the same naming pattern so get_log picks it up
-        log_file = BASE_DIR / f"nohup_bids_runner_pull_{timestamp}.log"
+        log_file = DATA_DIR / f"nohup_bids_runner_pull_{timestamp}.log"
         
         print(f"[GUI] Pulling image: {image} using {engine}...", flush=True)
         if engine == 'docker':
@@ -852,9 +870,18 @@ def list_containers():
 @app.route('/list_configs', methods=['GET'])
 def list_configs():
     try:
-        config_dir = BASE_DIR / "configs"
-        configs = [f for f in os.listdir(config_dir) if f.endswith('.json')]
-        return jsonify({'configs': sorted(configs)})
+        combined_configs = set()
+        # Defaults
+        default_dir = BASE_DIR / "configs"
+        if default_dir.exists():
+            combined_configs.update([f for f in os.listdir(default_dir) if f.endswith('.json')])
+        
+        # User configs
+        user_dir = DATA_DIR / "configs"
+        if user_dir.exists():
+            combined_configs.update([f for f in os.listdir(user_dir) if f.endswith('.json')])
+            
+        return jsonify({'configs': sorted(list(combined_configs))})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -863,7 +890,12 @@ def get_config():
     name = request.args.get('name')
     if not name: return jsonify({'error': 'No name provided'}), 400
     try:
-        config_path = BASE_DIR / "configs" / name
+        # Check user dir first
+        config_path = DATA_DIR / "configs" / name
+        if not config_path.exists():
+            # Check default dir
+            config_path = BASE_DIR / "configs" / name
+            
         with open(config_path, 'r') as f:
             data = json.load(f)
         return jsonify({'config': data})
@@ -888,7 +920,7 @@ def save_config():
         if save_dir:
             config_path = Path(os.path.expanduser(save_dir)) / filename
         else:
-            config_path = BASE_DIR / "configs" / filename
+            config_path = DATA_DIR / "configs" / filename
             
         os.makedirs(config_path.parent, exist_ok=True)
         
@@ -963,7 +995,8 @@ def run_app():
             cmd.append("--nohup")
         
         print(f"[GUI] Executing: {' '.join(cmd)}")
-        subprocess.Popen(cmd, cwd=BASE_DIR)
+        # Use DATA_DIR as cwd so logs are written there
+        subprocess.Popen(cmd, cwd=DATA_DIR)
         
         GUI_SESSION_STARTED = True
         
