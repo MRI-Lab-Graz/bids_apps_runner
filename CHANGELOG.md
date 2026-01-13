@@ -1,11 +1,17 @@
 # Changelog
 
-## v1.1.2
+## v1.1.4
+- Fixed GitHub Actions release job: Added checkout step with full history to enable automatic release note generation.
+
+## v1.1.3
 - Simplified GitHub Actions workflow to provide single macOS and Windows binaries.
 - Removed architecture-specific build flags for the runner itself (as it is platform-independent), relying on the app's internal logic to handle Docker container architectures.
 
-## v1.1.1
+## v1.1.2
 - Fixed GitHub Actions workflow: Updated retired macOS Intel runner from `macos-13` to `macos-15`.
+
+## v1.1.1
+- Internal CI/CD adjustments and dependency fixes.
 
 ## v1.1.0
 - Added system dependency checker for Docker, Apptainer/Singularity, and DataLad.
