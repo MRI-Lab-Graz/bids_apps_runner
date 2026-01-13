@@ -24,6 +24,7 @@ tqdm>=4.60.0
 flask>=2.3.0
 waitress>=3.0.0
 click>=8.0.0
+requests>=2.31.0
 
 # For YAML configuration support (optional enhancement)
 PyYAML>=6.0

@@ -9,11 +9,11 @@
 # - Python 3.8+
 #
 # Usage:
-#   ./install.sh         # Install core dependencies only
-#   ./install.sh --full  # Install all dependencies including development tools
+#   ./scripts/install.sh         # Install core dependencies only
+#   ./scripts/install.sh --full  # Install all dependencies including development tools
 #   
 # To activate the environment after installation:
-#   source .appsrunner/bin/activate
+#   source activate_appsrunner.sh
 #
 # Author: BIDS Apps Runner Team
 # Version: 2.0.0
@@ -32,6 +32,7 @@ NC='\033[0m' # No Color
 VENV_NAME=".appsrunner"
 PYTHON_VERSION="3.8"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Function to print colored output
 print_info() {
@@ -183,7 +184,7 @@ VENV_PATH="$SCRIPT_DIR/.appsrunner"
 
 if [ ! -d "$VENV_PATH" ]; then
     echo "Error: Virtual environment not found at $VENV_PATH"
-    echo "Please run ./install.sh first"
+    echo "Please run ./scripts/install.sh first"
     exit 1
 fi
 
@@ -291,9 +292,10 @@ print_usage() {
 main() {
     print_info "Starting BIDS App Runner installation..."
     print_info "Script directory: $SCRIPT_DIR"
+    print_info "Project root: $PROJECT_ROOT"
     
-    # Change to script directory
-    cd "$SCRIPT_DIR"
+    # Change to project root
+    cd "$PROJECT_ROOT"
     
     # Check prerequisites
     check_uv

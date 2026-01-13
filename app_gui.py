@@ -6,7 +6,22 @@ import sys
 import json
 import glob
 import subprocess
-import requests
+import time
+
+# Check for GUI dependencies
+try:
+    import requests
+    from flask import Flask, render_template, request, jsonify
+    from waitress import serve
+except ImportError as e:
+    print(f"\n[ERROR] Missing GUI dependency: {e.name}")
+    print("The GUI requires additional packages not included in the core installation.")
+    print("\nPlease run the installer with the full flag to install them:")
+    print("  ./scripts/install.sh --full")
+    print("\nAlternatively, install them manually:")
+    print("  pip install flask waitress requests")
+    sys.exit(1)
+
 import shutil
 import tempfile
 import webbrowser
@@ -380,6 +395,11 @@ def pull_image():
         return jsonify({'error': 'No image name provided'}), 400
         
     try:
+        _ensure_logs_dir()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Use the same naming pattern so get_log picks it up
+        log_file = BASE_DIR / f"nohup_bids_runner_pull_{timestamp}.log"
+        
         print(f"[GUI] Pulling image: {image} using {engine}...", flush=True)
         if engine == 'docker':
             cmd = ['docker', 'pull', image]
@@ -392,25 +412,52 @@ def pull_image():
         # Run in background to not block
         def run_pull():
             try:
-                print(f"[GUI] Pulling image: {image}...", flush=True)
-                # Use Popen to stream output to the log file (stdout)
-                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                for line in process.stdout:
-                    if line.strip():
-                        # Prepend [DOCKER] so user knows where it comes from
-                        print(f"[DOCKER] {line.strip()}", flush=True)
-                process.wait()
-                
-                if process.returncode == 0:
-                    print(f"[GUI] Successfully pulled {image}", flush=True)
-                else:
-                    print(f"[GUI] Docker pull failed for {image} with return code {process.returncode}", flush=True)
+                with open(log_file, 'w') as f:
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Started pulling {image}...\n\n")
+                    f.flush()
+                    print(f"[GUI] Pulling image: {image}...", flush=True)
+                    # Use Popen to stream output to the log file (stdout)
+                    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    for line in process.stdout:
+                        if line.strip():
+                            line_out = f"[DOCKER] {line.strip()}"
+                            print(line_out, flush=True)
+                            f.write(line_out + "\n")
+                            f.flush()
+                    process.wait()
+                    
+                    if process.returncode == 0:
+                        msg = f"\n[GUI] Successfully pulled {image}"
+                        print(msg, flush=True)
+                        f.write(msg + "\n")
+                    else:
+                        msg = f"\n[GUI] Docker pull failed for {image} with return code {process.returncode}"
+                        print(msg, flush=True)
+                        f.write(msg + "\n")
             except Exception as e:
-                print(f"[GUI] Error pulling {image}: {str(e)}", flush=True)
+                err_msg = f"\n[GUI] Error pulling {image}: {str(e)}"
+                print(err_msg, flush=True)
+                with open(log_file, 'a') as f:
+                    f.write(err_msg + "\n")
                 
         threading.Thread(target=run_pull).start()
         
-        return jsonify({'message': f'Started pulling {image} in the background.'})
+        return jsonify({'message': f'Started pulling {image} in the background. Check console output.'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/make_dir', methods=['POST'])
+def make_dir():
+    data = request.json
+    path = data.get('path')
+    name = data.get('name')
+    if not path or not name:
+        return jsonify({'error': 'Path and name are required'}), 400
+    
+    try:
+        new_dir = Path(os.path.expanduser(path)) / name
+        new_dir.mkdir(parents=True, exist_ok=True)
+        return jsonify({'message': f'Directory created: {new_dir}', 'path': str(new_dir)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -802,6 +849,7 @@ def save_config():
     data = request.json
     filename = data.get('filename', 'config.json')
     config_data = data.get('config')
+    save_dir = data.get('config_folder', '').strip()
     
     if not config_data:
         return jsonify({'error': 'No config data provided'}), 400
@@ -811,7 +859,11 @@ def save_config():
         if not filename.endswith('.json'):
             filename += '.json'
             
-        config_path = BASE_DIR / "configs" / filename
+        if save_dir:
+            config_path = Path(os.path.expanduser(save_dir)) / filename
+        else:
+            config_path = BASE_DIR / "configs" / filename
+            
         os.makedirs(config_path.parent, exist_ok=True)
         
         with open(config_path, 'w') as f:
@@ -919,6 +971,19 @@ def kill_job():
         return jsonify({'message': f'Termination signal sent to {len(pids)} runner process(es) and containers.'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/quit', methods=['POST'])
+def quit_app():
+    """Endpoint to shut down the Flask/Waitress server."""
+    print("\n[GUI] Shutdown request received. Closing application...")
+    
+    def shutdown():
+        time.sleep(0.5)
+        print("[GUI] Application stopped. Goodbye!")
+        os._exit(0)
+    
+    threading.Thread(target=shutdown).start()
+    return jsonify({'message': 'BIDS App Runner is shutting down... You can now close this browser tab.'})
 
 if __name__ == '__main__':
     import socket

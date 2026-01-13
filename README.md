@@ -204,7 +204,10 @@ The project ships with a lightweight Flask/Waitress application (`app_gui.py` pl
 
 - scan a directory for Apptainer/Singularity images, check for newer releases, and load container-specific help automatically
 - assemble BIDS, derivatives, and temp folders along with runner overrides (subjects, pilot, dry-run, validation, etc.)
+- create new directories and browse your filesystem directly from the interface
+- stay updated with live Docker pull progress and system dependency badges
 - peek at live runner logs, start/stop the background job, and reuse previously saved configs
+- easily shut down the application using the integrated "Quit" functionality
 
 The interface fetches the container's `--help` output to surface pipeline-specific arguments, links directly to the upstream documentation, and runs `run_bids_apps.py` in the background via `--nohup`. Read the GUI reference on Read the Docs to see how the REST endpoints, log tailing, and help parsing work.
 

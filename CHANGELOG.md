@@ -6,6 +6,10 @@
 - Integrated system status badges in GUI navbar.
 - Added host-side validation for container engines before starting processing jobs.
 - Improved Docker check to verify if the daemon/service is actually running (vital for macOS/Windows).
+- Added a "Quit App" button to the GUI to easily shut down the backend server.
+- Improved installation scripts to handle project root discovery and dynamic requirements.
+- Added progress feedback for Docker image pulls directly in the GUI console.
+- Flexible configuration saving: choosing custom directories for JSON configs.
 
 ## v1.0.0
 - First official release of BIDS App Runner.

@@ -6,7 +6,7 @@ VENV_PATH="$SCRIPT_DIR/.appsrunner"
 
 if [ ! -d "$VENV_PATH" ]; then
     echo "Error: Virtual environment not found at $VENV_PATH"
-    echo "Please run ./install.sh first"
+    echo "Please run ./scripts/install.sh first"
     exit 1
 fi
 
