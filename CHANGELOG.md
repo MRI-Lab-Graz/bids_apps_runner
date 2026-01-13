@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.1.2
+- Simplified GitHub Actions workflow to provide single macOS and Windows binaries.
+- Removed architecture-specific build flags for the runner itself (as it is platform-independent), relying on the app's internal logic to handle Docker container architectures.
+
 ## v1.1.1
 - Fixed GitHub Actions workflow: Updated retired macOS Intel runner from `macos-13` to `macos-15`.
 
