@@ -70,21 +70,22 @@
     </style>
 {% endblock %}
 
-{% block navbar_extra %}
+{% block navbar_content %}
     <div class="navbar-nav me-auto">
-        <div class="btn-group ms-3" role="tablist">
+        <div class="btn-group ms-lg-3" role="tablist">
             <button class="btn btn-primary tab-button active" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)">Run BIDS App</button>
             <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)">Check App Output</button>
             <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)">Build Apptainer</button>
         </div>
     </div>
-    <div class="navbar-nav ms-auto align-items-center">
-        <div id="system-status-pills" class="d-inline-block me-3">
-            <!-- System status badges will be injected here -->
-        </div>
-        <a href="https://github.com/MRI-Lab-Graz/bids_apps_runner" target="_blank" class="btn btn-outline-secondary btn-sm me-3"><i class="fab fa-github me-1"></i> GitHub</a>
-        <button onclick="quitApp()" class="btn btn-outline-danger btn-sm"><i class="fas fa-power-off me-1"></i> Quit</button>
+{% endblock %}
+
+{% block navbar_right %}
+    <div id="system-status-pills" class="d-inline-block me-3">
+        <!-- System status badges will be injected here -->
     </div>
+    <a href="https://github.com/MRI-Lab-Graz/bids_apps_runner" target="_blank" class="btn btn-outline-secondary btn-sm me-2"><i class="fab fa-github me-1"></i> GitHub Repo</a>
+    <button onclick="quitApp()" class="btn btn-outline-danger btn-sm"><i class="fas fa-power-off me-1"></i> Quit</button>
 {% endblock %}
 
 {% block content %}
