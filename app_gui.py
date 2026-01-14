@@ -1008,41 +1008,35 @@ def run_app():
 def kill_job():
     # Attempt to kill run_bids_apps.py and associated apptainer processes
     try:
-        # We look for the main runner script first
         cmd_find = ["pgrep", "-f", "run_bids_apps.py"]
         result = subprocess.run(cmd_find, capture_output=True, text=True)
         pids = result.stdout.strip().split('\n')
-        
+
         if not pids or not pids[0]:
             return jsonify({'message': 'No active BIDS App Runner processes found.'}), 200
 
-        # Kill the runner processes
         for pid in pids:
             if pid:
                 subprocess.run(["kill", pid])
-        
-        # Also clean up any lingering container processes (like what kill_app.sh does)
-        # We use a broad search for 'apptainer' or 'qsirecon' or 'fmriprep' 
-        # but specifically looking for those that might have been spawned
+
         subprocess.run(["pkill", "-f", "apptainer"])
-        subprocess.run(["pkill", "-f", "appinit"]) # Specific to some BIDS implementations
-        
+        subprocess.run(["pkill", "-f", "appinit"])  # Specific to some BIDS implementations
+
         return jsonify({'message': f'Termination signal sent to {len(pids)} runner process(es) and containers.'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/quit', methods=['POST'])
-def quit_app():
-    """Endpoint to shut down the Flask/Waitress server."""
-    print("\n[GUI] Shutdown request received. Closing application...")
-    
-    def shutdown():
-        time.sleep(0.5)
-        print("[GUI] Application stopped. Goodbye!")
+@app.route('/shutdown', methods=['POST'])
+def shutdown():
+    """Shutdown the Flask server when requested by the frontend."""
+    print("[GUI] Shutdown requested via web interface", flush=True)
+
+    def kill_server():
+        time.sleep(1)
         os._exit(0)
-    
-    threading.Thread(target=shutdown).start()
-    return jsonify({'message': 'BIDS App Runner is shutting down... You can now close this browser tab.'})
+
+    threading.Thread(target=kill_server).start()
+    return jsonify(success=True)
 
 if __name__ == '__main__':
     import socket
