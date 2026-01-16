@@ -110,7 +110,7 @@ def _find_python_interpreter():
     return "python3" # Fallback
 
 PYTHON_EXE = _find_python_interpreter()
-
+––
 def check_system_dependencies():
     """Check for availability of docker, apptainer, and singularity."""
     docker_installed = shutil.which('docker') is not None
