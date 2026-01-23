@@ -73,7 +73,8 @@
 {% block navbar_content %}
     <div class="navbar-nav me-auto">
         <div class="btn-group ms-lg-3" role="tablist">
-            <button class="btn btn-primary tab-button active" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)">Run BIDS App</button>
+            <button class="btn btn-primary tab-button active" id="tabProjectsBtn" type="button" onclick="switchTab('projectsTab', this)">Projects</button>
+            <button class="btn btn-outline-primary tab-button" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)">Run BIDS App</button>
             <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)">Check App Output</button>
             <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)">Build Apptainer</button>
         </div>
@@ -85,11 +86,43 @@
         <!-- System status badges will be injected here -->
     </div>
     <a href="https://github.com/MRI-Lab-Graz/bids_apps_runner" target="_blank" class="btn btn-outline-secondary btn-sm me-2"><i class="fab fa-github me-1"></i> GitHub Repo</a>
-    <button onclick="quitApp()" class="btn btn-outline-danger btn-sm"><i class="fas fa-power-off me-1"></i> Quit</button>
 {% endblock %}
 
 {% block content %}
     <div class="container container-main">
+        <!-- PROJECTS TAB -->
+        <div id="projectsTab" class="tab-panel" style="display:none;">
+            <div class="card">
+                <div class="card-header">
+                    Projects
+                </div>
+                <div class="card-body">
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <h5>Recent Projects</h5>
+                            <div id="recentProjectsList" class="list-group">
+                                <div class="list-group-item text-muted">Loading projects...</div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h5>Create New Project</h5>
+                            <form id="createProjectForm">
+                                <div class="mb-3">
+                                    <label class="form-label">Project Name</label>
+                                    <input type="text" class="form-control" id="newProjectName" placeholder="e.g., Study XYZ fMRIPrep" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Description (optional)</label>
+                                    <textarea class="form-control" id="newProjectDesc" rows="3" placeholder="Brief description of this project..."></textarea>
+                                </div>
+                                <button type="button" class="btn btn-primary" onclick="createNewProject()">Create Project</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div id="runnerTab" class="tab-panel" style="display:block;">
             <div class="card">
             <div class="card-header">
@@ -339,7 +372,10 @@
                 <div class="terminal-container">
                     <div class="terminal-header">
                         <span><i class="fas fa-terminal me-2"></i>Console Output [<span id="logFilename">none</span>]</span>
-                        <div class="d-flex align-items-center">
+                        <div class="d-flex align-items-center gap-2">
+                            <button type="button" class="btn btn-sm btn-outline-light" onclick="clearTerminal()" title="Clear console output">
+                                <i class="fas fa-eraser me-1"></i>Clear
+                            </button>
                             <div class="form-check form-switch mb-0">
                                 <input class="form-check-input" type="checkbox" id="autoScroll" checked>
                                 <label class="form-check-label ms-1" for="autoScroll">Live Feed</label>
@@ -566,12 +602,138 @@
         let currentTargetId = '';
         let browserCurrentPath = '/data/local/software';
         let lastSavedPath = '';
+        let lastProjectId = '';
         let initialLoad = true;
+
+        // ===== PROJECT MANAGEMENT =====
+        
+        async function loadRecentProjects() {
+            try {
+                const resp = await fetch('/get_projects');
+                const data = await resp.json();
+                const list = document.getElementById('recentProjectsList');
+                
+                if (!data.projects || data.projects.length === 0) {
+                    list.innerHTML = '<div class="list-group-item text-muted">No projects yet. Create one to get started!</div>';
+                    return;
+                }
+                
+                list.innerHTML = '';
+                data.projects.forEach(proj => {
+                    const item = document.createElement('button');
+                    item.className = 'list-group-item list-group-item-action text-start';
+                    item.innerHTML = `
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h6 class="mb-1">${proj.name}</h6>
+                                <small class="text-muted">${proj.description || 'No description'}</small>
+                                <br>
+                                <small class="text-muted">Modified: ${new Date(proj.last_modified).toLocaleDateString()}</small>
+                            </div>
+                            <button type="button" class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteProject('${proj.id}')" title="Delete project">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    `;
+                    item.onclick = () => loadProjectAndSwitch(proj.id);
+                    list.appendChild(item);
+                });
+            } catch (e) {
+                console.error("Failed to load projects:", e);
+                document.getElementById('recentProjectsList').innerHTML = '<div class="alert alert-danger">Failed to load projects</div>';
+            }
+        }
+        
+        async function createNewProject() {
+            const name = document.getElementById('newProjectName').value.trim();
+            const desc = document.getElementById('newProjectDesc').value.trim();
+            
+            if (!name) {
+                showStatus("Project name is required", true);
+                return;
+            }
+            
+            try {
+                const resp = await fetch('/create_project', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: name, description: desc})
+                });
+                const data = await resp.json();
+                
+                if (data.project_id) {
+                    document.getElementById('newProjectName').value = '';
+                    document.getElementById('newProjectDesc').value = '';
+                    showStatus(`Project "${name}" created successfully!`);
+                    loadRecentProjects();
+                    loadProjectAndSwitch(data.project_id);
+                } else {
+                    showStatus(data.error, true);
+                }
+            } catch (e) {
+                showStatus("Failed to create project: " + e.message, true);
+            }
+        }
+        
+        async function loadProjectAndSwitch(projectId) {
+            try {
+                const resp = await fetch(`/load_project/${projectId}`);
+                const project = await resp.json();
+                
+                if (resp.status === 404) {
+                    showStatus("Project not found", true);
+                    return;
+                }
+                
+                // Load project config into the form
+                const cfg = project.config;
+                const common = cfg.common || {};
+                const app = cfg.app || {};
+                
+                // Fill form fields
+                document.getElementById('bids_folder').value = common.bids_folder || '';
+                document.getElementById('output_folder').value = common.output_folder || '';
+                document.getElementById('tmp_folder').value = common.tmp_folder || '';
+                document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
+                document.getElementById('jobs').value = common.jobs || 1;
+                document.getElementById('analysis_level').value = app.analysis_level || 'participant';
+                document.getElementById('container_engine').value = common.container_engine || 'apptainer';
+                
+                toggleEngineFields();
+                
+                // Store project info for later use
+                lastProjectId = projectId;
+                lastSavedPath = null;
+                
+                showStatus(`Loaded project: ${project.name}`);
+                switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
+            } catch (e) {
+                showStatus("Failed to load project: " + e.message, true);
+            }
+        }
+        
+        async function deleteProject(projectId) {
+            if (!confirm("Are you sure you want to delete this project and all its data?")) return;
+            
+            try {
+                const resp = await fetch(`/delete_project/${projectId}`, {method: 'DELETE'});
+                const data = await resp.json();
+                
+                if (resp.ok) {
+                    showStatus("Project deleted successfully");
+                    loadRecentProjects();
+                } else {
+                    showStatus(data.error, true);
+                }
+            } catch (e) {
+                showStatus("Failed to delete project: " + e.message, true);
+            }
+        }
 
         async function refreshLogs() {
             if (!document.getElementById('autoScroll').checked) return;
             try {
-                const resp = await fetch('/get_log');
+                const resp = await fetch('/get_log' + (lastProjectId ? `?project_id=${lastProjectId}` : ''));
                 if (!resp.ok) return;
                 const data = await resp.json();
                 const term = document.getElementById('terminal');
@@ -579,9 +741,28 @@
                 if (data.content) {
                     const isAtBottom = term.scrollHeight - term.clientHeight <= term.scrollTop + 5;
                     term.innerText = data.content;
-                    document.getElementById('logFilename').innerText = data.filename || 'none';
+                    const filenameEl = document.getElementById('logFilename');
+                    filenameEl.innerText = data.filename || 'none';
+                    
+                    // Update visual indicator for active/idle status
+                    const terminalHeader = document.querySelector('.terminal-header');
+                    if (data.is_active === false) {
+                        terminalHeader.style.opacity = '0.7';
+                        filenameEl.style.color = '#999';
+                    } else {
+                        terminalHeader.style.opacity = '1';
+                        filenameEl.style.color = 'inherit';
+                    }
+                    
                     if (isAtBottom) term.scrollTop = term.scrollHeight;
-                } else if (!data.content && data.filename === 'none') {
+                } else {
+                    // No active content - show waiting message
+                    const filenameEl = document.getElementById('logFilename');
+                    filenameEl.innerText = 'none';
+                    const terminalHeader = document.querySelector('.terminal-header');
+                    terminalHeader.style.opacity = '1';
+                    filenameEl.style.color = 'inherit';
+                    
                     if (initialLoad) {
                         term.innerText = '[System initialized. Waiting for task...]\n';
                         initialLoad = false;
@@ -592,6 +773,12 @@
             }
         }
         setInterval(refreshLogs, 2000);
+
+        function clearTerminal() {
+            const term = document.getElementById('terminal');
+            term.innerText = '[Console cleared]\n';
+            document.getElementById('logFilename').innerText = 'none';
+        }
 
         async function checkAppVersion() {
             const f = document.getElementById('container_folder').value;
@@ -1117,10 +1304,16 @@
             const config_folder = document.getElementById('config_folder').value.trim();
             
             try {
+                // If a project is loaded, save to project. Otherwise save as standalone config.
+                const savePayload = { filename, config, config_folder };
+                if (lastProjectId) {
+                    savePayload.project_id = lastProjectId;
+                }
+                
                 const resp = await fetch('/save_config', { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json' }, 
-                    body: JSON.stringify({ filename, config, config_folder }) 
+                    body: JSON.stringify(savePayload) 
                 });
                 const resData = await resp.json();
                 if (resData.message) {
@@ -1150,7 +1343,12 @@
 
             showStatus("🚀 Starting BIDS App Runner...");
             try {
-                const resp = await fetch('/run_app', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ config_path: lastSavedPath, runner_args: r_args }) });
+                const payload = { config_path: lastSavedPath, runner_args: r_args };
+                if (lastProjectId) {
+                    payload.project_id = lastProjectId;
+                }
+                
+                const resp = await fetch('/run_app', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 const data = await resp.json();
                 if (data.message) {
                     showStatus(data.message);
@@ -1373,8 +1571,12 @@
             if (panel) {
                 panel.style.display = 'block';
                 
+                // Load projects when switching to projects tab
+                if (tabId === 'projectsTab') {
+                    loadRecentProjects();
+                }
                 // Sync fields between tabs if empty
-                if (tabId === 'checkTab') {
+                else if (tabId === 'checkTab') {
                     if (!document.getElementById('validation_bids_folder').value && document.getElementById('bids_folder').value) {
                         document.getElementById('validation_bids_folder').value = document.getElementById('bids_folder').value;
                     }

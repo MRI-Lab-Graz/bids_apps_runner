@@ -106,6 +106,154 @@ def _get_data_dir():
 
 DATA_DIR = _get_data_dir()
 LOG_DIR = DATA_DIR / "logs"
+PROJECTS_DIR = DATA_DIR / "projects"
+PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+
+class ProjectManager:
+    """Manages BIDS App Runner projects."""
+    
+    @staticmethod
+    def create_project(name, description=""):
+        """Create a new project with the given name."""
+        # Generate unique project ID from name
+        project_id = name.lower().replace(" ", "_").replace("-", "_")
+        project_id = re.sub(r'[^a-z0-9_]', '', project_id)
+        if not project_id:
+            project_id = "project_" + str(int(time.time()))
+        
+        # Ensure uniqueness
+        counter = 1
+        original_id = project_id
+        while (PROJECTS_DIR / project_id).exists():
+            project_id = f"{original_id}_{counter}"
+            counter += 1
+        
+        project_dir = PROJECTS_DIR / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "logs").mkdir(exist_ok=True)
+        
+        project_json = {
+            "id": project_id,
+            "name": name,
+            "description": description,
+            "created": datetime.now().isoformat(),
+            "last_modified": datetime.now().isoformat(),
+            "last_log": None,
+            "config": {
+                "common": {
+                    "bids_folder": "",
+                    "output_folder": "",
+                    "tmp_folder": "",
+                    "templateflow_dir": "",
+                    "container_engine": "apptainer",
+                    "container": "",
+                    "jobs": 1
+                },
+                "app": {
+                    "analysis_level": "participant",
+                    "options": [],
+                    "mounts": []
+                }
+            }
+        }
+        
+        project_json_path = project_dir / "project.json"
+        with open(project_json_path, 'w') as f:
+            json.dump(project_json, f, indent=2)
+        
+        return project_id, project_json
+    
+    @staticmethod
+    def load_project(project_id):
+        """Load a project by ID."""
+        project_dir = PROJECTS_DIR / project_id
+        project_json_path = project_dir / "project.json"
+        
+        if not project_json_path.exists():
+            return None
+        
+        with open(project_json_path, 'r') as f:
+            return json.load(f)
+    
+    @staticmethod
+    def save_project(project_id, config):
+        """Save project configuration."""
+        project_dir = PROJECTS_DIR / project_id
+        project_json_path = project_dir / "project.json"
+        
+        if not project_json_path.exists():
+            return False
+        
+        with open(project_json_path, 'r') as f:
+            project_json = json.load(f)
+        
+        project_json['config'] = config
+        project_json['last_modified'] = datetime.now().isoformat()
+        
+        with open(project_json_path, 'w') as f:
+            json.dump(project_json, f, indent=2)
+        
+        return True
+    
+    @staticmethod
+    def update_project_log(project_id, log_filename):
+        """Update the last_log field in project.json."""
+        project_dir = PROJECTS_DIR / project_id
+        project_json_path = project_dir / "project.json"
+        
+        if not project_json_path.exists():
+            return False
+        
+        with open(project_json_path, 'r') as f:
+            project_json = json.load(f)
+        
+        project_json['last_log'] = log_filename
+        project_json['last_modified'] = datetime.now().isoformat()
+        
+        with open(project_json_path, 'w') as f:
+            json.dump(project_json, f, indent=2)
+        
+        return True
+    
+    @staticmethod
+    def list_projects(limit=None):
+        """List all projects, sorted by last_modified (newest first)."""
+        projects = []
+        
+        if not PROJECTS_DIR.exists():
+            return projects
+        
+        for project_dir in sorted(PROJECTS_DIR.iterdir(), key=lambda x: x.is_dir(), reverse=True):
+            if not project_dir.is_dir():
+                continue
+            
+            project_json_path = project_dir / "project.json"
+            if project_json_path.exists():
+                try:
+                    with open(project_json_path, 'r') as f:
+                        project_data = json.load(f)
+                    projects.append(project_data)
+                except Exception as e:
+                    print(f"[ERROR] Failed to load project {project_dir.name}: {e}")
+        
+        # Sort by last_modified, newest first
+        projects.sort(key=lambda x: x.get('last_modified', ''), reverse=True)
+        
+        if limit:
+            projects = projects[:limit]
+        
+        return projects
+    
+    @staticmethod
+    def delete_project(project_id):
+        """Delete a project and all its data."""
+        project_dir = PROJECTS_DIR / project_id
+        
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+            return True
+        
+        return False
 
 def _find_python_interpreter():
     """Find a Python 3 interpreter in the current environment."""
@@ -285,12 +433,37 @@ GUI_SESSION_STARTED = False
 @app.route('/get_log', methods=['GET'])
 def get_log():
     try:
-        # Find the most recent nohup log file
-        log_files = glob.glob(str(DATA_DIR / "nohup_bids_runner_*.log"))
-        if not log_files:
-            return jsonify({'content': '', 'filename': 'none'}), 200
+        # Get project_id from query params (optional)
+        project_id = request.args.get('project_id')
         
-        latest_log = max(log_files, key=os.path.getctime)
+        # Check if there are any active run_bids_apps.py processes
+        result = subprocess.run(["pgrep", "-f", "run_bids_apps.py"], capture_output=True, text=True)
+        has_active_job = bool(result.stdout.strip())
+        
+        # If project_id is specified, look for logs in that project
+        if project_id:
+            project_dir = PROJECTS_DIR / project_id / "logs"
+            if project_dir.exists():
+                log_files = sorted(list(project_dir.glob("*.log")), key=os.path.getmtime, reverse=True)
+            else:
+                log_files = []
+        else:
+            # Fallback to old location (DATA_DIR) for backward compatibility
+            log_files = glob.glob(str(DATA_DIR / "nohup_bids_runner_*.log"))
+        
+        if not log_files:
+            return jsonify({'content': '', 'filename': 'none', 'is_active': False}), 200
+        
+        latest_log = log_files[0]
+        
+        # Check if log file was modified within the last 5 minutes (300 seconds)
+        current_time = time.time()
+        log_mtime = os.path.getmtime(latest_log)
+        is_recently_active = (current_time - log_mtime) < 300
+        
+        # Only show logs if there's an active job OR the log was recently modified
+        if not (has_active_job or is_recently_active):
+            return jsonify({'content': '', 'filename': 'none', 'is_active': False}), 200
         
         # Use tail to get last 150 lines efficiently
         result = subprocess.run(["tail", "-n", "150", latest_log], capture_output=True, text=True)
@@ -299,11 +472,83 @@ def get_log():
         # Strip ANSI escape sequences (colors)
         ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
         content = ansi_escape.sub('', content)
+        
+        # Add idle indicator if no active job and log is stale
+        if not has_active_job and not is_recently_active:
+            content = "[Idle - Last activity: " + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log_mtime)) + "]\n" + content
             
         return jsonify({
-            'filename': os.path.basename(latest_log),
-            'content': content
+            'filename': os.path.basename(latest_log) if (has_active_job or is_recently_active) else 'none',
+            'content': content,
+            'is_active': has_active_job or is_recently_active
         })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_projects', methods=['GET'])
+def get_projects():
+    """Get list of recent projects (limit 5)."""
+    try:
+        projects = ProjectManager.list_projects(limit=5)
+        return jsonify({'projects': projects}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/create_project', methods=['POST'])
+def create_project():
+    """Create a new project."""
+    try:
+        data = request.json
+        name = data.get('name', '').strip()
+        description = data.get('description', '').strip()
+        
+        if not name:
+            return jsonify({'error': 'Project name is required'}), 400
+        
+        project_id, project_json = ProjectManager.create_project(name, description)
+        return jsonify({'project_id': project_id, 'project': project_json}), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/load_project/<project_id>', methods=['GET'])
+def load_project(project_id):
+    """Load a project configuration."""
+    try:
+        project_json = ProjectManager.load_project(project_id)
+        if not project_json:
+            return jsonify({'error': f'Project {project_id} not found'}), 404
+        
+        return jsonify(project_json), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/save_project/<project_id>', methods=['POST'])
+def save_project(project_id):
+    """Save project configuration."""
+    try:
+        data = request.json
+        config = data.get('config')
+        
+        if not config:
+            return jsonify({'error': 'Config is required'}), 400
+        
+        success = ProjectManager.save_project(project_id, config)
+        if not success:
+            return jsonify({'error': f'Project {project_id} not found'}), 404
+        
+        return jsonify({'message': 'Project saved successfully'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/delete_project/<project_id>', methods=['DELETE'])
+def delete_project(project_id):
+    """Delete a project."""
+    try:
+        success = ProjectManager.delete_project(project_id)
+        if not success:
+            return jsonify({'error': f'Project {project_id} not found'}), 404
+        
+        return jsonify({'message': 'Project deleted successfully'}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -916,11 +1161,23 @@ def save_config():
     filename = data.get('filename', 'config.json')
     config_data = data.get('config')
     save_dir = data.get('config_folder', '').strip()
+    project_id = data.get('project_id')  # NEW: project context
     
     if not config_data:
         return jsonify({'error': 'No config data provided'}), 400
     
     try:
+        # If project_id provided, save to project
+        if project_id:
+            success = ProjectManager.save_project(project_id, config_data)
+            if not success:
+                return jsonify({'error': f'Project {project_id} not found'}), 404
+            
+            project = ProjectManager.load_project(project_id)
+            config_path = f"projects/{project_id}/project.json"
+            return jsonify({'message': f'Project config saved successfully', 'path': config_path, 'project': project})
+        
+        # Otherwise, save as standalone config file (backward compatibility)
         # Ensure filename ends with .json
         if not filename.endswith('.json'):
             filename += '.json'
@@ -943,6 +1200,7 @@ def save_config():
 def run_app():
     global GUI_SESSION_STARTED
     config_path = request.json.get('config_path')
+    project_id = request.json.get('project_id')  # NEW: project context
     runner_args = request.json.get('runner_args', [])
     if not config_path:
         return jsonify({'error': 'No config path provided'}), 400
@@ -982,6 +1240,13 @@ def run_app():
         elif engine == 'apptainer' and not (shutil.which('apptainer') or shutil.which('singularity')):
             return jsonify({'error': 'Apptainer/Singularity requested but not found on system.'}), 400
 
+        # 2. Determine working directory (project-specific if available)
+        if project_id:
+            work_dir = PROJECTS_DIR / project_id / "logs"
+            work_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            work_dir = DATA_DIR
+        
         # 2. Launch run_bids_apps.py in background
         if getattr(sys, 'frozen', False):
             script_path = BUNDLE_DIR / "run_bids_apps.py"
@@ -1002,9 +1267,15 @@ def run_app():
         if "--nohup" not in cmd:
             cmd.append("--nohup")
         
-        print(f"[GUI] Executing: {' '.join(cmd)}")
-        # Use DATA_DIR as cwd so logs are written there
-        subprocess.Popen(cmd, cwd=DATA_DIR)
+        print(f"[GUI] Executing: {' '.join(cmd)} in {work_dir}")
+        subprocess.Popen(cmd, cwd=str(work_dir))
+        
+        # Update project's last_log if project_id is provided
+        if project_id:
+            # Generate log filename based on timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_filename = f"run_{timestamp}.log"
+            ProjectManager.update_project_log(project_id, log_filename)
         
         GUI_SESSION_STARTED = True
         
