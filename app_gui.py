@@ -33,6 +33,14 @@ from pathlib import Path
 from version import __version__
 from check_app_output import BIDSOutputValidator
 
+# Try to import HPC DataLad runner
+try:
+    from hpc_datalad_runner import DataLadHPCScriptGenerator, validate_datalad_config, validate_hpc_config
+    HPC_DATALAD_AVAILABLE = True
+except ImportError:
+    HPC_DATALAD_AVAILABLE = False
+    print("[WARNING] HPC DataLad runner not available - HPC mode disabled")
+
 def _fix_system_path():
     """Ensure common paths are in PATH, especially when running as a bundled app on macOS."""
     extra_paths = [
@@ -1037,6 +1045,189 @@ def shutdown():
 
     threading.Thread(target=kill_server).start()
     return jsonify(success=True)
+
+# ============================================================================
+# HPC/DataLad Endpoints
+# ============================================================================
+
+@app.route('/check_hpc_environment', methods=['GET'])
+def check_hpc_environment():
+    """Check if HPC tools are available."""
+    return jsonify({
+        'slurm': shutil.which('sbatch') is not None,
+        'datalad': shutil.which('datalad') is not None,
+        'git': shutil.which('git') is not None,
+        'git_annex': shutil.which('git-annex') is not None,
+        'apptainer': shutil.which('apptainer') is not None,
+        'singularity': shutil.which('singularity') is not None,
+        'hpc_datalad_available': HPC_DATALAD_AVAILABLE
+    })
+
+@app.route('/generate_hpc_script', methods=['POST'])
+def generate_hpc_script():
+    """Generate a SLURM script with DataLad workflow."""
+    if not HPC_DATALAD_AVAILABLE:
+        return jsonify({'error': 'HPC DataLad runner not available'}), 400
+    
+    data = request.json
+    config_path = data.get('config_path')
+    subject = data.get('subject')
+    
+    if not config_path or not subject:
+        return jsonify({'error': 'config_path and subject are required'}), 400
+    
+    try:
+        # Load and validate config
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        
+        # Validate DataLad and HPC configs
+        if not validate_datalad_config(config.get("datalad", {})):
+            return jsonify({'error': 'Invalid DataLad configuration'}), 400
+        
+        validate_hpc_config(config.get("hpc", {}))
+        
+        # Generate script
+        generator = DataLadHPCScriptGenerator(config, subject)
+        script = generator.generate_script()
+        
+        return jsonify({
+            'script': script,
+            'subject': subject,
+            'config': config_path
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/save_hpc_script', methods=['POST'])
+def save_hpc_script():
+    """Save a generated HPC script to disk."""
+    data = request.json
+    script_content = data.get('script')
+    subject = data.get('subject')
+    output_dir = data.get('output_dir', '/tmp/hpc_scripts')
+    
+    if not script_content or not subject:
+        return jsonify({'error': 'script and subject are required'}), 400
+    
+    try:
+        output_path = Path(output_dir) / f"job_{subject}.sh"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(output_path, 'w') as f:
+            f.write(script_content)
+        
+        os.chmod(output_path, 0o755)
+        
+        return jsonify({
+            'message': f'Script saved to {output_path}',
+            'path': str(output_path)
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/submit_hpc_job', methods=['POST'])
+def submit_hpc_job():
+    """Submit a SLURM job script."""
+    data = request.json
+    script_path = data.get('script_path')
+    dry_run = data.get('dry_run', False)
+    
+    if not script_path:
+        return jsonify({'error': 'script_path is required'}), 400
+    
+    if not os.path.exists(script_path):
+        return jsonify({'error': f'Script not found: {script_path}'}), 400
+    
+    try:
+        if dry_run:
+            return jsonify({
+                'message': 'DRY RUN - Would submit job',
+                'command': f'sbatch {script_path}',
+                'job_id': 'DRY_RUN_JOB_ID'
+            })
+        
+        # Submit job
+        cmd = ['sbatch', script_path]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        output = result.stdout.strip()
+        if "Submitted batch job" in output:
+            job_id = output.split()[-1]
+            logging.info(f"[GUI] Submitted HPC job {job_id}: {script_path}")
+            return jsonify({
+                'message': f'Job submitted successfully',
+                'job_id': job_id,
+                'command': ' '.join(cmd)
+            })
+        else:
+            return jsonify({'error': f'Failed to parse job ID: {output}'}), 500
+    
+    except subprocess.CalledProcessError as e:
+        return jsonify({'error': f'Failed to submit job: {e.stderr}'}), 500
+    except FileNotFoundError:
+        return jsonify({'error': 'sbatch not found - SLURM not available on this system'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_hpc_job_status', methods=['POST'])
+def get_hpc_job_status():
+    """Get status of SLURM jobs."""
+    data = request.json
+    job_ids = data.get('job_ids', [])
+    
+    if not job_ids:
+        return jsonify({'error': 'job_ids required'}), 400
+    
+    try:
+        cmd = ['squeue', '-j', ','.join(job_ids), '--format=%i,%T,%M,%e']
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        
+        jobs = []
+        for line in result.stdout.strip().split('\n')[1:]:  # Skip header
+            if line:
+                parts = line.split(',')
+                if len(parts) >= 4:
+                    jobs.append({
+                        'job_id': parts[0],
+                        'status': parts[1],
+                        'time': parts[2],
+                        'end_time': parts[3] if len(parts) > 3 else ''
+                    })
+        
+        return jsonify({'jobs': jobs})
+    
+    except FileNotFoundError:
+        return jsonify({'error': 'squeue not found - SLURM not available'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/cancel_hpc_job', methods=['POST'])
+def cancel_hpc_job():
+    """Cancel a SLURM job."""
+    data = request.json
+    job_id = data.get('job_id')
+    
+    if not job_id:
+        return jsonify({'error': 'job_id is required'}), 400
+    
+    try:
+        cmd = ['scancel', job_id]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        return jsonify({
+            'message': f'Job {job_id} cancelled',
+            'job_id': job_id
+        })
+    
+    except subprocess.CalledProcessError as e:
+        return jsonify({'error': f'Failed to cancel job: {e.stderr}'}), 500
+    except FileNotFoundError:
+        return jsonify({'error': 'scancel not found - SLURM not available'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     import socket
