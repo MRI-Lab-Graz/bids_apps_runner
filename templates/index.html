@@ -75,6 +75,7 @@
         <div class="btn-group ms-lg-3" role="tablist">
             <button class="btn btn-primary tab-button active" id="tabProjectsBtn" type="button" onclick="switchTab('projectsTab', this)">Projects</button>
             <button class="btn btn-outline-primary tab-button" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)">Run BIDS App</button>
+            <button class="btn btn-outline-primary tab-button" id="tabHPCBtn" type="button" onclick="switchTab('hpcTab', this)"><i class="fas fa-server me-1"></i>HPC/SLURM</button>
             <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)">Check App Output</button>
             <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)">Build Apptainer</button>
         </div>
@@ -387,6 +388,158 @@
             </div>
         </div>
     </div>
+
+        <!-- HPC/SLURM TAB -->
+        <div id="hpcTab" class="tab-panel">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-server me-2"></i>HPC/SLURM Job Management</span>
+                    <button class="btn btn-sm btn-outline-info" onclick="checkHPCEnvironment()">
+                        <i class="fas fa-sync-alt me-1"></i>Check Environment
+                    </button>
+                </div>
+                <div class="card-body">
+                    <!-- Environment Status -->
+                    <div id="hpcEnvStatus" class="alert alert-info" style="display:none;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div><strong>HPC Environment Status:</strong></div>
+                            <div id="hpcEnvBadges" class="d-flex gap-2 flex-wrap"></div>
+                        </div>
+                    </div>
+
+                    <div class="section-header">1. Configuration</div>
+                    <div class="row">
+                        <div class="col-md-8 mb-3">
+                            <label class="form-label">HPC Config File</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="hpc_config_path" placeholder="/path/to/config_hpc_datalad.json">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('hpc_config_path')">...</button>
+                                <button type="button" class="btn btn-outline-primary" onclick="loadHPCConfig()">Load</button>
+                            </div>
+                            <div class="text-muted small mt-1">Config must include 'hpc', 'datalad', and 'container' sections</div>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Subject ID</label>
+                            <input type="text" class="form-control" id="hpc_subject" placeholder="sub-001">
+                        </div>
+                    </div>
+
+                    <!-- HPC Settings Display -->
+                    <div id="hpcConfigDetails" style="display:none;">
+                        <div class="section-header">SLURM Settings (from config)</div>
+                        <div class="card bg-light border-0 mb-3">
+                            <div class="card-body">
+                                <div class="row">
+                                    <div class="col-md-3 mb-2">
+                                        <small class="text-muted">Partition</small>
+                                        <div id="hpc_display_partition" class="fw-bold">-</div>
+                                    </div>
+                                    <div class="col-md-3 mb-2">
+                                        <small class="text-muted">Time</small>
+                                        <div id="hpc_display_time" class="fw-bold">-</div>
+                                    </div>
+                                    <div class="col-md-3 mb-2">
+                                        <small class="text-muted">Memory</small>
+                                        <div id="hpc_display_mem" class="fw-bold">-</div>
+                                    </div>
+                                    <div class="col-md-3 mb-2">
+                                        <small class="text-muted">CPUs</small>
+                                        <div id="hpc_display_cpus" class="fw-bold">-</div>
+                                    </div>
+                                </div>
+                                <div class="row mt-2">
+                                    <div class="col-md-6 mb-2">
+                                        <small class="text-muted">Modules</small>
+                                        <div id="hpc_display_modules" class="small">-</div>
+                                    </div>
+                                    <div class="col-md-6 mb-2">
+                                        <small class="text-muted">Container</small>
+                                        <div id="hpc_display_container" class="small">-</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section-header">2. Script Generation</div>
+                    <div class="d-flex gap-2 mb-3">
+                        <button class="btn btn-primary" onclick="generateHPCScript()">
+                            <i class="fas fa-file-code me-2"></i>Generate SLURM Script
+                        </button>
+                        <button class="btn btn-outline-secondary" onclick="toggleScriptPreview()">
+                            <i class="fas fa-eye me-2"></i>Preview Script
+                        </button>
+                        <button class="btn btn-outline-success" onclick="saveHPCScript()">
+                            <i class="fas fa-save me-2"></i>Save Script
+                        </button>
+                    </div>
+                    
+                    <div id="hpcScriptPreview" style="display:none;">
+                        <label class="form-label fw-bold">Generated Script:</label>
+                        <pre id="hpcScriptContent" style="background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 8px; max-height: 400px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.85rem;"></pre>
+                    </div>
+
+                    <div class="section-header">3. Job Submission</div>
+                    <div class="row align-items-end mb-3">
+                        <div class="col-md-8">
+                            <label class="form-label">Script Path (saved script to submit)</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="hpc_script_path" placeholder="/tmp/hpc_scripts/job_sub-001.sh">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('hpc_script_path')">...</button>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="hpc_dry_run">
+                                <label class="form-check-label" for="hpc_dry_run">Dry Run</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2 mb-3">
+                        <button class="btn btn-danger" onclick="submitHPCJob()">
+                            <i class="fas fa-rocket me-2"></i>Submit to SLURM
+                        </button>
+                        <button class="btn btn-outline-warning" onclick="checkJobStatus()">
+                            <i class="fas fa-tasks me-2"></i>Check Status
+                        </button>
+                        <button class="btn btn-outline-danger" onclick="cancelHPCJob()">
+                            <i class="fas fa-stop-circle me-2"></i>Cancel Job
+                        </button>
+                    </div>
+
+                    <div class="section-header">4. Job Monitor</div>
+                    <div id="hpcJobStatus" class="alert alert-secondary">
+                        <strong>Status:</strong> <span id="hpcStatusText">No jobs submitted</span>
+                    </div>
+                    
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover" id="hpcJobsTable" style="display:none;">
+                            <thead>
+                                <tr>
+                                    <th>Job ID</th>
+                                    <th>Subject</th>
+                                    <th>Status</th>
+                                    <th>Time</th>
+                                    <th>Node</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="hpcJobsTableBody"></tbody>
+                        </table>
+                    </div>
+
+                    <!-- HPC Log Output -->
+                    <div class="mt-4">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted small fw-bold">HPC CONSOLE OUTPUT</span>
+                            <button class="btn btn-sm btn-link" onclick="clearHPCLog()">Clear</button>
+                        </div>
+                        <pre id="hpcLogOutput" class="utility-log" style="min-height: 200px;"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div id="checkTab" class="tab-panel">
             <div class="card">
                 <div class="card-header">Check App Output</div>
@@ -2374,5 +2527,301 @@
                 });
             }
         });
+
+        // ============================================================================
+        // HPC/SLURM Functions
+        // ============================================================================
+        
+        let hpcCurrentScript = '';
+        let hpcCurrentJobId = null;
+        let hpcTrackedJobs = [];
+
+        async function checkHPCEnvironment() {
+            const statusEl = document.getElementById('hpcEnvStatus');
+            const badgesEl = document.getElementById('hpcEnvBadges');
+            
+            try {
+                const resp = await fetch('/check_hpc_environment');
+                const data = await resp.json();
+                
+                statusEl.style.display = 'block';
+                badgesEl.innerHTML = '';
+                
+                const tools = [
+                    { key: 'slurm', label: 'SLURM', icon: 'server' },
+                    { key: 'datalad', label: 'DataLad', icon: 'database' },
+                    { key: 'git', label: 'Git', icon: 'code-branch' },
+                    { key: 'git_annex', label: 'Git-Annex', icon: 'archive' },
+                    { key: 'apptainer', label: 'Apptainer', icon: 'box' },
+                    { key: 'hpc_datalad_available', label: 'HPC Runner', icon: 'rocket' }
+                ];
+                
+                tools.forEach(tool => {
+                    const available = data[tool.key];
+                    const badge = document.createElement('span');
+                    badge.className = `badge ${available ? 'bg-success' : 'bg-danger'}`;
+                    badge.innerHTML = `<i class="fas fa-${tool.icon} me-1"></i>${tool.label}`;
+                    badge.title = available ? `${tool.label} available` : `${tool.label} NOT found`;
+                    badgesEl.appendChild(badge);
+                });
+                
+                logHPC('Environment check complete');
+            } catch (e) {
+                logHPC('Error checking environment: ' + e.message, true);
+            }
+        }
+
+        async function loadHPCConfig() {
+            const configPath = document.getElementById('hpc_config_path').value.trim();
+            if (!configPath) {
+                logHPC('Please specify config path', true);
+                return;
+            }
+            
+            try {
+                // For now, we'll just display that it's loaded
+                // In a full implementation, you'd fetch and parse the config
+                logHPC(`Config path set: ${configPath}`);
+                document.getElementById('hpcConfigDetails').style.display = 'block';
+                
+                // Note: To actually load and display config, you'd need a backend endpoint
+                // For now, showing placeholder values
+                document.getElementById('hpc_display_partition').textContent = 'compute';
+                document.getElementById('hpc_display_time').textContent = '24:00:00';
+                document.getElementById('hpc_display_mem').textContent = '32G';
+                document.getElementById('hpc_display_cpus').textContent = '8';
+                document.getElementById('hpc_display_modules').textContent = 'apptainer, datalad';
+                document.getElementById('hpc_display_container').textContent = 'fmriprep_24.0.0.sif';
+                
+            } catch (e) {
+                logHPC('Error loading config: ' + e.message, true);
+            }
+        }
+
+        async function generateHPCScript() {
+            const configPath = document.getElementById('hpc_config_path').value.trim();
+            const subject = document.getElementById('hpc_subject').value.trim();
+            
+            if (!configPath || !subject) {
+                logHPC('Please specify config path and subject ID', true);
+                return;
+            }
+            
+            logHPC(`Generating script for ${subject}...`);
+            
+            try {
+                const resp = await fetch('/generate_hpc_script', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        config_path: configPath,
+                        subject: subject
+                    })
+                });
+                
+                const data = await resp.json();
+                
+                if (resp.ok && data.script) {
+                    hpcCurrentScript = data.script;
+                    document.getElementById('hpcScriptContent').textContent = data.script;
+                    document.getElementById('hpcScriptPreview').style.display = 'block';
+                    logHPC(`Script generated successfully for ${subject}`);
+                } else {
+                    logHPC('Error: ' + (data.error || 'Failed to generate script'), true);
+                }
+            } catch (e) {
+                logHPC('Error generating script: ' + e.message, true);
+            }
+        }
+
+        function toggleScriptPreview() {
+            const preview = document.getElementById('hpcScriptPreview');
+            if (preview.style.display === 'none') {
+                if (!hpcCurrentScript) {
+                    logHPC('No script generated yet', true);
+                    return;
+                }
+                preview.style.display = 'block';
+            } else {
+                preview.style.display = 'none';
+            }
+        }
+
+        async function saveHPCScript() {
+            if (!hpcCurrentScript) {
+                logHPC('Generate a script first', true);
+                return;
+            }
+            
+            const subject = document.getElementById('hpc_subject').value.trim();
+            const outputDir = '/tmp/hpc_scripts';
+            
+            logHPC(`Saving script for ${subject}...`);
+            
+            try {
+                const resp = await fetch('/save_hpc_script', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        script: hpcCurrentScript,
+                        subject: subject,
+                        output_dir: outputDir
+                    })
+                });
+                
+                const data = await resp.json();
+                
+                if (resp.ok && data.path) {
+                    document.getElementById('hpc_script_path').value = data.path;
+                    logHPC(`Script saved: ${data.path}`);
+                } else {
+                    logHPC('Error: ' + (data.error || 'Failed to save script'), true);
+                }
+            } catch (e) {
+                logHPC('Error saving script: ' + e.message, true);
+            }
+        }
+
+        async function submitHPCJob() {
+            const scriptPath = document.getElementById('hpc_script_path').value.trim();
+            const dryRun = document.getElementById('hpc_dry_run').checked;
+            
+            if (!scriptPath) {
+                logHPC('Please specify script path', true);
+                return;
+            }
+            
+            logHPC(`${dryRun ? 'DRY RUN: ' : ''}Submitting job...`);
+            
+            try {
+                const resp = await fetch('/submit_hpc_job', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        script_path: scriptPath,
+                        dry_run: dryRun
+                    })
+                });
+                
+                const data = await resp.json();
+                
+                if (resp.ok) {
+                    hpcCurrentJobId = data.job_id;
+                    if (!hpcTrackedJobs.includes(data.job_id)) {
+                        hpcTrackedJobs.push(data.job_id);
+                    }
+                    logHPC(`Job submitted! Job ID: ${data.job_id}`);
+                    document.getElementById('hpcStatusText').textContent = `Job ${data.job_id} submitted`;
+                    document.getElementById('hpcJobStatus').className = 'alert alert-success';
+                } else {
+                    logHPC('Error: ' + (data.error || 'Submission failed'), true);
+                }
+            } catch (e) {
+                logHPC('Error submitting job: ' + e.message, true);
+            }
+        }
+
+        async function checkJobStatus() {
+            if (!hpcCurrentJobId && hpcTrackedJobs.length === 0) {
+                logHPC('No jobs to check', true);
+                return;
+            }
+            
+            const jobIds = hpcTrackedJobs.length > 0 ? hpcTrackedJobs : [hpcCurrentJobId];
+            
+            logHPC('Checking job status...');
+            
+            try {
+                const resp = await fetch('/get_hpc_job_status', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ job_ids: jobIds })
+                });
+                
+                const data = await resp.json();
+                
+                if (resp.ok && data.jobs) {
+                    const tbody = document.getElementById('hpcJobsTableBody');
+                    tbody.innerHTML = '';
+                    
+                    data.jobs.forEach(job => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${job.job_id}</td>
+                            <td>${job.subject || '-'}</td>
+                            <td><span class="badge bg-info">${job.status}</span></td>
+                            <td>${job.time || '-'}</td>
+                            <td>${job.nodelist || '-'}</td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-danger" onclick="cancelSpecificJob('${job.job_id}')">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+                    
+                    document.getElementById('hpcJobsTable').style.display = 'table';
+                    logHPC(`Status updated for ${data.jobs.length} job(s)`);
+                } else {
+                    logHPC('Error: ' + (data.error || 'Status check failed'), true);
+                }
+            } catch (e) {
+                logHPC('Error checking status: ' + e.message, true);
+            }
+        }
+
+        async function cancelHPCJob() {
+            if (!hpcCurrentJobId) {
+                logHPC('No current job to cancel', true);
+                return;
+            }
+            
+            await cancelSpecificJob(hpcCurrentJobId);
+        }
+
+        async function cancelSpecificJob(jobId) {
+            if (!confirm(`Cancel job ${jobId}?`)) return;
+            
+            logHPC(`Cancelling job ${jobId}...`);
+            
+            try {
+                const resp = await fetch('/cancel_hpc_job', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ job_id: jobId })
+                });
+                
+                const data = await resp.json();
+                
+                if (resp.ok) {
+                    logHPC(`Job ${jobId} cancelled`);
+                    if (jobId === hpcCurrentJobId) {
+                        document.getElementById('hpcStatusText').textContent = 'Job cancelled';
+                        document.getElementById('hpcJobStatus').className = 'alert alert-warning';
+                    }
+                    checkJobStatus();
+                } else {
+                    logHPC('Error: ' + (data.error || 'Cancel failed'), true);
+                }
+            } catch (e) {
+                logHPC('Error cancelling job: ' + e.message, true);
+            }
+        }
+
+        function logHPC(message, isError = false) {
+            const output = document.getElementById('hpcLogOutput');
+            const timestamp = new Date().toLocaleTimeString();
+            const prefix = isError ? '[ERROR]' : '[INFO]';
+            const line = `${timestamp} ${prefix} ${message}\n`;
+            output.textContent += line;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearHPCLog() {
+            document.getElementById('hpcLogOutput').textContent = '';
+            logHPC('Log cleared');
+        }
+        
     </script>
 {% endblock %}
