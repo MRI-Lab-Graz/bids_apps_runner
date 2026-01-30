@@ -1,203 +1,24 @@
-# ✅ HPC/SLURM GUI Implementation - COMPLETED
+# HPC GUI Completion Summary (Current)
 
 ## Summary
 
-The complete HPC/SLURM web interface has been successfully implemented in the BIDS Apps Runner GUI. Users can now manage SLURM jobs, generate DataLad workflow scripts, and monitor job status entirely through the browser.
+The HPC tab now provides an Advanced editor for SLURM settings stored in project.json.
+Job submission and monitoring are not handled in the HPC tab.
 
-## What Was Built
+## Current Features
 
-### 1. New "HPC/SLURM" Navigation Tab
-- Located between "Run BIDS App" and "Check App Output"
-- Features server icon for easy identification
-- Integrated seamlessly with existing tab system
+- Environment check (SLURM/DataLad/Git/Apptainer)
+- Advanced: SLURM Settings editor
+- Save settings to project.json
+- Client-side preview of SLURM script
 
-### 2. Environment Status Panel
-- One-click verification of HPC tools
-- Visual badges showing availability:
-  - ✅ **SLURM** - Job scheduler (sbatch, squeue, scancel)
-  - ✅ **DataLad** - Data management system
-  - ✅ **Git** - Version control
-  - ✅ **Git-Annex** - Git extension for large files
-  - ✅ **Apptainer/Singularity** - Container engine
-  - ✅ **HPC DataLad Runner** - Backend script generator
-- Auto-detects available tools on the system
+## User Flow
 
-### 3. Configuration Management Section
-- **Config File Path**: Browse and select HPC config JSON
-- **Load Config**: Parses JSON and displays SLURM settings
-- **Settings Display**: Shows configuration details:
-  - Partition name
-  - Walltime allocation
-  - Memory requirement
-  - CPU count
-  - Environment modules
-  - Container image path
-- **Subject ID Input**: Specify which subject to process
-
-### 4. Script Generation Workflow
-- **Generate Button**: Creates SLURM script with DataLad workflow
-- **Preview Mode**: View generated script before saving
-- **Save Function**: Writes script to disk with execute permissions
-- **Direct Backend Integration**: Uses `/generate_hpc_script` endpoint
-
-### 5. Job Submission Interface
-- **Script Path Field**: Specify saved script to submit
-- **Dry Run Checkbox**: Test submission without executing
-- **Submit Button**: Send job to SLURM queue
-- **Status Feedback**: Real-time job ID and submission confirmation
-
-### 6. Job Monitoring Dashboard
-- **Status Display**: Current job state and ID
-- **Jobs Table**: Lists all tracked jobs with:
-  - Job ID (SLURM identifier)
-  - Subject ID (which subject being processed)
-  - Current status (RUNNING, COMPLETED, FAILED, etc)
-  - Execution time elapsed
-  - Assigned compute node(s)
-  - Individual cancel buttons
-- **Refresh Button**: Check latest status from SLURM
-- **Cancel Options**: Stop specific or current job
-
-### 7. Real-Time Console Output
-- **Live Logging**: All operations timestamped and logged
-- **Color Coding**: 
-  - Blue info messages
-  - Red error messages
-- **Auto-Scroll**: Follows latest output
-- **Clear Function**: Reset log at any time
-
-## Technical Implementation
-
-### Files Modified
-1. **`templates/index.html`** - Added HPC UI and JavaScript
-   - 120+ lines of HTML for HPC panel
-   - 11 JavaScript functions for HPC operations
-   - Integrated with existing styling and layout
-
-### Backend Integration
-All HPC operations use existing Flask endpoints in `app_gui.py`:
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/check_hpc_environment` | GET | Verify available HPC tools |
-| `/generate_hpc_script` | POST | Generate SLURM script |
-| `/save_hpc_script` | POST | Save script to disk |
-| `/submit_hpc_job` | POST | Submit job to SLURM |
-| `/get_hpc_job_status` | POST | Check job status |
-| `/cancel_hpc_job` | POST | Cancel running job |
-
-## Key Features
-
-✨ **One-Click Operations**
-- Check environment: Single click
-- Generate script: Single click
-- Submit job: Single click
-- Monitor status: Single click
-
-🔄 **Real-Time Monitoring**
-- Live job status from SLURM
-- Automatic or manual refresh
-- Job ID tracking across session
-
-📊 **Information Display**
-- HPC tool availability status
-- Configuration settings from JSON
-- Job details in formatted table
-- Full SLURM output
-
-🛡️ **Error Handling**
-- Input validation
-- Clear error messages
-- Network error recovery
-- Server-side validation
-
-⚙️ **Advanced Features**
-- Script preview before save
-- Dry-run mode for testing
-- Batch job tracking
-- Job cancellation
-- Full operation logging
-
-## User Workflow
-
-### Quick Start (5 minutes)
-
-1. **Start GUI**
-   ```bash
-   python app_gui.py
-   ```
-
-2. **Open HPC Tab**
-   - Click "HPC/SLURM" in navigation
-
-3. **Check Environment**
-   - Click "Check Environment"
-   - Verify tools are available (green badges)
-
-4. **Load Configuration**
-   - Enter config file path
-   - Click "Load"
-   - Review SLURM settings
-
-5. **Generate & Submit**
-   - Enter subject ID
-   - Click "Generate SLURM Script"
-   - Click "Save Script"
-   - Click "Submit to SLURM"
-   - View job ID in status
-
-6. **Monitor Job**
-   - Click "Check Status"
-   - View job in table
-   - Wait for completion
-   - Can cancel if needed
-
-## Example Configuration
-
-### Typical `config_hpc_datalad.json`:
-
-```json
-{
-  "hpc": {
-    "partition": "compute",
-    "time": "24:00:00",
-    "mem": "32G",
-    "cpus": 8,
-    "job_name": "bids_app",
-    "modules": ["apptainer/1.2.0", "datalad/0.19.0"],
-    "environment": {
-      "APPTAINER_CACHEDIR": "/tmp/.apptainer"
-    }
-  },
-  "datalad": {
-    "input_repo": "https://github.com/user/bids-dataset.git",
-    "output_repos": ["https://github.com/user/results.git"],
-    "clone_method": "clone"
-  },
-  "container": {
-    "image": "/containers/fmriprep_24.0.0.sif",
-    "outputs": ["fmriprep", "freesurfer"]
-  }
-}
-```
-
-## Browser Interface Screenshots
-
-### Environment Check
-```
-┌─ HPC/SLURM Job Management ─────────────────────────────┐
-│ [🔄 Check Environment]                                  │
-├─────────────────────────────────────────────────────────┤
-│ HPC Environment Status:                                  │
-│ ✅ SLURM  ✅ DataLad  ✅ Git  ✅ Git-Annex               │
-│ ✅ Apptainer  ✅ HPC Runner                             │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Configuration Section
-```
-┌─ 1. Configuration ─────────────────────────────────────┐
-│ Config File:  [________________] [Browse] [Load]       │
+1. Load a project in Projects.
+2. Open HPC tab.
+3. Expand Advanced.
+4. Edit settings and save.
+5. Run from Run App.
 │ Subject ID:   [sub-001______] [Generate SLURM Script]  │
 ├─────────────────────────────────────────────────────────┤
 │ SLURM Settings (from config):                          │

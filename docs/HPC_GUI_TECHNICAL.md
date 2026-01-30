@@ -1,202 +1,47 @@
-# HPC/SLURM GUI - Technical Implementation Details
+# HPC GUI Technical Notes (Current)
 
-## Files Modified
+## Scope
 
-### 1. `templates/index.html`
-**Changes**: Added HPC/SLURM tab and comprehensive JavaScript functions
+The HPC tab is now an Advanced editor for SLURM settings stored in project.json.
+It does not submit jobs or generate scripts on the backend.
 
-**HTML Elements Added**:
-- New navigation tab button with server icon
-- Complete HPC panel with 4 main sections:
-  1. Configuration panel
-  2. Script generation controls
-  3. Job submission interface
-  4. Job monitoring table
-- Console log output area
-- Environment status display
+## Frontend
 
-**JavaScript Functions Added** (11 functions):
+Key functions:
 
-```javascript
-checkHPCEnvironment()        // Check available HPC tools
-loadHPCConfig()              // Load and display config settings
-generateHPCScript()          // Generate SLURM script
-toggleScriptPreview()        // Show/hide script preview
-saveHPCScript()              // Save script to disk
-submitHPCJob()               // Submit job to SLURM
-checkJobStatus()             // Refresh job status from squeue
-cancelHPCJob()               // Cancel current job
-cancelSpecificJob(jobId)     // Cancel specific job by ID
-logHPC(message, isError)     // Log to HPC console
-clearHPCLog()                // Clear console output
-```
+- checkHPCEnvironment()
+- updateHpcConfigDetails(config)
+- loadHpcSettingsToForm(hpc)
+- getHpcSettingsFromForm()
+- saveHPCSettings()
+- resetHPCSettings()
+- toggleHPCPreview()
+- generateSLURMScriptPreview(hpc, container)
 
-**State Variables**:
-```javascript
-hpcCurrentScript    // Stores generated SLURM script
-hpcCurrentJobId     // Current job ID
-hpcTrackedJobs      // Array of all tracked job IDs
-```
+## Backend
 
-## Backend Integration
+Required endpoints:
 
-All HPC operations call existing Flask endpoints in `app_gui.py`:
+- GET /check_hpc_environment
+- POST /save_project/<project_id>
 
-### Endpoint: `/check_hpc_environment`
-**Method**: GET  
-**Response**:
+## Data Storage
+
+SLURM settings are stored in:
+
 ```json
-{
-  "slurm": true,
-  "datalad": true,
-  "git": true,
-  "git_annex": true,
-  "apptainer": true,
-  "singularity": true,
-  "hpc_datalad_available": true
+"hpc": {
+  "partition": "compute",
+  "time": "24:00:00",
+  "mem": "32G",
+  "cpus": 8,
+  "job_name": "bids-app",
+  "output_pattern": "slurm-%j.out",
+  "error_pattern": "slurm-%j.err",
+  "modules": ["apptainer/1.2.0"],
+  "environment": {"APPTAINER_CACHEDIR": "/tmp/.apptainer"},
+  "monitor_jobs": true
 }
-```
-
-**Frontend Integration**:
-```javascript
-// User clicks "Check Environment" button
-checkHPCEnvironment() 
-  → fetch /check_hpc_environment
-  → Display badges for each tool
-```
-
-### Endpoint: `/generate_hpc_script`
-**Method**: POST  
-**Request**:
-```json
-{
-  "config_path": "/path/to/config.json",
-  "subject": "sub-001"
-}
-```
-
-**Response**:
-```json
-{
-  "script": "#!/bin/bash\n#SBATCH ...",
-  "subject": "sub-001",
-  "config": "/path/to/config.json"
-}
-```
-
-**Frontend Flow**:
-```javascript
-generateHPCScript()
-  → Validate inputs
-  → fetch /generate_hpc_script
-  → Store script in hpcCurrentScript
-  → Display in preview
-```
-
-### Endpoint: `/save_hpc_script`
-**Method**: POST  
-**Request**:
-```json
-{
-  "script": "#!/bin/bash\n...",
-  "subject": "sub-001",
-  "output_dir": "/tmp/hpc_scripts"
-}
-```
-
-**Response**:
-```json
-{
-  "message": "Script saved to /tmp/hpc_scripts/job_sub-001.sh",
-  "path": "/tmp/hpc_scripts/job_sub-001.sh"
-}
-```
-
-### Endpoint: `/submit_hpc_job`
-**Method**: POST  
-**Request**:
-```json
-{
-  "script_path": "/tmp/hpc_scripts/job_sub-001.sh",
-  "dry_run": false
-}
-```
-
-**Response**:
-```json
-{
-  "message": "Job submitted successfully",
-  "job_id": "12345",
-  "command": "sbatch /tmp/hpc_scripts/job_sub-001.sh"
-}
-```
-
-### Endpoint: `/get_hpc_job_status`
-**Method**: POST  
-**Request**:
-```json
-{
-  "job_ids": ["12345", "12346"]
-}
-```
-
-**Response**:
-```json
-{
-  "jobs": [
-    {
-      "job_id": "12345",
-      "subject": "sub-001",
-      "status": "RUNNING",
-      "time": "00:05:30",
-      "nodelist": "node01"
-    }
-  ]
-}
-```
-
-### Endpoint: `/cancel_hpc_job`
-**Method**: POST  
-**Request**:
-```json
-{
-  "job_id": "12345"
-}
-```
-
-**Response**:
-```json
-{
-  "message": "Job 12345 cancelled",
-  "job_id": "12345"
-}
-```
-
-## User Flow Diagrams
-
-### Configuration & Script Generation
-```
-User
-  ↓
-Enter Config Path
-  ↓
-Click Load
-  ↓ (fetch /load_config if available)
-Display HPC Settings
-  ↓
-Enter Subject ID
-  ↓
-Click Generate Script
-  ↓ (POST /generate_hpc_script)
-Backend: Load config, validate, generate SLURM script
-  ↓ (return script)
-Display in Preview
-  ↓
-Click Save Script
-  ↓ (POST /save_hpc_script)
-Backend: Write to disk, set permissions
-  ↓ (return path)
-Update Script Path field
 ```
 
 ### Job Submission

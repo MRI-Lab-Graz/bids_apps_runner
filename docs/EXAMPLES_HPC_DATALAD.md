@@ -1,202 +1,24 @@
-# HPC/DataLad Integration Examples
+# HPC/DataLad Examples (Current)
 
-This document shows practical examples of using the BIDS Apps Runner with HPC and DataLad.
+These examples focus on CLI usage. The GUI no longer generates or submits SLURM scripts.
 
-## Example 1: Submit Single Subject via Web GUI
-
-### Step 1: Check HPC Environment
-
-```javascript
-// JavaScript frontend code
-fetch('/check_hpc_environment')
-  .then(r => r.json())
-  .then(data => {
-    console.log('SLURM available:', data.slurm);
-    console.log('DataLad available:', data.datalad);
-    console.log('Apptainer available:', data.apptainer);
-  });
-```
-
-### Step 2: Generate Script
-
-```javascript
-fetch('/generate_hpc_script', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  body: JSON.stringify({
-    config_path: '/path/to/config_hpc_datalad.json',
-    subject: 'sub-001'
-  })
-})
-.then(r => r.json())
-.then(data => {
-  console.log('Generated script:');
-  console.log(data.script);
-  // Now save and submit...
-});
-```
-
-### Step 3: Save Script
-
-```javascript
-fetch('/save_hpc_script', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  body: JSON.stringify({
-    script: scriptContent,
-    subject: 'sub-001',
-    output_dir: '/tmp/hpc_scripts'
-  })
-})
-.then(r => r.json())
-.then(data => console.log(data.path));
-```
-
-### Step 4: Submit Job
-
-```javascript
-fetch('/submit_hpc_job', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  body: JSON.stringify({
-    script_path: '/tmp/hpc_scripts/job_sub-001.sh',
-    dry_run: false
-  })
-})
-.then(r => r.json())
-.then(data => {
-  console.log('Job ID:', data.job_id);
-  // Monitor job...
-});
-```
-
-### Step 5: Monitor Job Status
-
-```javascript
-// Poll job status
-setInterval(() => {
-  fetch('/get_hpc_job_status', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      job_ids: ['12345']
-    })
-  })
-  .then(r => r.json())
-  .then(data => {
-    data.jobs.forEach(job => {
-      console.log(`Job ${job.job_id}: ${job.status} (${job.time})`);
-    });
-  });
-}, 10000); // Check every 10 seconds
-```
-
----
-
-## Example 2: Batch Submit Multiple Subjects
-
-### Command Line
+## Example 1: Run with DataLad config
 
 ```bash
-# Generate and submit for all subjects
-python hpc_batch_submit.py \
-  -c config_hpc_datalad.json \
-  --script-dir ./scripts \
-  --logs-dir ./logs
-
-# Output:
-# ============================================================
-# BATCH SUBMISSION SUMMARY
-# ============================================================
-# Total subjects: 50
-# Submitted: 50
-# Failed: 0
-#
-# Submitted jobs:
-#   001: 12345
-#   002: 12346
-#   003: 12347
-#   ...
-# ============================================================
+python scripts/prism_runner.py -c configs/config_hpc_datalad.json --hpc
 ```
 
-### Web GUI Batch Endpoint (Proposed Addition)
-
-```javascript
-fetch('/batch_submit_hpc_jobs', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  body: JSON.stringify({
-    config_path: '/path/to/config.json',
-    subjects: ['sub-001', 'sub-002', 'sub-003'],
-    script_dir: '/tmp/hpc_scripts',
-    logs_dir: './logs',
-    max_jobs: 50,
-    dry_run: false
-  })
-})
-.then(r => r.json())
-.then(results => {
-  console.log(`Submitted ${results.submitted} jobs`);
-  console.log(`Failed: ${results.failed}`);
-  results.jobs.forEach(job => {
-    console.log(`${job.subject}: ${job.job_id}`);
-  });
-});
-```
-
----
-
-## Example 3: Auto-discover and Submit
-
-### Discover Subjects from Local BIDS Dataset
+## Example 2: Force local mode
 
 ```bash
-# Generate SLURM config with local BIDS path
-cat > config_hpc_local.json << 'EOF'
-{
-  "common": {
-    "work_dir": "/scratch/user/work",
-    "bids_folder": "/data/bids"
-  },
-  "datalad": {
-    "input_repo": "https://github.com/mylab/bids.git",
-    "output_repos": ["https://github.com/mylab/derivatives.git"]
-  },
-  "hpc": {
-    "partition": "standard",
-    "time": "24:00:00",
-    "mem": "32G",
-    "cpus": 8,
-    "modules": ["datalad/0.19.0"]
-  },
-  "container": {
-    "name": "fmriprep",
-    "image": "/opt/containers/fmriprep.sif",
-    "outputs": ["fmriprep"],
-    "bids_args": {"analysis_level": "participant"}
-  }
-}
-EOF
-
-# Auto-discover subjects and submit
-python hpc_batch_submit.py -c config_hpc_local.json
+python scripts/prism_runner.py -c configs/config_hpc_datalad.json --local
 ```
 
----
-
-## Example 4: Monitor Multiple Jobs
-
-### Check All Running Jobs
+## Example 3: Validate outputs after run
 
 ```bash
-# Get all job IDs
-JOB_IDS=$(squeue -u $USER -h -o "%i" | tr '\n' ',')
-
-# Check status via Python
-python -c "
-import requests
-import json
+python scripts/check_app_output.py /path/to/bids /path/to/derivatives --output-json missing.json
+```
 
 job_ids = '${JOB_IDS}'.rstrip(',').split(',')
 

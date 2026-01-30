@@ -1,31 +1,30 @@
 Overview
 ========
 
-This repository provides three main workflows:
+BIDS Apps Runner is a GUI-first workflow with a CLI fallback for running BIDS Apps locally or on HPC.
+Project state is stored in project.json and is edited from the GUI.
 
-1. **Build Apptainer containers from Docker images**
+Core workflows
+--------------
 
-   Use :file:`build_apptainer.sh` to convert a Docker image (from Docker Hub or a local Dockerfile) into an Apptainer image (``.sif``).
+1. **Build containers** (Apptainer from Docker)
+2. **Configure and run BIDS Apps** using project.json
+3. **Validate outputs** and reprocess missing subjects
+4. **Manage HPC settings** in project.json (Advanced section in GUI)
 
-2. **Run BIDS Apps based on JSON configuration files**
+Key behaviors
+-------------
 
-3. **Visually assemble configs and launch runs from the GUI** (see :doc:`gui`).
-   Use :file:`run_bids_apps.py` to execute a BIDS App container against a BIDS dataset with all paths/options specified in a JSON config.
+- **Project-centric**: each project is a folder containing project.json
+- **Container option locking**: options are auto-discovered the first time; once saved, they stay fixed unless the container path changes
+- **HPC settings are explicit**: SLURM parameters live under the hpc section and are edited by power users
 
-Key ideas
----------
+Repo components (high-level)
+----------------------------
 
-- **Reproducible runs**: everything needed to run a container is encoded in the config JSON.
-- **Consistent mounting**: common mounts map your BIDS folder, derivatives output folder, TemplateFlow, and a per-subject work directory.
-- **Dry-run safety**: use ``--dry-run`` to print the exact ``apptainer`` command and perform a fast validation.
-
-What’s in the repo
-------------------
-
-- :file:`build_apptainer.sh` – build ``.sif`` images from Docker.
-- :file:`run_bids_apps.py` – local runner (multiprocessing) driven by a JSON config.
-- :file:`run_bids_apps_hpc.py` – SLURM/DataLad-oriented runner for HPC.
-- :file:`check_app_output.py` – validate derivatives and generate "missing subject" reports.
-- :file:`app_gui.py` + :file:`templates/index.html` – browser-based interface that wraps configuration, container help, and runner controls.
-- :file:`gui/start_gui.sh` – helper script that exports the project path and launches the GUI.
+- build_apptainer.sh – build .sif images from Docker
+- scripts/prism_runner.py – CLI runner
+- scripts/check_app_output.py – output validation
+- prism_app_runner.py – GUI server
+- templates/index.html – GUI front-end
 

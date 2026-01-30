@@ -1,203 +1,21 @@
-# GUI Integration for HPC/DataLad Mode
+# GUI Integration for HPC (Current)
 
-This document describes how to integrate HPC/DataLad functionality into the existing web GUI.
+The HPC tab provides:
 
-## New GUI Endpoints
+- Environment check (SLURM/DataLad/Git/Apptainer availability)
+- Advanced editor for hpc settings stored in project.json
 
-The following endpoints have been added to `app_gui.py`:
+The GUI does not submit jobs from this tab. Execution is initiated from Run App.
 
-### 1. Check HPC Environment
-```
-GET /check_hpc_environment
-```
-Returns availability of HPC tools.
+## Endpoints Used
 
-**Response:**
-```json
-{
-  "slurm": true,
-  "datalad": true,
-  "git": true,
-  "git_annex": true,
-  "apptainer": true,
-  "singularity": false,
-  "hpc_datalad_available": true
-}
-```
+- GET /check_hpc_environment
+- POST /save_project/<project_id>
 
-### 2. Generate SLURM Script
-```
-POST /generate_hpc_script
-Content-Type: application/json
-{
-  "config_path": "/path/to/config_hpc_datalad.json",
-  "subject": "sub-001"
-}
-```
+## Frontend Notes
 
-**Response:**
-```json
-{
-  "script": "#!/bin/bash\n#SBATCH ...",
-  "subject": "sub-001",
-  "config": "/path/to/config_hpc_datalad.json"
-}
-```
-
-### 3. Save SLURM Script
-```
-POST /save_hpc_script
-Content-Type: application/json
-{
-  "script": "#!/bin/bash\n#SBATCH ...",
-  "subject": "sub-001",
-  "output_dir": "/tmp/hpc_scripts"
-}
-```
-
-**Response:**
-```json
-{
-  "message": "Script saved to /tmp/hpc_scripts/job_sub-001.sh",
-  "path": "/tmp/hpc_scripts/job_sub-001.sh"
-}
-```
-
-### 4. Submit SLURM Job
-```
-POST /submit_hpc_job
-Content-Type: application/json
-{
-  "script_path": "/tmp/hpc_scripts/job_sub-001.sh",
-  "dry_run": false
-}
-```
-
-**Response (Success):**
-```json
-{
-  "message": "Job submitted successfully",
-  "job_id": "12345",
-  "command": "sbatch /tmp/hpc_scripts/job_sub-001.sh"
-}
-```
-
-**Response (Dry Run):**
-```json
-{
-  "message": "DRY RUN - Would submit job",
-  "command": "sbatch /tmp/hpc_scripts/job_sub-001.sh",
-  "job_id": "DRY_RUN_JOB_ID"
-}
-```
-
-### 5. Get Job Status
-```
-POST /get_hpc_job_status
-Content-Type: application/json
-{
-  "job_ids": ["12345", "12346", "12347"]
-}
-```
-
-**Response:**
-```json
-{
-  "jobs": [
-    {
-      "job_id": "12345",
-      "status": "RUNNING",
-      "time": "01:23:45",
-      "end_time": "2026-01-23 14:45:00"
-    },
-    {
-      "job_id": "12346",
-      "status": "PENDING",
-      "time": "00:00:00",
-      "end_time": ""
-    },
-    {
-      "job_id": "12347",
-      "status": "COMPLETED",
-      "time": "00:45:00",
-      "end_time": "2026-01-23 13:45:00"
-    }
-  ]
-}
-```
-
-### 6. Cancel Job
-```
-POST /cancel_hpc_job
-Content-Type: application/json
-{
-  "job_id": "12345"
-}
-```
-
-**Response:**
-```json
-{
-  "message": "Job 12345 cancelled",
-  "job_id": "12345"
-}
-```
-
-## Frontend Components to Add
-
-### 1. HPC Mode Toggle
-Add a tab or mode selector in the GUI:
-- **Local Mode**: Uses `run_bids_apps.py` (existing)
-- **HPC Mode**: Uses SLURM + DataLad (new)
-
-### 2. HPC Configuration Panel
-Fields to add in HPC mode:
-- **DataLad Settings**
-  - Input Repository URL
-  - Output Repository URL(s)
-  - Clone Method (clone/install)
-  
-- **SLURM Settings**
-  - Partition
-  - Time (HH:MM:SS)
-  - Memory (e.g., 32G)
-  - CPUs
-  - Modules (comma-separated list)
-  - Environment Variables
-
-- **Container Settings**
-  - Container Name
-  - Container Image Path
-  - Output Directories
-  - Input Directories
-  - Container Arguments
-
-### 3. Job Submission Workflow
-
-```
-1. Load HPC Config
-   ↓
-2. Select Subjects
-   ↓
-3. Preview SLURM Script (optional)
-   ↓
-4. Generate Script(s)
-   ↓
-5. Submit to SLURM
-   ↓
-6. Monitor Job Status
-```
-
-### 4. Job Monitoring Panel
-Display for submitted jobs:
-- Job ID
-- Status (PENDING, RUNNING, COMPLETED, FAILED)
-- Elapsed Time
-- Expected End Time
-- Cancel Button
-- View Logs Button
-
-### 5. Proposed GUI Code Structure
+- Advanced SLURM settings are hidden by default and intended for power users.
+- hpc settings are persisted in project.json and reused by the CLI.
 
 ```javascript
 // hpc_mode.js - New module for HPC functionality

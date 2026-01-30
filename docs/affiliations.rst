@@ -1,11 +1,9 @@
 Affiliations
 ============
 
-- Karl Koschutnig
-- MRI-Lab Graz
+Maintained by MRI-Lab Graz.
 
 Repository
 ----------
 
-- https://github.com/MRI-Lab-Graz/bids_apps_runner
-
+https://github.com/MRI-Lab-Graz/bids_apps_runner

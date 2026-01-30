@@ -1,12 +1,8 @@
-BIDS Apps Runner
-===============
+BIDS Apps Runner Documentation
+==============================
 
-A small toolbox to:
-
-- build Apptainer images (``.sif``) from Docker images
-- run BIDS Apps from JSON configuration files (local workstation)
-- optionally validate outputs and reprocess missing subjects
-- wire the JSON runner into the new browser-based GUI (see :doc:`gui`)
+The BIDS Apps Runner provides a GUI-first workflow with a CLI fallback for running BIDS Apps locally or on HPC.
+All project state is stored in project.json and can be edited from the GUI.
 
 .. toctree::
    :maxdepth: 2
@@ -14,8 +10,8 @@ A small toolbox to:
 
    overview
    installation
-   usage
    configuration
+   usage
    gui
    affiliations
 

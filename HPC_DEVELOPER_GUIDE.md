@@ -1,403 +1,183 @@
-# BIDS Apps Runner - HPC Developer Quick Start
+# BIDS Apps Runner - Developer & HPC Guide (Current)
 
-## Installation (5 minutes)
+This document reflects the current behavior of the BIDS App Runner GUI + CLI.
 
-### 1. Clone & Setup
+---
+
+## 1) Installation
+
+### Prerequisites
+- Python 3.8+
+- UV package manager
+- Apptainer/Singularity (for container execution)
+- SLURM available on HPC (optional for local runs)
+
+### Clone & Install
 ```bash
-# Clone the repository
 git clone https://github.com/MRI-Lab-Graz/bids_apps_runner.git
 cd bids_apps_runner
 
-# Install dependencies (uses UV - ultra-fast Python package manager)
+# Core (CLI only)
 ./scripts/install.sh
 
-# Activate virtual environment
+# Full (GUI + CLI)
+./scripts/install.sh --full
+
 source .appsrunner/bin/activate
 ```
 
-**Prerequisites:**
-- Python 3.8+
-- UV (install via: `curl -LsSf https://astral.sh/uv/install.sh | sh`)
-- Apptainer/Singularity available on HPC
-- SLURM (if using job submission)
-
-### 2. Verify Installation
+### Verify
 ```bash
-# Check the runner works
 python scripts/prism_runner.py --version
-
-# Quick validation
 python scripts/check_system_deps.py
 ```
 
 ---
 
-## Basic Usage - The PRISM Runner
+## 2) How the System Works (High Level)
 
-The main entry point is `prism_runner.py`. It auto-detects local vs HPC mode based on environment.
+The project uses **project.json** as the single source of truth for a project. The GUI edits this file; the CLI runner consumes it.
 
-### Local/Direct Execution
+Key concepts:
+- **Project** = a folder under projects/ containing project.json
+- **Container options** are dynamically loaded the first time (from container help)
+- **After a project is saved**, container options are locked to avoid unexpected changes
+- **HPC settings** live in the project.json under the `hpc` section (editable in the GUI under Advanced)
+
+---
+
+## 3) GUI Usage (Recommended)
+
+Start the GUI:
 ```bash
-# Run with config file
+python prism_app_runner.py
+```
+
+### Project Workflow
+1. Create or load a project in the **Projects** tab.
+2. Configure container + options in **Run App**.
+3. Save → writes to project.json.
+4. For HPC settings, open **HPC** tab → expand **Advanced: SLURM Settings** → edit + save.
+
+### Container Locking (Important)
+
+Behavior:
+- **First time:** container options auto-load from the container help.
+- **After saving:** options are locked and will **not** auto-reload.
+- **If container path changes:** options unlock and auto-reload again on next load.
+
+This is controlled via:
+```json
+"common": {
+  "container": "/path/to/container.sif",
+  "container_locked": true
+}
+```
+
+---
+
+## 4) CLI Usage
+
+The CLI still works directly with JSON configs:
+```bash
 python scripts/prism_runner.py -c configs/config.json
-
-# Dry run (test config without executing)
-python scripts/prism_runner.py -c configs/config.json --dry-run
-
-# Specific subjects
-python scripts/prism_runner.py -c configs/config.json --subjects sub-001 sub-002 sub-003
-
-# Force reprocessing
-python scripts/prism_runner.py -c configs/config.json --force
-
-# With debug logging
-python scripts/prism_runner.py -c configs/config.json --debug --log-level DEBUG
-
-# Parallel jobs
-python scripts/prism_runner.py -c configs/config.json --jobs 4
 ```
 
-### HPC/SLURM Submission
+Useful flags:
 ```bash
-# Auto-detect SLURM environment and submit jobs
-python scripts/prism_runner.py -c configs/config.json --hpc
-
-# Force HPC mode explicitly
-python scripts/prism_runner.py -c configs/config.json --hpc --slurm-only
-
-# With monitoring
-python scripts/prism_runner.py -c configs/config.json --hpc --monitor
-
-# Dry run (show jobs that would be submitted)
-python scripts/prism_runner.py -c configs/config.json --hpc --dry-run
+--dry-run
+--subjects sub-001 sub-002
+--force
+--debug
+--log-level DEBUG
+--jobs 4
 ```
 
 ---
 
-## Configuration Files
+## 5) SLURM / HPC Settings (project.json)
 
-### Create Your Config
-```bash
-# Copy template
-cp configs/config_example.json configs/my_pipeline.json
+The following keys are used for SLURM execution and are editable in the GUI under **Advanced: SLURM Settings**.
 
-# Or for HPC with DataLad:
-cp configs/config_hpc.json configs/my_hpc_pipeline.json
-```
-
-### Minimal Config (Local/HPC)
+### Required/Supported Fields
 ```json
-{
-  "common": {
-    "bids_folder": "/path/to/bids",
-    "output_folder": "/path/to/derivatives",
-    "container": "/path/to/app.sif",
-    "work_dir": "/tmp/work",
-    "log_dir": "/tmp/logs"
+"hpc": {
+  "partition": "compute",
+  "time": "24:00:00",
+  "mem": "32G",
+  "cpus": 8,
+  "job_name": "fmriprep",
+  "output_pattern": "slurm-%j.out",
+  "error_pattern": "slurm-%j.err",
+  "modules": [
+    "apptainer/1.2.0",
+    "datalad/0.19.0"
+  ],
+  "environment": {
+    "TEMPLATEFLOW_HOME": "/data/shared/templateflow",
+    "APPTAINER_CACHEDIR": "/tmp/.apptainer"
   },
-  "app": {
-    "analysis_level": "participant",
-    "options": [
-      "--fs-license-file", "/path/to/freesurfer/license.txt",
-      "--skip_bids_validation"
-    ]
-  }
+  "monitor_jobs": true
 }
 ```
 
-### HPC Extension (SLURM)
-```json
-{
-  "common": { ... },
-  "app": { ... },
-  "hpc": {
-    "partition": "compute",
-    "time": "24:00:00",
-    "mem": "32G",
-    "cpus": 8,
-    "job_name": "fmriprep",
-    "modules": [
-      "apptainer/1.2.0"
-    ],
-    "environment": {
-      "APPTAINER_CACHEDIR": "/tmp/.apptainer"
-    },
-    "monitor_jobs": true
-  }
-}
-```
-
-### HPC + DataLad Extension
-```json
-{
-  "common": { ... },
-  "app": { ... },
-  "hpc": { ... },
-  "datalad": {
-    "input_repo": "https://github.com/your-lab/bids-dataset.git",
-    "output_repo": "https://github.com/your-lab/derivatives.git",
-    "get_data": true,
-    "branch_per_subject": true,
-    "auto_push": false
-  }
-}
-```
-
-See `configs/` directory for more examples.
+Notes:
+- `modules` is a list; the GUI uses one module per line.
+- `environment` is JSON in the GUI; it must be valid JSON.
+- These settings are **not** automatically changed by the system.
 
 ---
 
-## Output Validation & Reprocessing
+## 6) Output Validation
 
-### Check for Missing Outputs
+Validation is available from the GUI or CLI.
+
+CLI example:
 ```bash
-# Validate pipeline outputs
 python scripts/check_app_output.py /path/to/bids /path/to/derivatives --output-json missing.json
-
-# This generates a JSON file with subjects missing pipeline outputs
-cat missing.json
-```
-
-### Auto-Reprocess Missing Subjects
-```bash
-# Use the missing subjects JSON to automatically reprocess
-python scripts/prism_runner.py -c configs/my_pipeline.json --from-json missing.json
-
-# The --force flag is automatically enabled when using --from-json
-```
-
-### Validation Only (No Processing)
-```bash
-python scripts/prism_runner.py -c configs/my_pipeline.json --validate-only
 ```
 
 ---
 
-## Container Building - Apptainer Images
+## 7) Container Build (Apptainer)
 
-### Build from Docker Hub (Interactive)
+Build from Docker Hub (interactive):
 ```bash
-# This will prompt you to select an app and tag
-./scripts/build_apptainer.sh \
-  -o /path/to/containers/fmriprep.sif \
-  -t /tmp/apptainer_build
-
-# It will:
-# 1. Let you choose from popular apps (fMRIPrep, QSIPrep, FreeSurfer, etc.)
-# 2. Show available Docker tags
-# 3. Download and convert to Apptainer format
+./scripts/build_apptainer.sh -o /path/to/containers/fmriprep.sif -t /tmp/apptainer_build
 ```
 
-### Build from Docker Hub (Non-Interactive)
+Build from Docker Hub (non-interactive):
 ```bash
-# Direct build without prompts
-./scripts/build_apptainer.sh \
-  --docker-repo nipreps/fmriprep \
-  --docker-tag 24.0.0 \
-  -o /data/containers/fmriprep-24.0.0.sif \
-  -t /tmp/apptainer_build
-```
-
-### Build from Custom Dockerfile
-```bash
-./scripts/build_apptainer.sh \
-  -d /path/to/Dockerfile \
-  -o /path/to/custom.sif \
-  -t /tmp/apptainer_build
-```
-
-### Keep Temporary Build Files
-```bash
-# By default, temp files are cleaned up. Keep them with:
-./scripts/build_apptainer.sh \
-  --docker-repo nipreps/qsiprep \
-  --docker-tag 1.4.0 \
-  -o /data/containers/qsiprep.sif \
-  -t /tmp/apptainer_build \
-  --no-temp-del
-```
-
-### Demo Runs - Quick Testing
-```bash
-# Build a lightweight test container
-./scripts/build_apptainer.sh \
-  --docker-repo nipreps/fmriprep \
-  --docker-tag 24.0.0 \
-  -o /tmp/fmriprep_demo.sif \
-  -t /tmp/apptainer_demo
-
-# Create minimal test config
-cat > demo_config.json << 'EOF'
-{
-  "common": {
-    "bids_folder": "/data/bids_test",
-    "output_folder": "/data/derivatives_test",
-    "container": "/tmp/fmriprep_demo.sif",
-    "work_dir": "/tmp/fmriprep_work",
-    "log_dir": "/tmp/fmriprep_logs"
-  },
-  "app": {
-    "analysis_level": "participant",
-    "options": [
-      "--skip_bids_validation",
-      "--anat-only"
-    ]
-  }
-}
-EOF
-
-# Test on one subject
-python scripts/prism_runner.py -c demo_config.json \
-  --subjects sub-001 \
-  --dry-run
-
-# Run for real
-python scripts/prism_runner.py -c demo_config.json --subjects sub-001
+./scripts/build_apptainer.sh --docker-repo nipreps/fmriprep --docker-tag 25.2.3 -o /data/containers/fmriprep_25.2.3.sif -t /tmp/apptainer_build
 ```
 
 ---
 
-## HPC Workflow Examples
+## 8) File Locations
 
-### Single Job Submission
-```bash
-# Generate SLURM script for one subject
-python scripts/hpc_datalad_runner.py \
-  -c configs/my_hpc.json \
-  -s sub-001 \
-  -o job_sub001.sh
-
-# Submit to SLURM
-sbatch job_sub001.sh
-
-# Check status
-squeue -u $USER
-```
-
-### Batch Job Submission
-```bash
-# Submit multiple jobs at once (max 50 concurrent)
-python scripts/hpc_batch_submit.py \
-  -c configs/my_hpc.json \
-  --max-jobs 50 \
-  --dry-run  # Remove this to actually submit
-
-# Monitor jobs
-watch squeue -u $USER
-```
-
-### With DataLad (Managed Input/Output)
-```bash
-# Config with DataLad repos (see config_hpc_datalad.json)
-python scripts/prism_runner.py \
-  -c configs/config_hpc_datalad.json \
-  --hpc
-
-# This will:
-# 1. Clone BIDS repo automatically
-# 2. Get data per subject
-# 3. Run pipeline
-# 4. Push results to output repo
-# 5. Update branches
-```
+- Project storage: projects/<project_id>/project.json
+- Logs: logs/
+- Templates and GUI: templates/, static/
 
 ---
 
-## Command Reference
+## 9) Troubleshooting
 
-### prism_runner.py - Main Runner
+### GUI missing dependencies
+Install full mode:
 ```bash
-python scripts/prism_runner.py -c CONFIG.json [OPTIONS]
-
-Common Options:
-  -c, --config FILE           Config file (required)
-  --dry-run                   Test without executing
-  --subjects SUBJ [SUBJ ...]  Process specific subjects
-  --force                     Force reprocessing
-  --debug                     Enable debug logging
-  --log-level LEVEL           Set logging level
-  --pilot                     Process one random subject (local only)
-
-Local Mode:
-  --local                     Force local execution
-  --jobs N                    Parallel jobs (default: 1)
-  --validate                  Validate outputs after processing
-  --validate-only             Only validate, don't process
-  --reprocess-missing         Auto-reprocess missing outputs
-
-HPC Mode:
-  --hpc                       Force HPC/SLURM mode
-  --slurm-only                Skip DataLad processing
-  --monitor                   Monitor job completion
+./scripts/install.sh --full
 ```
 
-### check_app_output.py - Validation
-```bash
-python scripts/check_app_output.py BIDS_FOLDER DERIVATIVES_FOLDER [OPTIONS]
+### Validation fails to run
+Ensure check_app_output.py is in scripts/ and that GUI runs from repo root.
 
-Options:
-  --output-json FILE          Save missing subjects to JSON
-  --expected-pattern PATTERN  Expected output filename pattern
+### Container options not updating
+Check container lock:
+```json
+"container_locked": true
 ```
-
-### build_apptainer.sh - Container Building
-```bash
-./scripts/build_apptainer.sh [OPTIONS]
-
-Options:
-  -o, --output DIR            Output directory for .sif file (required)
-  -t, --temp DIR              Temp directory for build (required)
-  -d, --dockerfile FILE       Use custom Dockerfile
-  --docker-repo REPO          Docker repo (e.g., nipreps/fmriprep)
-  --docker-tag TAG            Docker image tag
-  --no-temp-del               Keep temp files after build
-```
-
-### hpc_batch_submit.py - Batch Jobs
-```bash
-python scripts/hpc_batch_submit.py -c CONFIG.json [OPTIONS]
-
-Options:
-  -c, --config FILE           Config file (required)
-  --max-jobs N                Max concurrent jobs
-  --dry-run                   Show what would be submitted
-  --subjects SUBJ [SUBJ ...]  Submit specific subjects
-```
-
----
-
-## Common Patterns
-
-### Pattern 1: Full Pipeline Run with Validation
-```bash
-# Run
-python scripts/prism_runner.py -c configs/my_pipeline.json --jobs 4
-
-# Validate
-python scripts/check_app_output.py /path/to/bids /path/to/derivatives
-
-# Reprocess missing
-python scripts/prism_runner.py -c configs/my_pipeline.json --reprocess-missing
-```
-
-### Pattern 2: HPC with Batch Processing
-```bash
-# Batch submit to SLURM
-python scripts/hpc_batch_submit.py -c configs/my_hpc.json --max-jobs 30
-
-# Monitor
-watch -n 5 squeue -u $USER
-
-# Validate when done
-python scripts/check_app_output.py /path/to/bids /path/to/derivatives --output-json missing.json
-
-# Resubmit missing
-python scripts/hpc_batch_submit.py -c configs/my_hpc.json --from-json missing.json
-```
-
-### Pattern 3: Demo Run (Testing)
-```bash
-# Single subject, dry run
+Set to false (or change container path) to re-fetch options.
 python scripts/prism_runner.py -c configs/my_pipeline.json \
   --subjects sub-001 \
   --dry-run

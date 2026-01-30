@@ -5,23 +5,34 @@ System prerequisites
 -------------------
 
 - Python 3.8+
-- Apptainer (or Singularity) available as the ``apptainer`` command
+- Apptainer (or Singularity) available as the apptainer command
+- SLURM available on HPC (optional for local runs)
 
-For building containers with :file:`build_apptainer.sh`:
+For container building:
 
-- ``curl`` and ``jq`` (Docker Hub tag discovery)
-- ``docker`` (only if you build from a Dockerfile via ``-d``)
+- curl and jq (Docker Hub tag discovery)
+- docker (only if building from a Dockerfile)
 
-Python environment
-------------------
+Install via helper script (recommended)
+--------------------------------------
 
 From the repo root:
 
 .. code-block:: bash
 
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
+   ./scripts/install.sh
+   source .appsrunner/bin/activate
 
-Minimal installs (core dependencies only) can use :file:`requirements-core.txt`.
+Full GUI + CLI install:
+
+.. code-block:: bash
+
+   ./scripts/install.sh --full
+   source .appsrunner/bin/activate
+
+Notes
+-----
+
+- Core install is CLI-only; GUI dependencies require --full.
+- If UV is not installed, the installer will prompt for it.
 

@@ -1,203 +1,49 @@
-# HPC/DataLad Integration Guide
+# HPC/DataLad Integration Guide (Current)
 
-This guide explains how to use the BIDS Apps Runner with HPC systems using DataLad for data streaming.
+This guide describes DataLad usage with the CLI. The GUI does not submit jobs for DataLad.
 
 ## Overview
 
-The HPC/DataLad integration enables:
-- **Data Streaming**: Pull only required subject data via DataLad
-- **SLURM Scheduling**: Submit jobs to HPC cluster via SLURM
-- **Results Tracking**: Automatic commit and push of results using Git/DataLad
-- **Job Isolation**: Per-job git branches to prevent conflicts
-- **Resource Management**: Full SLURM resource control (partition, time, memory, CPUs)
+Use DataLad when input/output datasets are stored in Git/Annex and you want per-subject streaming on HPC.
+The SLURM settings live in project.json under hpc and can be edited in the GUI (Advanced), but execution remains CLI-driven.
 
-## Architecture
+## DataLad Configuration (project.json or config file)
 
-The workflow follows the DataLad pattern from the DataLad homepage:
+```json
+"datalad": {
+  "input_repo": "https://github.com/your-lab/bids-dataset.git",
+  "output_repo": "https://github.com/your-lab/derivatives.git",
+  "clone_method": "clone",
+  "get_data": true,
+  "branch_per_subject": true,
+  "output_branch": "results",
+  "merge_strategy": "merge",
+  "auto_push": false
+}
+```
+
+## SLURM Configuration
+
+```json
+"hpc": {
+  "partition": "compute",
+  "time": "24:00:00",
+  "mem": "32G",
+  "cpus": 8,
+  "modules": ["datalad/0.19.0", "apptainer/1.2.0"],
+  "environment": {
+    "APPTAINER_CACHEDIR": "/tmp/.apptainer"
+  }
+}
+```
+
+## CLI Execution
 
 ```bash
-# 1. Clone central DataLad dataset
-datalad clone <input_repo> ds
-
-# 2. Get directory structure (no data yet)
-datalad get -n -r -R1 .
-
-# 3. Create job-specific branches
-git checkout -b "job-$JOBID"
-
-# 4. Run container with DataLad tracking
-datalad containers-run \
-   -m "Processing message" \
-   --explicit \
-   -o output_dir1 -o output_dir2 \
-   -i input_dir \
-   -n code/pipelines/app_name \
-   <container args>
-
-# 5. Push results back with lock file
-flock --verbose $DSLOCKFILE datalad push -d <repo> --to origin
+python scripts/prism_runner.py -c configs/config_hpc_datalad.json --hpc
 ```
 
-## Configuration
-
-### DataLad Section
-
-```json
-{
-  "datalad": {
-    "input_repo": "https://github.com/your-lab/bids-dataset.git",
-    "output_repos": [
-      "https://github.com/your-lab/fmriprep-outputs.git",
-      "https://github.com/your-lab/freesurfer-outputs.git"
-    ],
-    "clone_method": "clone",
-    "lock_file": "/tmp/datalad.lock"
-  }
-}
-```
-
-**Fields:**
-- `input_repo`: URL to the input BIDS DataLad repository
-- `output_repos`: List of output repository URLs (one per processing branch)
-- `clone_method`: Either "clone" or "install"
-- `lock_file`: Path to lock file for preventing simultaneous access
-
-### HPC Section
-
-```json
-{
-  "hpc": {
-    "partition": "compute",
-    "time": "24:00:00",
-    "mem": "32G",
-    "cpus": 8,
-    "job_name": "bids_app",
-    "output_log": "logs/slurm-%j.out",
-    "error_log": "logs/slurm-%j.err",
-    "modules": [
-      "datalad",
-      "git",
-      "git-annex",
-      "apptainer/1.2.0"
-    ],
-    "environment": {
-      "APPTAINER_CACHEDIR": "/tmp/.apptainer",
-      "DATALAD_RESULT_RENDERER": "disabled"
-    }
-  }
-}
-```
-
-**Fields:**
-- `partition`: SLURM partition name
-- `time`: Walltime in HH:MM:SS format
-- `mem`: Memory allocation (e.g., 32G, 500M)
-- `cpus`: Number of CPUs per task
-- `job_name`: Base name for SLURM jobs
-- `output_log`: Pattern for stdout logs
-- `error_log`: Pattern for stderr logs
-- `modules`: List of modules to load via `module load`
-- `environment`: Environment variables to set
-
-### Container Section
-
-```json
-{
-  "container": {
-    "name": "fmriprep",
-    "image": "/containers/fmriprep_24.0.0.sif",
-    "outputs": [
-      "fmriprep",
-      "freesurfer"
-    ],
-    "inputs": [
-      "sourcedata"
-    ],
-    "bids_args": {
-      "bids_folder": "sourcedata",
-      "output_folder": ".",
-      "analysis_level": "participant",
-      "skip-bids-validation": true,
-      "output-spaces": "MNI152NLin6Asym",
-      "n_cpus": 8,
-      "mem-mb": 30000,
-      "use-aroma": true,
-      "cifti-output": true
-    }
-  }
-}
-```
-
-**Fields:**
-- `name`: Container name (used in `datalad containers-run`)
-- `image`: Path to container image file
-- `outputs`: Directories to track as outputs (passed to `-o`)
-- `inputs`: Directories to track as inputs (passed to `-i`)
-- `bids_args`: Container arguments (passed to the app inside container)
-
-## Usage via Web GUI
-
-### 1. Check HPC Environment
-
-```
-GET /check_hpc_environment
-```
-
-Returns availability of SLURM, DataLad, Git, Apptainer, etc.
-
-### 2. Generate SLURM Script
-
-```
-POST /generate_hpc_script
-{
-  "config_path": "/path/to/config.json",
-  "subject": "sub-001"
-}
-```
-
-Returns the full generated SLURM script.
-
-### 3. Save Script
-
-```
-POST /save_hpc_script
-{
-  "script": "<full script content>",
-  "subject": "sub-001",
-  "output_dir": "/tmp/hpc_scripts"
-}
-```
-
-Saves script to disk with execute permissions.
-
-### 4. Submit Job
-
-```
-POST /submit_hpc_job
-{
-  "script_path": "/tmp/hpc_scripts/job_sub-001.sh",
-  "dry_run": false
-}
-```
-
-Submits job to SLURM via `sbatch`.
-
-### 5. Check Job Status
-
-```
-POST /get_hpc_job_status
-{
-  "job_ids": ["12345", "12346"]
-}
-```
-
-Returns job status, elapsed time, end time, etc.
-
-### 6. Cancel Job
-
-```
-POST /cancel_hpc_job
-{
+The runner auto-detects SLURM and uses the hpc/datalad sections to configure execution.
   "job_id": "12345"
 }
 ```
