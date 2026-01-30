@@ -13,4 +13,4 @@ echo "  BIDS App Runner GUI - Starting..."
 echo "--------------------------------------------------------"
 
 # Run the app
-python3 "$PROJECT_DIR/app_gui.py"
+python3 "$PROJECT_DIR/prism_app_runner.py"

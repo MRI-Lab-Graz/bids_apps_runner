@@ -47,23 +47,23 @@ This tool provides a seamless workflow for:
 
 ```bash
 # Run a BIDS App with a configuration file
-python run_bids_apps.py -x configs/config.json
+python scripts/run_bids_apps.py -x configs/config.json
 
 # Process specific subjects
-python run_bids_apps.py -x configs/config.json --subjects sub-001 sub-002
+python scripts/run_bids_apps.py -x configs/config.json --subjects sub-001 sub-002
 
 # Dry run to test configuration
-python run_bids_apps.py -x configs/config.json --dry-run
+python scripts/run_bids_apps.py -x configs/config.json --dry-run
 ```
 
 ### 2. Automated Validation and Reprocessing Workflow
 
 ```bash
 # Step 1: Validate pipeline outputs and generate missing subjects report
-python check_app_output.py /data/bids /data/derivatives --output-json missing_subjects.json
+python scripts/check_app_output.py /data/bids /data/derivatives --output-json missing_subjects.json
 
 # Step 2: Automatically reprocess missing subjects (--force is auto-enabled)
-python run_bids_apps.py -x configs/config.json --from-json missing_subjects.json
+python scripts/run_bids_apps.py -x configs/config.json --from-json missing_subjects.json
 ```
 
 ## Configuration
@@ -177,11 +177,11 @@ Full support for multi-session BIDS datasets with automatic session detection an
 
 ```bash
 # 1. Check all pipelines and save detailed report
-python check_app_output.py /data/bids /data/derivatives \
+python scripts/check_app_output.py /data/bids /data/derivatives \
     --output-json validation_report.json --verbose
 
 # 2. Reprocess only fMRIPrep missing subjects
-python run_bids_apps.py -x configs/fmriprep_config.json \
+python scripts/run_bids_apps.py -x configs/fmriprep_config.json \
     --from-json validation_report.json --pipeline fmriprep
 
 # 3. Monitor progress
@@ -192,15 +192,15 @@ tail -f logs/bids_app_runner_*.log
 
 ```bash
 # Test configuration with one subject
-python run_bids_apps.py -x configs/config.json --pilot --dry-run
+python scripts/run_bids_apps.py -x configs/config.json --pilot --dry-run
 
 # Run actual pilot test
-python run_bids_apps.py -x configs/config.json --pilot --debug
+python scripts/run_bids_apps.py -x configs/config.json --pilot --debug
 ```
 
 ## Browser-based GUI
 
-The project ships with a lightweight Flask/Waitress application (`app_gui.py` plus `templates/index.html`) so you can build configurations and drive `run_bids_apps.py` from a browser. Launch the GUI with `bash gui/start_gui.sh` (or `python app_gui.py`) and point your browser at `http://localhost:8080` to:
+The project ships with a lightweight Flask/Waitress application (`prism_app_runner.py` plus `templates/index.html`) so you can build configurations and drive `scripts/run_bids_apps.py` from a browser. Launch the GUI with `bash gui/start_gui.sh` (or `python prism_app_runner.py`) and point your browser at `http://localhost:8080` to:
 
 - scan a directory for Apptainer/Singularity images, check for newer releases, and load container-specific help automatically
 - assemble BIDS, derivatives, and temp folders along with runner overrides (subjects, pilot, dry-run, validation, etc.)

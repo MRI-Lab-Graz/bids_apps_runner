@@ -31,6 +31,10 @@ from flask import Flask, render_template, request, jsonify
 from waitress import serve
 from pathlib import Path
 from version import __version__
+
+# Add scripts directory to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
+
 from check_app_output import BIDSOutputValidator
 
 # Try to import HPC DataLad runner
@@ -437,7 +441,7 @@ def get_log():
         project_id = request.args.get('project_id')
         
         # Check if there are any active run_bids_apps.py processes
-        result = subprocess.run(["pgrep", "-f", "run_bids_apps.py"], capture_output=True, text=True)
+        result = subprocess.run(["pgrep", "-f", "scripts/run_bids_apps.py"], capture_output=True, text=True)
         has_active_job = bool(result.stdout.strip())
         
         # If project_id is specified, look for logs in that project
@@ -1249,9 +1253,9 @@ def run_app():
         
         # 2. Launch run_bids_apps.py in background
         if getattr(sys, 'frozen', False):
-            script_path = BUNDLE_DIR / "run_bids_apps.py"
+            script_path = BUNDLE_DIR / "scripts" / "run_bids_apps.py"
         else:
-            script_path = BASE_DIR / "run_bids_apps.py"
+            script_path = BASE_DIR / "scripts" / "run_bids_apps.py"
         
         # Build command
         cmd = [
@@ -1287,7 +1291,7 @@ def run_app():
 def kill_job():
     # Attempt to kill run_bids_apps.py and associated apptainer processes
     try:
-        cmd_find = ["pgrep", "-f", "run_bids_apps.py"]
+        cmd_find = ["pgrep", "-f", "scripts/run_bids_apps.py"]
         result = subprocess.run(cmd_find, capture_output=True, text=True)
         pids = result.stdout.strip().split('\n')
 
