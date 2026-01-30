@@ -3,7 +3,7 @@
   "name": "142_crea",
   "description": "",
   "created": "2026-01-30T10:14:15.468880",
-  "last_modified": "2026-01-30T12:16:07.556911",
+  "last_modified": "2026-01-30T17:26:37.776565",
   "last_log": "run_20260130_121607.log",
   "config": {
     "common": {
@@ -13,6 +13,7 @@
       "templateflow_dir": "/data/local/templateflow",
       "container_engine": "apptainer",
       "container": "/data/local/container/fmriprep/fmriprep_25.2.3.sif",
+      "container_locked": true,
       "jobs": 1
     },
     "app": {

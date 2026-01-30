@@ -760,6 +760,8 @@
         let lastSavedPath = '';
         let lastProjectId = '';
         let initialLoad = true;
+        let currentContainerPath = '';
+        let containerLocked = false;
         let isLoadingDirectory = false; // Prevent concurrent directory requests
         let browserSelectFiles = false;
         let browserFileExts = [];
@@ -941,8 +943,13 @@
 
             toggleEngineFields();
 
-            // Automatically load app options for the selected container
-            if (common.container) {
+            // Store container path and locked state
+            currentContainerPath = common.container || '';
+            containerLocked = common.container_locked || false;
+
+            // Automatically load app options ONLY if not locked
+            const shouldLoadOptions = common.container && (!containerLocked);
+            if (shouldLoadOptions) {
                 try {
                     await fetchAppOptions();
                 } catch (e) {
@@ -1586,6 +1593,15 @@
                 containerPath = document.getElementById('container_folder').value + '/' + document.getElementById('container_select').value;
             }
 
+            // Container locking logic:
+            // - If container path changed: unlock to allow options reload on next load
+            // - If same container: lock to preserve user customizations
+            let containerLocked = true;  // Default: lock to preserve
+            if (containerPath !== currentContainerPath) {
+                containerLocked = false;  // New/changed container
+                currentContainerPath = containerPath;
+            }
+
             const config = {
                 common: {
                     bids_folder: document.getElementById('bids_folder').value,
@@ -1594,6 +1610,7 @@
                     templateflow_dir: document.getElementById('templateflow_dir').value,
                     container_engine: engine,
                     container: containerPath,
+                    container_locked: containerLocked,
                     jobs: parseInt(document.getElementById('jobs').value) || 1
                 },
                 app: { 
