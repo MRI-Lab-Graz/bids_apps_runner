@@ -75,7 +75,9 @@ def rename_event_files(
             run_match = run_re.search(name)
             run = int(run_match.group(1)) if run_match else 1
 
-        effective_session = session_override if session_override is not None else session
+        effective_session = (
+            session_override if session_override is not None else session
+        )
         target_name = build_target_name(
             subject_prefix, subject, effective_session, bids_task, run
         )

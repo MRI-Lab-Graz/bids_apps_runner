@@ -6,6 +6,7 @@ gui.log
 nohup*.log
 nohup.out
 validation_reports/
+*_report_*.txt
 
 # Configuration and datasets
 config.json
@@ -14,6 +15,7 @@ cache/
 data/
 missing_qsiprep.json
 *.sif
+check_repo/
 
 # Virtual environments
 .appsrunner/
@@ -23,3 +25,7 @@ missing_qsiprep.json
 
 # Documentation builds
 docs/_build/
+.env
+node_modules
+.venv
+venv

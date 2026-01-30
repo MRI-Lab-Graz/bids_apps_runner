@@ -8,7 +8,7 @@ try:
     print(f"Status: {response.status_code}")
     if response.status_code == 200:
         data = response.json()
-        tags = [t['name'] for t in data.get('results', [])]
+        tags = [t["name"] for t in data.get("results", [])]
         print(f"Tags found: {len(tags)}")
         print(f"First 5 tags: {tags[:5]}")
     else:

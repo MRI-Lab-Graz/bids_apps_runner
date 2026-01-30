@@ -14,7 +14,9 @@ EVENT_RE = re.compile(
 )
 
 
-def find_func_match(func_dir: Path, subject: str, session: str, task: str, run: str | None) -> bool:
+def find_func_match(
+    func_dir: Path, subject: str, session: str, task: str, run: str | None
+) -> bool:
     pattern = f"sub-{subject}_ses-{session}_task-{task}"
     if run is not None:
         pattern += f"_run-{run}"
@@ -85,7 +87,9 @@ def main() -> None:
 
         func_dir = session_dir / "func"
         if not func_dir.is_dir():
-            issues.append(f"{event_file.name}: missing func/ directory in {session_dir}")
+            issues.append(
+                f"{event_file.name}: missing func/ directory in {session_dir}"
+            )
             continue
 
         if not find_func_match(func_dir, subject, session, task, run):
