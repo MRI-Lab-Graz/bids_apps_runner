@@ -1,0 +1,28 @@
+{
+  "id": "142_crea",
+  "name": "142_crea",
+  "description": "",
+  "created": "2026-01-30T10:14:15.468880",
+  "last_modified": "2026-01-30T12:16:07.556911",
+  "last_log": "run_20260130_121607.log",
+  "config": {
+    "common": {
+      "bids_folder": "/data/mrivault/_0_STAGING/142/rawdata",
+      "output_folder": "/data/local/142/derivatives",
+      "tmp_folder": "/data/local/tmp_big",
+      "templateflow_dir": "/data/local/templateflow",
+      "container_engine": "apptainer",
+      "container": "/data/local/container/fmriprep/fmriprep_25.2.3.sif",
+      "jobs": 1
+    },
+    "app": {
+      "analysis_level": "participant",
+      "options": [
+        "--subject-anatomical-reference",
+        "unbiased",
+        "--fs-no-reconall"
+      ],
+      "mounts": []
+    }
+  }
+}

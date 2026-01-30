@@ -54,6 +54,7 @@
         .dir-item { padding: 10px 15px; cursor: pointer; border-radius: 6px; display: flex; align-items: center; margin-bottom: 4px; transition: background 0.2s; font-family: monospace; }
         .dir-item:hover { background: #eef7ff; color: var(--accent-color); }
         .dir-item i { margin-right: 12px; font-size: 1.1rem; }
+        .dir-item.selected { background: #dfefff; color: #1c5db6; border: 1px solid #b6d4ff; }
         
         .report-item { transition: all 0.2s; border: 1px solid #eee; }
         .report-item:hover { transform: translateX(5px); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
@@ -73,11 +74,11 @@
 {% block navbar_content %}
     <div class="navbar-nav me-auto">
         <div class="btn-group ms-lg-3" role="tablist">
-            <button class="btn btn-primary tab-button active" id="tabProjectsBtn" type="button" onclick="switchTab('projectsTab', this)">Projects</button>
-            <button class="btn btn-outline-primary tab-button" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)">Run BIDS App</button>
-            <button class="btn btn-outline-primary tab-button" id="tabHPCBtn" type="button" onclick="switchTab('hpcTab', this)"><i class="fas fa-server me-1"></i>HPC/SLURM</button>
-            <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)">Check App Output</button>
-            <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)">Build Apptainer</button>
+            <button class="btn btn-primary tab-button active" id="tabProjectsBtn" type="button" onclick="switchTab('projectsTab', this)"><i class="fas fa-project-diagram me-1"></i>Projects</button>
+            <button class="btn btn-outline-primary tab-button" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)"><i class="fas fa-play-circle me-1"></i>Run App</button>
+            <button class="btn btn-outline-primary tab-button" id="tabHPCBtn" type="button" onclick="switchTab('hpcTab', this)"><i class="fas fa-server me-1"></i>HPC</button>
+            <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)"><i class="fas fa-check-circle me-1"></i>Check Output</button>
+            <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)"><i class="fas fa-hammer me-1"></i>Build</button>
         </div>
     </div>
 {% endblock %}
@@ -103,6 +104,15 @@
                             <h5>Recent Projects</h5>
                             <div id="recentProjectsList" class="list-group">
                                 <div class="list-group-item text-muted">Loading projects...</div>
+                            </div>
+                            <div class="mt-3">
+                                <label class="form-label">Load Project from File</label>
+                                <div class="input-group">
+                                    <input type="text" id="loadProjectPath" class="form-control" placeholder="/path/to/project.json">
+                                    <button type="button" class="btn btn-outline-secondary" onclick="openFileBrowser('loadProjectPath', ['.json'], 'project.json')">...</button>
+                                    <button type="button" class="btn btn-outline-primary" onclick="loadProjectFromPath()">Load</button>
+                                </div>
+                                <div class="text-muted small mt-1">Pick a project.json file to load a project not shown in the recent list.</div>
                             </div>
                         </div>
                         <div class="col-md-6">
@@ -742,7 +752,7 @@
                     <button class="btn btn-outline-secondary" onclick="goUp()"><i class="fas fa-level-up-alt me-2"></i>Parent Folder</button>
                     <button class="btn btn-outline-primary" onclick="createNewFolder()"><i class="fas fa-folder-plus me-2"></i>New Folder</button>
                 </div>
-                <button class="btn btn-success" onclick="selectCurrentDir()"><i class="fas fa-check-circle me-2"></i>Select Current</button>
+                <button id="selectCurrentBtn" class="btn btn-success" onclick="selectCurrentDir()"><i class="fas fa-check-circle me-2"></i>Select Current</button>
             </div>
         </div>
     </div>
@@ -757,6 +767,11 @@
         let lastSavedPath = '';
         let lastProjectId = '';
         let initialLoad = true;
+        let isLoadingDirectory = false; // Prevent concurrent directory requests
+        let browserSelectFiles = false;
+        let browserFileExts = [];
+        let browserFileName = '';
+        let browserSelectedFile = '';
 
         // ===== PROJECT MANAGEMENT =====
         
@@ -794,6 +809,32 @@
             } catch (e) {
                 console.error("Failed to load projects:", e);
                 document.getElementById('recentProjectsList').innerHTML = '<div class="alert alert-danger">Failed to load projects</div>';
+            }
+        }
+
+        async function loadProjectFromPath() {
+            const projectPath = document.getElementById('loadProjectPath').value.trim();
+            if (!projectPath) {
+                showStatus("Please select a project.json file", true);
+                return;
+            }
+
+            try {
+                const resp = await fetch('/load_project_file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: projectPath })
+                });
+                const project = await resp.json();
+
+                if (!resp.ok) {
+                    showStatus(project.error || 'Failed to load project', true);
+                    return;
+                }
+
+                await applyProjectData(project, project.id || null);
+            } catch (e) {
+                showStatus("Failed to load project: " + e.message, true);
             }
         }
         
@@ -837,32 +878,65 @@
                     showStatus("Project not found", true);
                     return;
                 }
-                
-                // Load project config into the form
-                const cfg = project.config;
-                const common = cfg.common || {};
-                const app = cfg.app || {};
-                
-                // Fill form fields
-                document.getElementById('bids_folder').value = common.bids_folder || '';
-                document.getElementById('output_folder').value = common.output_folder || '';
-                document.getElementById('tmp_folder').value = common.tmp_folder || '';
-                document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
-                document.getElementById('jobs').value = common.jobs || 1;
-                document.getElementById('analysis_level').value = app.analysis_level || 'participant';
-                document.getElementById('container_engine').value = common.container_engine || 'apptainer';
-                
-                toggleEngineFields();
-                
-                // Store project info for later use
-                lastProjectId = projectId;
-                lastSavedPath = null;
-                
-                showStatus(`Loaded project: ${project.name}`);
-                switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
+
+                await applyProjectData(project, projectId);
             } catch (e) {
                 showStatus("Failed to load project: " + e.message, true);
             }
+        }
+
+        async function applyProjectData(project, projectIdOverride) {
+            // Load project config into the form
+            const cfg = project.config || {};
+            const common = cfg.common || {};
+            const app = cfg.app || {};
+
+            // Fill form fields
+            document.getElementById('bids_folder').value = common.bids_folder || '';
+            document.getElementById('output_folder').value = common.output_folder || '';
+            document.getElementById('tmp_folder').value = common.tmp_folder || '';
+            document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
+            document.getElementById('jobs').value = common.jobs || 1;
+            document.getElementById('analysis_level').value = app.analysis_level || 'participant';
+            document.getElementById('container_engine').value = common.container_engine || 'apptainer';
+
+            // Load container path based on engine
+            const engine = common.container_engine || 'apptainer';
+            if (engine === 'docker') {
+                // Parse docker image (e.g., "nipreps/fmriprep:23.1.0")
+                const containerImage = common.container || '';
+                const parts = containerImage.split(':');
+                document.getElementById('container_docker_repo').value = parts[0] || '';
+                document.getElementById('container_docker_tag').value = parts[1] || 'latest';
+            } else {
+                // Parse apptainer path (e.g., "/path/to/container.sif")
+                const containerPath = common.container || '';
+                if (containerPath) {
+                    const folder = containerPath.substring(0, containerPath.lastIndexOf('/'));
+                    const filename = containerPath.substring(containerPath.lastIndexOf('/') + 1);
+                    document.getElementById('container_folder').value = folder;
+
+                    // Load container list first, then select the file
+                    if (folder) {
+                        await scanContainers(); // Wait for containers to load
+                        document.getElementById('container_select').value = filename; // Now select the file
+                    }
+                }
+            }
+
+            toggleEngineFields();
+
+            // Automatically load app options for the selected container
+            if (common.container) {
+                await fetchAppOptions();
+            }
+
+            // Store project info for later use
+            lastProjectId = projectIdOverride || project.id || '';
+            lastSavedPath = null;
+
+            showStatus(`Loaded project: ${project.name || project.id || 'project'}`);
+            switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
         }
         
         async function deleteProject(projectId) {
@@ -960,6 +1034,10 @@
         async function openBrowser(id) {
             console.log("Opening browser for target:", id);
             currentTargetId = id;
+            browserSelectFiles = false;
+            browserFileExts = [];
+            browserFileName = '';
+            browserSelectedFile = '';
             const currentVal = document.getElementById(id).value;
             try {
                 await loadDirectory(currentVal || browserCurrentPath);
@@ -971,13 +1049,45 @@
             }
         }
 
+        async function openFileBrowser(id, extensions = [], fileName = '') {
+            console.log("Opening file browser for target:", id);
+            currentTargetId = id;
+            browserSelectFiles = true;
+            browserFileExts = extensions || [];
+            browserFileName = fileName || '';
+            browserSelectedFile = '';
+            const currentVal = document.getElementById(id).value;
+            try {
+                await loadDirectory(currentVal || browserCurrentPath);
+                const selectBtn = document.getElementById('selectCurrentBtn');
+                if (selectBtn) selectBtn.innerHTML = '<i class="fas fa-check-circle me-2"></i>Select File';
+                document.getElementById('browseModal').style.display = 'block';
+                document.body.style.overflow = 'hidden';
+            } catch (err) {
+                console.error("Failed to open file browser:", err);
+                showStatus("Error: Could not list directory. Check console.", true);
+            }
+        }
+
         async function loadDirectory(path) {
+            // Prevent concurrent requests
+            if (isLoadingDirectory) {
+                console.log("Directory load already in progress, skipping...");
+                return;
+            }
+            
+            isLoadingDirectory = true;
             console.log("Fetching directory listing for:", path);
             try {
                 const resp = await fetch('/list_dirs', { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json' }, 
-                    body: JSON.stringify({ path: path }) 
+                    body: JSON.stringify({
+                        path: path,
+                        include_files: browserSelectFiles,
+                        extensions: browserFileExts,
+                        file_name: browserFileName
+                    }) 
                 });
                 
                 if (!resp.ok) throw new Error(`HTTP error! status: ${resp.status}`);
@@ -994,9 +1104,19 @@
                     data.items.forEach(item => {
                         const d = document.createElement('div');
                         d.className = 'dir-item';
-                        const icon = item.name === '..' ? 'fa-arrow-left' : 'fa-folder';
-                        d.innerHTML = `<i class="fas ${icon} text-warning"></i> ${item.name}`;
-                        d.onclick = () => loadDirectory(item.path);
+                        const icon = item.name === '..' ? 'fa-arrow-left' : (item.is_dir ? 'fa-folder' : 'fa-file-alt');
+                        d.innerHTML = `<i class="fas ${icon} ${item.is_dir ? 'text-warning' : 'text-secondary'}"></i> ${item.name}`;
+                        d.onclick = (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (item.is_dir) {
+                                loadDirectory(item.path);
+                            } else {
+                                browserSelectedFile = item.path;
+                                document.querySelectorAll('.dir-item').forEach(el => el.classList.remove('selected'));
+                                d.classList.add('selected');
+                            }
+                        };
                         list.appendChild(d);
                     });
                 } else {
@@ -1012,13 +1132,16 @@
                     <strong>Error:</strong> Failed to load folder contents.<br>
                     <small>${e.message}</small>
                 </div>`;
-                throw e;
+            } finally {
+                isLoadingDirectory = false;
             }
         }
 
         function closeBrowser() { 
             document.getElementById('browseModal').style.display = 'none'; 
             document.body.style.overflow = 'auto';
+            const selectBtn = document.getElementById('selectCurrentBtn');
+            if (selectBtn) selectBtn.innerHTML = '<i class="fas fa-check-circle me-2"></i>Select Current';
         }
 
         function goUp() {
@@ -1033,7 +1156,15 @@
 
         function selectCurrentDir() {
             if (currentTargetId) {
-                document.getElementById(currentTargetId).value = browserCurrentPath;
+                if (browserSelectFiles) {
+                    if (!browserSelectedFile) {
+                        showStatus("Please select a file", true);
+                        return;
+                    }
+                    document.getElementById(currentTargetId).value = browserSelectedFile;
+                } else {
+                    document.getElementById(currentTargetId).value = browserCurrentPath;
+                }
             }
             closeBrowser();
         }
@@ -2481,7 +2612,8 @@
                     { key: 'docker', icon: 'fab fa-docker', label: 'Docker' },
                     { key: 'apptainer', icon: 'fas fa-box', label: 'Apptainer' },
                     { key: 'singularity', icon: 'fas fa-box-open', label: 'Singularity' },
-                    { key: 'datalad', icon: 'fas fa-database', label: 'DataLad' }
+                    { key: 'datalad', icon: 'fas fa-database', label: 'DataLad' },
+                    { key: 'slurm', icon: 'fas fa-server', label: 'SLURM' }
                 ];
                 
                 tools.forEach(tool => {

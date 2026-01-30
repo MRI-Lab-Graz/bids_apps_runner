@@ -289,7 +289,8 @@ def check_system_dependencies():
         'docker_running': docker_running,
         'apptainer': shutil.which('apptainer') is not None,
         'singularity': shutil.which('singularity') is not None,
-        'datalad': shutil.which('datalad') is not None
+        'datalad': shutil.which('datalad') is not None,
+        'slurm': shutil.which('sbatch') is not None
     }
 
 @app.before_request
@@ -434,14 +435,33 @@ def get_docker_tags():
 # Global state to track if a job was started in this GUI session
 GUI_SESSION_STARTED = False
 
+# Simple cache for log polling to reduce file system calls
+_log_cache = {
+    'timestamp': 0,
+    'content': '',
+    'filename': 'none',
+    'is_active': False
+}
+_log_cache_ttl = 1.0  # Cache for 1 second
+
 @app.route('/get_log', methods=['GET'])
 def get_log():
+    global _log_cache
     try:
         # Get project_id from query params (optional)
         project_id = request.args.get('project_id')
         
+        # Check cache first
+        current_time = time.time()
+        if current_time - _log_cache['timestamp'] < _log_cache_ttl:
+            return jsonify({
+                'content': _log_cache['content'],
+                'filename': _log_cache['filename'],
+                'is_active': _log_cache['is_active']
+            })
+        
         # Check if there are any active run_bids_apps.py processes
-        result = subprocess.run(["pgrep", "-f", "scripts/run_bids_apps.py"], capture_output=True, text=True)
+        result = subprocess.run(["pgrep", "-f", "scripts/run_bids_apps.py"], capture_output=True, text=True, timeout=1)
         has_active_job = bool(result.stdout.strip())
         
         # If project_id is specified, look for logs in that project
@@ -480,11 +500,19 @@ def get_log():
         # Add idle indicator if no active job and log is stale
         if not has_active_job and not is_recently_active:
             content = "[Idle - Last activity: " + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log_mtime)) + "]\n" + content
+        
+        # Update cache
+        _log_cache = {
+            'timestamp': current_time,
+            'content': content,
+            'filename': os.path.basename(latest_log) if (has_active_job or is_recently_active) else 'none',
+            'is_active': has_active_job or is_recently_active
+        }
             
         return jsonify({
-            'filename': os.path.basename(latest_log) if (has_active_job or is_recently_active) else 'none',
-            'content': content,
-            'is_active': has_active_job or is_recently_active
+            'filename': _log_cache['filename'],
+            'content': _log_cache['content'],
+            'is_active': _log_cache['is_active']
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1074,12 +1102,18 @@ def get_templateflow_templates():
 
 @app.route('/list_dirs', methods=['POST'])
 def list_dirs():
-    path = request.json.get('path', '/')
+    payload = request.json or {}
+    path = payload.get('path', '/')
+    include_files = bool(payload.get('include_files'))
+    extensions = payload.get('extensions') or []
+    file_name = payload.get('file_name') or ''
     if not path:
         path = '/'
     
     try:
         p = Path(path)
+        if p.exists() and p.is_file():
+            p = p.parent
         if not p.exists() or not p.is_dir():
             # Try to go to parent or root if path is invalid
             p = Path('/')
@@ -1096,7 +1130,41 @@ def list_dirs():
                     'path': str(child.absolute()),
                     'is_dir': True
                 })
+            elif include_files and child.is_file() and not child.name.startswith('.'):
+                if file_name and child.name != file_name:
+                    continue
+                if extensions:
+                    if not any(child.name.endswith(ext) for ext in extensions):
+                        continue
+                items.append({
+                    'name': child.name,
+                    'path': str(child.absolute()),
+                    'is_dir': False
+                })
         return jsonify({'current_path': str(p.absolute()), 'items': items})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/load_project_file', methods=['POST'])
+def load_project_file():
+    """Load a project.json from an explicit file path."""
+    try:
+        payload = request.json or {}
+        path = payload.get('path', '').strip()
+        if not path:
+            return jsonify({'error': 'Path is required'}), 400
+
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return jsonify({'error': 'File not found'}), 404
+
+        if p.name != 'project.json':
+            return jsonify({'error': 'Please select a project.json file'}), 400
+
+        with open(p, 'r') as f:
+            project_json = json.load(f)
+
+        return jsonify(project_json), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1257,10 +1325,12 @@ def run_app():
         else:
             script_path = BASE_DIR / "scripts" / "run_bids_apps.py"
         
-        # Build command
+        # Build command - use ABSOLUTE paths to avoid working directory issues
+        abs_config_path = os.path.abspath(config_path)
+        
         cmd = [
             PYTHON_EXE, str(script_path),
-            "-c", str(config_path),
+            "-c", abs_config_path,
         ]
         
         # Append runner arguments from UI
