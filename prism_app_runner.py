@@ -728,9 +728,13 @@ def run_output_check():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = LOG_DIR / f"check_app_output_{timestamp}.log"
 
+    script_path = BASE_DIR / "scripts" / "check_app_output.py"
+    if not script_path.exists():
+        script_path = BASE_DIR / "check_app_output.py"
+
     cmd = [
         sys.executable,
-        str(BASE_DIR / "check_app_output.py"),
+        str(script_path),
         str(bids_path),
         str(derivatives_path),
         "--json",
@@ -1667,36 +1671,9 @@ def check_hpc_environment():
 
 @app.route("/generate_hpc_script", methods=["POST"])
 def generate_hpc_script():
-    """Generate a SLURM script with DataLad workflow."""
-    if not HPC_DATALAD_AVAILABLE:
-        return jsonify({"error": "HPC DataLad runner not available"}), 400
+    """Legacy endpoint - script generation now happens client-side."""
+    return jsonify({"error": "Script generation is now handled client-side"}), 400
 
-    data = request.json
-    config_path = data.get("config_path")
-    subject = data.get("subject")
-
-    if not config_path or not subject:
-        return jsonify({"error": "config_path and subject are required"}), 400
-
-    try:
-        # Load and validate config
-        with open(config_path, "r") as f:
-            config = json.load(f)
-
-        # Validate DataLad and HPC configs
-        if not validate_datalad_config(config.get("datalad", {})):
-            return jsonify({"error": "Invalid DataLad configuration"}), 400
-
-        validate_hpc_config(config.get("hpc", {}))
-
-        # Generate script
-        generator = DataLadHPCScriptGenerator(config, subject)
-        script = generator.generate_script()
-
-        return jsonify({"script": script, "subject": subject, "config": config_path})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/save_hpc_script", methods=["POST"])

@@ -72,6 +72,45 @@
     letter-spacing: 0.08em;
 }
 
+.navbar-project {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #f1f5f9;
+    color: #334155;
+    font-weight: 600;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.navbar-project.is-empty {
+    background: #f8f9fa;
+    color: #6c757d;
+    font-weight: 500;
+}
+
+.navbar-project-label {
+    color: #64748b;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.65rem;
+    letter-spacing: 0.08em;
+}
+
+.navbar-project-name {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+@media (max-width: 991.98px) {
+    .navbar-project {
+        margin-top: 8px;
+    }
+}
+
 .footer {
     margin-top: 50px;
     padding: 30px 0;

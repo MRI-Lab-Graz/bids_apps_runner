@@ -80,6 +80,10 @@
             <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)"><i class="fas fa-check-circle me-1"></i>Check Output</button>
             <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)"><i class="fas fa-hammer me-1"></i>Build</button>
         </div>
+        <div class="navbar-project ms-lg-3" id="navbarProject">
+            <span class="navbar-project-label">Project:</span>
+            <span class="navbar-project-name" id="navbarProjectName">No project loaded</span>
+        </div>
     </div>
 {% endblock %}
 
@@ -403,7 +407,7 @@
         <div id="hpcTab" class="tab-panel">
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><i class="fas fa-server me-2"></i>HPC/SLURM Job Management</span>
+                    <span><i class="fas fa-server me-2"></i>HPC/SLURM Configuration</span>
                     <button class="btn btn-sm btn-outline-info" onclick="checkHPCEnvironment()">
                         <i class="fas fa-sync-alt me-1"></i>Check Environment
                     </button>
@@ -417,131 +421,120 @@
                         </div>
                     </div>
 
-                    <div class="section-header">1. Configuration</div>
-                    <div class="row">
-                        <div class="col-md-8 mb-3">
-                            <label class="form-label">HPC Config File</label>
-                            <div class="input-group">
-                                <input type="text" class="form-control" id="hpc_config_path" placeholder="/path/to/config_hpc_datalad.json">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('hpc_config_path')">...</button>
-                                <button type="button" class="btn btn-outline-primary" onclick="loadHPCConfig()">Load</button>
-                            </div>
-                            <div class="text-muted small mt-1">Config must include 'hpc', 'datalad', and 'container' sections</div>
-                        </div>
-                        <div class="col-md-4 mb-3">
-                            <label class="form-label">Subject ID</label>
-                            <input type="text" class="form-control" id="hpc_subject" placeholder="sub-001">
-                        </div>
+                    <!-- No Project Warning -->
+                    <div id="hpcNoProjectAlert" class="alert alert-warning" style="display:none;">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        Load a project from the Projects tab to configure HPC settings.
                     </div>
 
-                    <!-- HPC Settings Display -->
-                    <div id="hpcConfigDetails" style="display:none;">
-                        <div class="section-header">SLURM Settings (from config)</div>
-                        <div class="card bg-light border-0 mb-3">
-                            <div class="card-body">
-                                <div class="row">
-                                    <div class="col-md-3 mb-2">
-                                        <small class="text-muted">Partition</small>
-                                        <div id="hpc_display_partition" class="fw-bold">-</div>
-                                    </div>
-                                    <div class="col-md-3 mb-2">
-                                        <small class="text-muted">Time</small>
-                                        <div id="hpc_display_time" class="fw-bold">-</div>
-                                    </div>
-                                    <div class="col-md-3 mb-2">
-                                        <small class="text-muted">Memory</small>
-                                        <div id="hpc_display_mem" class="fw-bold">-</div>
-                                    </div>
-                                    <div class="col-md-3 mb-2">
-                                        <small class="text-muted">CPUs</small>
-                                        <div id="hpc_display_cpus" class="fw-bold">-</div>
-                                    </div>
-                                </div>
-                                <div class="row mt-2">
-                                    <div class="col-md-6 mb-2">
-                                        <small class="text-muted">Modules</small>
-                                        <div id="hpc_display_modules" class="small">-</div>
-                                    </div>
-                                    <div class="col-md-6 mb-2">
-                                        <small class="text-muted">Container</small>
-                                        <div id="hpc_display_container" class="small">-</div>
-                                    </div>
+                    <!-- HPC Settings Editor (Advanced) -->
+                    <div id="hpcConfigEditor" style="display:none;">
+                        <div class="card border-warning mb-3">
+                            <div class="card-header bg-warning bg-opacity-10 border-warning cursor-pointer" onclick="toggleAdvancedHPC()" style="cursor: pointer;">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span><i class="fas fa-sliders-h me-2"></i><strong>Advanced: SLURM Settings</strong></span>
+                                    <i class="fas fa-chevron-down" id="hpcAdvancedIcon" style="transition: transform 0.3s;"></i>
                                 </div>
                             </div>
-                        </div>
-                    </div>
+                            <div id="hpcAdvancedPanel" class="card-body" style="display:none;">
+                                <div class="alert alert-info alert-sm mb-3">
+                                    <small><i class="fas fa-info-circle me-2"></i>Modify SLURM parameters only if you know what you're doing. These settings affect how your jobs run on the HPC cluster.</small>
+                                </div>
+                        
+                                <div class="row mb-3">
+                                    <div class="col-md-3">
+                                        <label class="form-label">Partition</label>
+                                        <input type="text" class="form-control hpc-setting" id="hpc_partition" placeholder="compute">
+                                        <small class="text-muted">SLURM partition name</small>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Time</label>
+                                        <input type="text" class="form-control hpc-setting" id="hpc_time" placeholder="24:00:00">
+                                        <small class="text-muted">Max runtime (HH:MM:SS)</small>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Memory</label>
+                                        <input type="text" class="form-control hpc-setting" id="hpc_mem" placeholder="32G">
+                                        <small class="text-muted">RAM per job (e.g., 32G, 64G)</small>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">CPUs</label>
+                                        <input type="number" class="form-control hpc-setting" id="hpc_cpus" placeholder="8" min="1">
+                                        <small class="text-muted">Number of cores</small>
+                                    </div>
+                                </div>
 
-                    <div class="section-header">2. Script Generation</div>
-                    <div class="d-flex gap-2 mb-3">
-                        <button class="btn btn-primary" onclick="generateHPCScript()">
-                            <i class="fas fa-file-code me-2"></i>Generate SLURM Script
-                        </button>
-                        <button class="btn btn-outline-secondary" onclick="toggleScriptPreview()">
-                            <i class="fas fa-eye me-2"></i>Preview Script
-                        </button>
-                        <button class="btn btn-outline-success" onclick="saveHPCScript()">
-                            <i class="fas fa-save me-2"></i>Save Script
-                        </button>
-                    </div>
-                    
-                    <div id="hpcScriptPreview" style="display:none;">
-                        <label class="form-label fw-bold">Generated Script:</label>
-                        <pre id="hpcScriptContent" style="background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 8px; max-height: 400px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.85rem;"></pre>
-                    </div>
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <label class="form-label">Job Name</label>
+                                        <input type="text" class="form-control hpc-setting" id="hpc_job_name" placeholder="my_pipeline">
+                                        <small class="text-muted">SLURM job name</small>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Output Pattern</label>
+                                        <input type="text" class="form-control hpc-setting" id="hpc_output_pattern" placeholder="slurm-%j.out">
+                                        <small class="text-muted">Log file pattern (%j=jobid)</small>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Error Pattern</label>
+                                        <input type="text" class="form-control hpc-setting" id="hpc_error_pattern" placeholder="slurm-%j.err">
+                                        <small class="text-muted">Error log pattern</small>
+                                    </div>
+                                </div>
 
-                    <div class="section-header">3. Job Submission</div>
-                    <div class="row align-items-end mb-3">
-                        <div class="col-md-8">
-                            <label class="form-label">Script Path (saved script to submit)</label>
-                            <div class="input-group">
-                                <input type="text" class="form-control" id="hpc_script_path" placeholder="/tmp/hpc_scripts/job_sub-001.sh">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('hpc_script_path')">...</button>
+                                <div class="row mb-3">
+                                    <div class="col-md-12">
+                                        <label class="form-label">Modules to Load</label>
+                                        <textarea class="form-control hpc-setting" id="hpc_modules" placeholder="apptainer/1.2.0&#10;datalad/0.19.0" rows="3"></textarea>
+                                        <small class="text-muted">One module per line (e.g., apptainer/1.2.0, gcc/11.2.0)</small>
+                                    </div>
+                                </div>
+
+                                <div class="row mb-3">
+                                    <div class="col-md-12">
+                                        <label class="form-label">Environment Variables (JSON)</label>
+                                        <textarea class="form-control hpc-setting" id="hpc_environment" placeholder='{&#10;  "TEMPLATEFLOW_HOME": "/data/shared/templateflow",&#10;  "APPTAINER_CACHEDIR": "/tmp/.apptainer"&#10;}' rows="4" style="font-family: monospace; font-size: 0.9rem;"></textarea>
+                                        <small class="text-muted">JSON object with environment variables</small>
+                                    </div>
+                                </div>
+
+                                <div class="row mb-3">
+                                    <div class="col-md-12">
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" id="hpc_monitor_jobs" class="hpc-setting">
+                                            <label class="form-check-label" for="hpc_monitor_jobs">
+                                                Monitor job completion
+                                            </label>
+                                        </div>
+                                        <small class="text-muted">Automatically check job status after submission</small>
+                                    </div>
+                                </div>
+
+                                <div class="d-flex gap-2 mb-4">
+                                    <button class="btn btn-primary" onclick="saveHPCSettings()">
+                                        <i class="fas fa-save me-2"></i>Save Settings to Project
+                                    </button>
+                                    <button class="btn btn-outline-secondary" onclick="resetHPCSettings()">
+                                        <i class="fas fa-undo me-2"></i>Discard Changes
+                                    </button>
+                                </div>
+
+                                <div class="section-header">Preview</div>
+                                <button class="btn btn-outline-secondary mb-3" onclick="toggleHPCPreview()">
+                                    <i class="fas fa-eye me-2"></i>Preview SLURM Script
+                                </button>
+                                
+                                <div id="hpcScriptPreview" style="display:none;">
+                                    <pre id="hpcScriptContent" style="background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 8px; max-height: 400px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.85rem;"></pre>
+                                </div>
                             </div>
                         </div>
-                        <div class="col-md-4">
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="hpc_dry_run">
-                                <label class="form-check-label" for="hpc_dry_run">Dry Run</label>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="d-flex gap-2 mb-3">
-                        <button class="btn btn-danger" onclick="submitHPCJob()">
-                            <i class="fas fa-rocket me-2"></i>Submit to SLURM
-                        </button>
-                        <button class="btn btn-outline-warning" onclick="checkJobStatus()">
-                            <i class="fas fa-tasks me-2"></i>Check Status
-                        </button>
-                        <button class="btn btn-outline-danger" onclick="cancelHPCJob()">
-                            <i class="fas fa-stop-circle me-2"></i>Cancel Job
-                        </button>
                     </div>
 
-                    <div class="section-header">4. Job Monitor</div>
-                    <div id="hpcJobStatus" class="alert alert-secondary">
-                        <strong>Status:</strong> <span id="hpcStatusText">No jobs submitted</span>
-                    </div>
-                    
-                    <div class="table-responsive">
-                        <table class="table table-sm table-hover" id="hpcJobsTable" style="display:none;">
-                            <thead>
-                                <tr>
-                                    <th>Job ID</th>
-                                    <th>Subject</th>
-                                    <th>Status</th>
-                                    <th>Time</th>
-                                    <th>Node</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="hpcJobsTableBody"></tbody>
-                        </table>
-                    </div>
-
-                    <!-- HPC Log Output -->
+                    <!-- Console Output -->
                     <div class="mt-4">
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="text-muted small fw-bold">HPC CONSOLE OUTPUT</span>
+                            <span class="text-muted small fw-bold">CONSOLE OUTPUT</span>
                             <button class="btn btn-sm btn-link" onclick="clearHPCLog()">Clear</button>
                         </div>
                         <pre id="hpcLogOutput" class="utility-log" style="min-height: 200px;"></pre>
@@ -773,6 +766,21 @@
         let browserFileName = '';
         let browserSelectedFile = '';
 
+        function setNavbarProjectName(name) {
+            const container = document.getElementById('navbarProject');
+            const nameEl = document.getElementById('navbarProjectName');
+            if (!container || !nameEl) return;
+
+            const cleaned = (name || '').trim();
+            if (cleaned) {
+                nameEl.textContent = cleaned;
+                container.classList.remove('is-empty');
+            } else {
+                nameEl.textContent = 'No project loaded';
+                container.classList.add('is-empty');
+            }
+        }
+
         // ===== PROJECT MANAGEMENT =====
         
         async function loadRecentProjects() {
@@ -891,6 +899,13 @@
             const common = cfg.common || {};
             const app = cfg.app || {};
 
+            // Store project info early so navbar updates immediately
+            lastProjectId = projectIdOverride || project.id || '';
+            lastSavedPath = null;
+            setNavbarProjectName(project.name || project.id || '');
+            currentProjectConfig = cfg;
+            updateHpcConfigDetails(cfg);
+
             // Fill form fields
             document.getElementById('bids_folder').value = common.bids_folder || '';
             document.getElementById('output_folder').value = common.output_folder || '';
@@ -928,12 +943,12 @@
 
             // Automatically load app options for the selected container
             if (common.container) {
-                await fetchAppOptions();
+                try {
+                    await fetchAppOptions();
+                } catch (e) {
+                    console.warn('Failed to load app options:', e);
+                }
             }
-
-            // Store project info for later use
-            lastProjectId = projectIdOverride || project.id || '';
-            lastSavedPath = null;
 
             showStatus(`Loaded project: ${project.name || project.id || 'project'}`);
             switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
@@ -949,6 +964,10 @@
                 if (resp.ok) {
                     showStatus("Project deleted successfully");
                     loadRecentProjects();
+                    if (projectId === lastProjectId) {
+                        lastProjectId = '';
+                        setNavbarProjectName('');
+                    }
                 } else {
                     showStatus(data.error, true);
                 }
@@ -2647,6 +2666,7 @@
             switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
             toggleEngineFields();
             checkSystemStatus();
+            setNavbarProjectName('');
 
             // Clear tags if repo changes
             const buildRepoInput = document.getElementById('build_docker_repo');
@@ -2667,6 +2687,7 @@
         let hpcCurrentScript = '';
         let hpcCurrentJobId = null;
         let hpcTrackedJobs = [];
+        let currentProjectConfig = null;
 
         async function checkHPCEnvironment() {
             const statusEl = document.getElementById('hpcEnvStatus');
@@ -2703,242 +2724,174 @@
             }
         }
 
-        async function loadHPCConfig() {
-            const configPath = document.getElementById('hpc_config_path').value.trim();
-            if (!configPath) {
-                logHPC('Please specify config path', true);
-                return;
-            }
+        function toggleAdvancedHPC() {
+            const panel = document.getElementById('hpcAdvancedPanel');
+            const icon = document.getElementById('hpcAdvancedIcon');
             
-            try {
-                // For now, we'll just display that it's loaded
-                // In a full implementation, you'd fetch and parse the config
-                logHPC(`Config path set: ${configPath}`);
-                document.getElementById('hpcConfigDetails').style.display = 'block';
-                
-                // Note: To actually load and display config, you'd need a backend endpoint
-                // For now, showing placeholder values
-                document.getElementById('hpc_display_partition').textContent = 'compute';
-                document.getElementById('hpc_display_time').textContent = '24:00:00';
-                document.getElementById('hpc_display_mem').textContent = '32G';
-                document.getElementById('hpc_display_cpus').textContent = '8';
-                document.getElementById('hpc_display_modules').textContent = 'apptainer, datalad';
-                document.getElementById('hpc_display_container').textContent = 'fmriprep_24.0.0.sif';
-                
-            } catch (e) {
-                logHPC('Error loading config: ' + e.message, true);
+            if (panel.style.display === 'none') {
+                panel.style.display = 'block';
+                icon.style.transform = 'rotate(180deg)';
+            } else {
+                panel.style.display = 'none';
+                icon.style.transform = 'rotate(0deg)';
             }
         }
 
-        async function generateHPCScript() {
-            const configPath = document.getElementById('hpc_config_path').value.trim();
-            const subject = document.getElementById('hpc_subject').value.trim();
+        function updateHpcConfigDetails(config) {
+            const editorEl = document.getElementById('hpcConfigEditor');
+            const noProjectEl = document.getElementById('hpcNoProjectAlert');
             
-            if (!configPath || !subject) {
-                logHPC('Please specify config path and subject ID', true);
+            if (!editorEl || !noProjectEl) return;
+
+            // Show editor if project is loaded, even if hpc section is empty
+            if (lastProjectId && config) {
+                editorEl.style.display = 'block';
+                noProjectEl.style.display = 'none';
+                const hpc = (config && config.hpc) || {};
+                loadHpcSettingsToForm(hpc);
+            } else {
+                editorEl.style.display = 'none';
+                noProjectEl.style.display = 'block';
+            }
+        }
+
+        function loadHpcSettingsToForm(hpc) {
+            document.getElementById('hpc_partition').value = hpc.partition || '';
+            document.getElementById('hpc_time').value = hpc.time || '';
+            document.getElementById('hpc_mem').value = hpc.mem || '';
+            document.getElementById('hpc_cpus').value = hpc.cpus || '';
+            document.getElementById('hpc_job_name').value = hpc.job_name || '';
+            document.getElementById('hpc_output_pattern').value = hpc.output_pattern || '';
+            document.getElementById('hpc_error_pattern').value = hpc.error_pattern || '';
+            document.getElementById('hpc_modules').value = (hpc.modules || []).join('\n');
+            document.getElementById('hpc_environment').value = JSON.stringify(hpc.environment || {}, null, 2);
+            document.getElementById('hpc_monitor_jobs').checked = hpc.monitor_jobs !== false;
+        }
+
+        function getHpcSettingsFromForm() {
+            const modules = document.getElementById('hpc_modules').value
+                .split('\n')
+                .map(m => m.trim())
+                .filter(m => m);
+            
+            let environment = {};
+            try {
+                const envText = document.getElementById('hpc_environment').value.trim();
+                if (envText) {
+                    environment = JSON.parse(envText);
+                }
+            } catch (e) {
+                logHPC('Invalid JSON in environment variables: ' + e.message, true);
+                return null;
+            }
+
+            return {
+                partition: document.getElementById('hpc_partition').value,
+                time: document.getElementById('hpc_time').value,
+                mem: document.getElementById('hpc_mem').value,
+                cpus: parseInt(document.getElementById('hpc_cpus').value) || 1,
+                job_name: document.getElementById('hpc_job_name').value,
+                output_pattern: document.getElementById('hpc_output_pattern').value,
+                error_pattern: document.getElementById('hpc_error_pattern').value,
+                modules: modules,
+                environment: environment,
+                monitor_jobs: document.getElementById('hpc_monitor_jobs').checked
+            };
+        }
+
+        async function saveHPCSettings() {
+            const hpcSettings = getHpcSettingsFromForm();
+            if (!hpcSettings) return;
+
+            if (!lastProjectId) {
+                logHPC('No project loaded', true);
                 return;
             }
-            
-            logHPC(`Generating script for ${subject}...`);
-            
+
+            logHPC('Saving HPC settings...');
+
             try {
-                const resp = await fetch('/generate_hpc_script', {
+                const resp = await fetch(`/save_project/${lastProjectId}`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        config_path: configPath,
-                        subject: subject
+                        config: {
+                            ...currentProjectConfig,
+                            hpc: hpcSettings
+                        }
                     })
                 });
-                
-                const data = await resp.json();
-                
-                if (resp.ok && data.script) {
-                    hpcCurrentScript = data.script;
-                    document.getElementById('hpcScriptContent').textContent = data.script;
-                    document.getElementById('hpcScriptPreview').style.display = 'block';
-                    logHPC(`Script generated successfully for ${subject}`);
+
+                if (resp.ok) {
+                    currentProjectConfig.hpc = hpcSettings;
+                    logHPC('HPC settings saved successfully');
+                    showStatus('HPC settings saved to project');
                 } else {
-                    logHPC('Error: ' + (data.error || 'Failed to generate script'), true);
+                    const data = await resp.json();
+                    logHPC('Error: ' + (data.error || 'Failed to save'), true);
                 }
             } catch (e) {
-                logHPC('Error generating script: ' + e.message, true);
+                logHPC('Error saving settings: ' + e.message, true);
             }
         }
 
-        function toggleScriptPreview() {
+        function resetHPCSettings() {
+            if (!currentProjectConfig || !currentProjectConfig.hpc) {
+                logHPC('No HPC settings to reset', true);
+                return;
+            }
+            loadHpcSettingsToForm(currentProjectConfig.hpc);
+            logHPC('Settings reset to last saved state');
+        }
+
+        function toggleHPCPreview() {
             const preview = document.getElementById('hpcScriptPreview');
+            if (!preview) return;
+
             if (preview.style.display === 'none') {
-                if (!hpcCurrentScript) {
-                    logHPC('No script generated yet', true);
-                    return;
-                }
+                const hpcSettings = getHpcSettingsFromForm();
+                if (!hpcSettings) return;
+                
+                const container = currentProjectConfig?.common?.container || 'container.sif';
+                const scriptContent = generateSLURMScriptPreview(hpcSettings, container);
+                document.getElementById('hpcScriptContent').textContent = scriptContent;
                 preview.style.display = 'block';
             } else {
                 preview.style.display = 'none';
             }
         }
 
-        async function saveHPCScript() {
-            if (!hpcCurrentScript) {
-                logHPC('Generate a script first', true);
-                return;
-            }
-            
-            const subject = document.getElementById('hpc_subject').value.trim();
-            const outputDir = '/tmp/hpc_scripts';
-            
-            logHPC(`Saving script for ${subject}...`);
-            
-            try {
-                const resp = await fetch('/save_hpc_script', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        script: hpcCurrentScript,
-                        subject: subject,
-                        output_dir: outputDir
-                    })
-                });
-                
-                const data = await resp.json();
-                
-                if (resp.ok && data.path) {
-                    document.getElementById('hpc_script_path').value = data.path;
-                    logHPC(`Script saved: ${data.path}`);
-                } else {
-                    logHPC('Error: ' + (data.error || 'Failed to save script'), true);
-                }
-            } catch (e) {
-                logHPC('Error saving script: ' + e.message, true);
-            }
-        }
+        function generateSLURMScriptPreview(hpc, container) {
+            let script = '#!/bin/bash\n';
+            script += `#SBATCH --partition=${hpc.partition || 'compute'}\n`;
+            script += `#SBATCH --time=${hpc.time || '24:00:00'}\n`;
+            script += `#SBATCH --mem=${hpc.mem || '32G'}\n`;
+            script += `#SBATCH --cpus-per-task=${hpc.cpus || 8}\n`;
+            script += `#SBATCH --job-name=${hpc.job_name || 'bids-app'}\n`;
+            if (hpc.output_pattern) script += `#SBATCH --output=${hpc.output_pattern}\n`;
+            if (hpc.error_pattern) script += `#SBATCH --error=${hpc.error_pattern}\n`;
+            script += '\n';
 
-        async function submitHPCJob() {
-            const scriptPath = document.getElementById('hpc_script_path').value.trim();
-            const dryRun = document.getElementById('hpc_dry_run').checked;
-            
-            if (!scriptPath) {
-                logHPC('Please specify script path', true);
-                return;
-            }
-            
-            logHPC(`${dryRun ? 'DRY RUN: ' : ''}Submitting job...`);
-            
-            try {
-                const resp = await fetch('/submit_hpc_job', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        script_path: scriptPath,
-                        dry_run: dryRun
-                    })
+            if (hpc.modules && hpc.modules.length > 0) {
+                script += '# Load required modules\n';
+                hpc.modules.forEach(m => {
+                    script += `module load ${m}\n`;
                 });
-                
-                const data = await resp.json();
-                
-                if (resp.ok) {
-                    hpcCurrentJobId = data.job_id;
-                    if (!hpcTrackedJobs.includes(data.job_id)) {
-                        hpcTrackedJobs.push(data.job_id);
-                    }
-                    logHPC(`Job submitted! Job ID: ${data.job_id}`);
-                    document.getElementById('hpcStatusText').textContent = `Job ${data.job_id} submitted`;
-                    document.getElementById('hpcJobStatus').className = 'alert alert-success';
-                } else {
-                    logHPC('Error: ' + (data.error || 'Submission failed'), true);
-                }
-            } catch (e) {
-                logHPC('Error submitting job: ' + e.message, true);
+                script += '\n';
             }
-        }
 
-        async function checkJobStatus() {
-            if (!hpcCurrentJobId && hpcTrackedJobs.length === 0) {
-                logHPC('No jobs to check', true);
-                return;
-            }
-            
-            const jobIds = hpcTrackedJobs.length > 0 ? hpcTrackedJobs : [hpcCurrentJobId];
-            
-            logHPC('Checking job status...');
-            
-            try {
-                const resp = await fetch('/get_hpc_job_status', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ job_ids: jobIds })
+            if (hpc.environment && Object.keys(hpc.environment).length > 0) {
+                script += '# Set environment variables\n';
+                Object.entries(hpc.environment).forEach(([key, val]) => {
+                    script += `export ${key}="${val}"\n`;
                 });
-                
-                const data = await resp.json();
-                
-                if (resp.ok && data.jobs) {
-                    const tbody = document.getElementById('hpcJobsTableBody');
-                    tbody.innerHTML = '';
-                    
-                    data.jobs.forEach(job => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td>${job.job_id}</td>
-                            <td>${job.subject || '-'}</td>
-                            <td><span class="badge bg-info">${job.status}</span></td>
-                            <td>${job.time || '-'}</td>
-                            <td>${job.nodelist || '-'}</td>
-                            <td>
-                                <button class="btn btn-sm btn-outline-danger" onclick="cancelSpecificJob('${job.job_id}')">
-                                    <i class="fas fa-times"></i>
-                                </button>
-                            </td>
-                        `;
-                        tbody.appendChild(row);
-                    });
-                    
-                    document.getElementById('hpcJobsTable').style.display = 'table';
-                    logHPC(`Status updated for ${data.jobs.length} job(s)`);
-                } else {
-                    logHPC('Error: ' + (data.error || 'Status check failed'), true);
-                }
-            } catch (e) {
-                logHPC('Error checking status: ' + e.message, true);
+                script += '\n';
             }
-        }
 
-        async function cancelHPCJob() {
-            if (!hpcCurrentJobId) {
-                logHPC('No current job to cancel', true);
-                return;
-            }
-            
-            await cancelSpecificJob(hpcCurrentJobId);
-        }
+            script += '# Run pipeline (example)\n';
+            script += `apptainer run ${container} /bids /out participant\n`;
 
-        async function cancelSpecificJob(jobId) {
-            if (!confirm(`Cancel job ${jobId}?`)) return;
-            
-            logHPC(`Cancelling job ${jobId}...`);
-            
-            try {
-                const resp = await fetch('/cancel_hpc_job', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ job_id: jobId })
-                });
-                
-                const data = await resp.json();
-                
-                if (resp.ok) {
-                    logHPC(`Job ${jobId} cancelled`);
-                    if (jobId === hpcCurrentJobId) {
-                        document.getElementById('hpcStatusText').textContent = 'Job cancelled';
-                        document.getElementById('hpcJobStatus').className = 'alert alert-warning';
-                    }
-                    checkJobStatus();
-                } else {
-                    logHPC('Error: ' + (data.error || 'Cancel failed'), true);
-                }
-            } catch (e) {
-                logHPC('Error cancelling job: ' + e.message, true);
-            }
+            return script;
         }
 
         function logHPC(message, isError = false) {
