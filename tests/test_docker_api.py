@@ -1,5 +1,4 @@
 import requests
-import json
 
 repo = "nipreps/fmriprep"
 url = f"https://registry.hub.docker.com/v2/repositories/{repo}/tags?page_size=100&ordering=last_updated"

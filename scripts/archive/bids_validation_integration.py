@@ -9,9 +9,8 @@ Provides automatic validation and reprocessing capabilities.
 import json
 import logging
 import os
-import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 from datetime import datetime
 
 # Import the existing checker classes

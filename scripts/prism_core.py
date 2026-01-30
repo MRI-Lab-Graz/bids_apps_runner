@@ -35,7 +35,7 @@ def setup_logging(log_level: str = "INFO", log_dir: Optional[Path] = None) -> Pa
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
 
-    log_file = log_dir / f'prism_runner_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    log_file = log_dir / f"prism_runner_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
     # Setup logging with both file and console output
     logging.basicConfig(
@@ -246,7 +246,7 @@ def print_summary(processed: list, failed: list, total_time: float) -> None:
         print(f"\nFailed: {len(failed)} subjects")
         print(f"  {', '.join(failed)}")
 
-    print(f"\nTotal time: {total_time:.2f} seconds ({total_time/60:.1f} minutes)")
+    print(f"\nTotal time: {total_time:.2f} seconds ({total_time / 60:.1f} minutes)")
     print("=" * 60)
 
 

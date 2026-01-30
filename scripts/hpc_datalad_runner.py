@@ -19,9 +19,8 @@ import json
 import logging
 import subprocess
 import argparse
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 
 def setup_logging(log_level="INFO"):
@@ -113,12 +112,12 @@ class DataLadHPCScriptGenerator:
 
         header = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
-#SBATCH --partition={self.hpc.get('partition', 'standard')}
-#SBATCH --time={self.hpc.get('time', '24:00:00')}
-#SBATCH --mem={self.hpc.get('mem', '32G')}
-#SBATCH --cpus-per-task={self.hpc.get('cpus', 8)}
-#SBATCH --output={self.hpc.get('output_log', 'slurm-%j.out')}
-#SBATCH --error={self.hpc.get('error_log', 'slurm-%j.err')}
+#SBATCH --partition={self.hpc.get("partition", "standard")}
+#SBATCH --time={self.hpc.get("time", "24:00:00")}
+#SBATCH --mem={self.hpc.get("mem", "32G")}
+#SBATCH --cpus-per-task={self.hpc.get("cpus", 8)}
+#SBATCH --output={self.hpc.get("output_log", "slurm-%j.out")}
+#SBATCH --error={self.hpc.get("error_log", "slurm-%j.err")}
 """
 
         # Add additional SLURM directives if provided
@@ -146,9 +145,7 @@ echo "Partition: $SLURM_JOB_PARTITION"
 echo "Subject: {subject}
 echo "Start time: $(date)"
 echo ""
-""".format(
-            subject=self.subject
-        )
+""".format(subject=self.subject)
 
         # Load modules
         modules = self.hpc.get("modules", [])
@@ -208,9 +205,7 @@ else
 fi
 cd "$DS_DIR"
 echo ""
-""".format(
-            input_repo=input_repo, clone_method=clone_method
-        )
+""".format(input_repo=input_repo, clone_method=clone_method)
 
         return section
 
@@ -230,7 +225,7 @@ echo ""
 
     def _git_setup(self) -> str:
         """Generate git branch setup section."""
-        section = f"""
+        section = """
 # Setup Git Branches per Output Repository
 echo "=========================================="
 echo "Git Branch Setup"
@@ -319,9 +314,7 @@ else
     exit 1
 fi
 echo ""
-""".format(
-            container_name=container_name
-        )
+""".format(container_name=container_name)
 
         return section
 

@@ -12,17 +12,14 @@ Version: 3.0.0
 
 import os
 import logging
-import subprocess
 import time
 import random
-from typing import Dict, Any, List
+from typing import Dict, Any
 from argparse import Namespace
-from datetime import datetime
 
 # Import from PRISM modules
-from prism_core import get_subjects_from_bids, print_summary, run_command
+from prism_core import get_subjects_from_bids, run_command
 import prism_datalad
-
 
 # ============================================================================
 # SLURM Job Management Functions
@@ -68,10 +65,10 @@ def create_slurm_job(subject, config, work_dir, dry_run=False, debug=False):
         # Build SLURM script header
         script_content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
-#SBATCH --partition={hpc['partition']}
-#SBATCH --time={hpc['time']}
-#SBATCH --mem={hpc['mem']}
-#SBATCH --cpus-per-task={hpc['cpus']}
+#SBATCH --partition={hpc["partition"]}
+#SBATCH --time={hpc["time"]}
+#SBATCH --mem={hpc["mem"]}
+#SBATCH --cpus-per-task={hpc["cpus"]}
 #SBATCH --output={output_file}
 #SBATCH --error={error_file}
 
@@ -84,7 +81,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_JOB_NODELIST"
 echo "Start time: $(date)"
 echo "Working directory: {work_dir}"
-{f'echo "Debug mode: Container logs will be saved to {container_logs_dir}"' if debug else ''}
+{f'echo "Debug mode: Container logs will be saved to {container_logs_dir}"' if debug else ""}
 echo ""
 
 # Load modules
@@ -136,7 +133,7 @@ fi
 
 # Run the BIDS app
 echo "Running BIDS app for {subject}"
-echo "Container: {common['container']}"
+echo "Container: {common["container"]}"
 
 apptainer run \\"""
 
@@ -167,8 +164,8 @@ apptainer run \\"""
         # Add environment and container
         script_content += f"""
     --env TEMPLATEFLOW_HOME=/templateflow \\
-    {common['container']} \\
-    /bids /output {app.get('analysis_level', 'participant')} \\"""
+    {common["container"]} \\
+    /bids /output {app.get("analysis_level", "participant")} \\"""
 
         # Add app options
         for option in app.get("options", []):
@@ -205,15 +202,15 @@ if [ $? -eq 0 ]; then
     echo "Changed to output directory: {output_dir}"
     
     # Create output branch if it doesn't exist
-    echo "Setting up output branch: {datalad.get('output_branch', 'results')}"
-    git checkout {datalad.get('output_branch', 'results')} 2>/dev/null || git checkout -b {datalad.get('output_branch', 'results')}
+    echo "Setting up output branch: {datalad.get("output_branch", "results")}"
+    git checkout {datalad.get("output_branch", "results")} 2>/dev/null || git checkout -b {datalad.get("output_branch", "results")}
     
     # Add and save results
     echo "Saving results for {subject}"
     datalad save -m "Add results for {subject} (job $SLURM_JOB_ID)" || echo "Warning: Could not save results"
     
     # Push to remote if configured
-    if [ "{datalad.get('auto_push', 'false')}" = "true" ]; then
+    if [ "{datalad.get("auto_push", "false")}" = "true" ]; then
         echo "Pushing results to remote"
         datalad push || echo "Warning: Could not push results"
     fi
@@ -243,7 +240,7 @@ echo "Total job duration: $SECONDS seconds"
             logging.info(f"Created job script: {job_script}")
         else:
             logging.info(f"Would create job script: {job_script}")
-            logging.debug(f"Job script preview (first 50 lines):")
+            logging.debug("Job script preview (first 50 lines):")
             for i, line in enumerate(script_content.split("\n")[:50]):
                 logging.debug(f"  {line}")
 

@@ -1378,7 +1378,7 @@ def save_config():
             config_path = f"projects/{project_id}/project.json"
             return jsonify(
                 {
-                    "message": f"Project config saved successfully",
+                    "message": "Project config saved successfully",
                     "path": config_path,
                     "project": project,
                 }
@@ -1523,7 +1523,7 @@ def run_app():
 
         return jsonify(
             {
-                "message": f'BIDS App Runner started in background. Command: {" ".join(cmd)}'
+                "message": f"BIDS App Runner started in background. Command: {' '.join(cmd)}"
             }
         )
     except Exception as e:
@@ -1691,7 +1691,7 @@ def submit_hpc_job():
             logging.info(f"[GUI] Submitted HPC job {job_id}: {script_path}")
             return jsonify(
                 {
-                    "message": f"Job submitted successfully",
+                    "message": "Job submitted successfully",
                     "job_id": job_id,
                     "command": " ".join(cmd),
                 }
@@ -1785,7 +1785,7 @@ if __name__ == "__main__":
 
     print(f"🌐 Starting BIDS App Runner GUI v{__version__}")
     print(f"🔗 URL: http://localhost:{port}")
-    print(f"💡 Press Ctrl+C to stop the server\n")
+    print("💡 Press Ctrl+C to stop the server\n")
     print(f"🚀 Running with Waitress server on 0.0.0.0:{port}")
 
     # Automatically open the browser after a short delay

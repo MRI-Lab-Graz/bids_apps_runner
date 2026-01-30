@@ -9,11 +9,10 @@ import os
 import sys
 import json
 import argparse
-import subprocess
 import logging
 from pathlib import Path
 from typing import List, Optional
-from hpc_datalad_runner import DataLadHPCScriptGenerator, generate_script, submit_job
+from hpc_datalad_runner import generate_script, submit_job
 
 
 def setup_logging(log_level="INFO"):

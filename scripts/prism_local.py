@@ -20,14 +20,13 @@ import glob
 import multiprocessing
 import concurrent.futures
 import random
-from typing import Dict, Any, List
+from typing import Dict, Any
 from argparse import Namespace
 from datetime import datetime
 
 # Import from PRISM modules
 from prism_core import get_subjects_from_bids, print_summary
 import prism_datalad
-
 
 # ============================================================================
 # Helper Functions for Container Execution
@@ -130,15 +129,17 @@ def _run_container(
             logging.info("Debug mode: Starting container with real-time logging...")
 
             with (
-                open(container_log_file, "w")
-                if container_log_file
-                else open(os.devnull, "w")
-            ) as stdout_file, (
-                open(container_error_file, "w")
-                if container_error_file
-                else open(os.devnull, "w")
-            ) as stderr_file:
-
+                (
+                    open(container_log_file, "w")
+                    if container_log_file
+                    else open(os.devnull, "w")
+                ) as stdout_file,
+                (
+                    open(container_error_file, "w")
+                    if container_error_file
+                    else open(os.devnull, "w")
+                ) as stderr_file,
+            ):
                 process = subprocess.Popen(
                     cmd,
                     env=run_env,
@@ -271,7 +272,7 @@ def _create_success_marker(subject, common):
         with open(marker_file, "w") as f:
             f.write(f"Subject {subject} processed successfully\n")
             f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            f.write(f"Runner version: PRISM 3.0.0\n")
+            f.write("Runner version: PRISM 3.0.0\n")
         return True
     except Exception as e:
         logging.warning(f"Could not create success marker for {subject}: {e}")

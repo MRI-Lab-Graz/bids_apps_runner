@@ -195,8 +195,8 @@ echo "Python: $(which python)"
 echo "Python version: $(python --version)"
 echo ""
 echo "Available scripts:"
-echo "  - run_bids_apps.py       (Local/cluster processing)"
-echo "  - run_bids_apps_hpc.py   (HPC/SLURM processing)"
+echo "  - scripts/prism_runner.py     (Local/HPC processing)"
+echo "  - prism_app_runner.py         (Web GUI)"
 echo ""
 echo "To deactivate, run: deactivate"
 EOF
@@ -233,8 +233,10 @@ verify_installation() {
     
     # Test script syntax
     print_info "Testing script syntax..."
-    "$venv_python" -m py_compile run_bids_apps.py
-    "$venv_python" -m py_compile run_bids_apps_hpc.py
+    "$venv_python" -m py_compile scripts/prism_runner.py
+    "$venv_python" -m py_compile scripts/prism_core.py
+    "$venv_python" -m py_compile scripts/prism_local.py
+    "$venv_python" -m py_compile scripts/prism_hpc.py
     
     if [ $? -eq 0 ]; then
         print_success "Installation verification completed"
@@ -271,14 +273,14 @@ print_usage() {
     echo "   # Edit config.json for your setup"
     echo ""
     echo "4. Run your BIDS app:"
-    echo "   python scripts/run_bids_apps.py -x config.json"
+    echo "   python scripts/prism_runner.py -x config.json"
     echo "   # OR start the web GUI:"
     echo "   python prism_app_runner.py"
     echo ""
     echo "For HPC usage:"
     echo "   cp configs/config_hpc.json config_hpc_local.json"
     echo "   # Edit config_hpc_local.json for your setup"
-    echo "   python scripts/run_bids_apps_hpc.py -x config_hpc_local.json"
+    echo "   python scripts/prism_runner.py -x config_hpc_local.json"
     echo ""
     echo "Documentation:"
     echo "   - README.md (general usage)"

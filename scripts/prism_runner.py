@@ -210,7 +210,7 @@ def main():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         nohup_log = f"nohup_prism_runner_{timestamp}.log"
 
-        print(f"🚀 Launching in background (nohup mode)...")
+        print("🚀 Launching in background (nohup mode)...")
         print(f"📄 Output will be redirected to: {nohup_log}")
 
         with open(nohup_log, "w") as log_f:
@@ -221,7 +221,7 @@ def main():
                 preexec_fn=os.setpgrp,  # Detach from terminal group
             )
 
-        print(f"✅ Process started in background. You can disconnect now.")
+        print("✅ Process started in background. You can disconnect now.")
         print(f"👀 Monitor progress with: tail -f {nohup_log}")
         sys.exit(0)
 

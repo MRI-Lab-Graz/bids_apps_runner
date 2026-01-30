@@ -2,8 +2,7 @@
 # Activation script for BIDS App Runner environment
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-VENV_PATH="$PROJECT_ROOT/.appsrunner"
+VENV_PATH="$SCRIPT_DIR/.appsrunner"
 
 if [ ! -d "$VENV_PATH" ]; then
     echo "Error: Virtual environment not found at $VENV_PATH"
@@ -18,8 +17,7 @@ echo "Python: $(which python)"
 echo "Python version: $(python --version)"
 echo ""
 echo "Available scripts:"
-echo "  - scripts/run_bids_apps.py       (Local/cluster processing)"
-echo "  - scripts/run_bids_apps_hpc.py   (HPC/SLURM processing)"
-echo "  - prism_app_runner.py            (Web GUI)"
+echo "  - scripts/prism_runner.py     (Local/HPC processing)"
+echo "  - prism_app_runner.py         (Web GUI)"
 echo ""
 echo "To deactivate, run: deactivate"

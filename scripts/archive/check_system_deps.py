@@ -3,7 +3,6 @@ import shutil
 import sys
 import subprocess
 import os
-import platform
 
 
 def _fix_system_path():

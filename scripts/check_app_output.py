@@ -16,7 +16,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Set, Optional
 from collections import defaultdict
 import re
 
@@ -95,9 +95,9 @@ class BIDSChecker:
                                     m.strip().strip('"').strip("'")
                                     for m in mod_match.group(1).split(",")
                                 ]
-                                self.stats["metadata"][
-                                    "settings"
-                                ] = f"Modalities: {', '.join([m for m in mods if m])}"
+                                self.stats["metadata"]["settings"] = (
+                                    f"Modalities: {', '.join([m for m in mods if m])}"
+                                )
                     except:
                         pass
                 elif log_files[0].suffix == ".log":
@@ -876,7 +876,7 @@ class QSIReconChecker(BIDSChecker):
             else:
                 # Fallback to old structure check
                 self.logger.info(
-                    f"No derivatives subdirectory found, checking direct structure"
+                    "No derivatives subdirectory found, checking direct structure"
                 )
                 self._check_direct_structure(qsi_pipeline, pipeline_name)
 
@@ -940,9 +940,9 @@ class QSIReconChecker(BIDSChecker):
             ]
 
             if missing_subjects:
-                self.stats["missing_subjects_by_pipeline"][
-                    recon_name
-                ] = missing_subjects
+                self.stats["missing_subjects_by_pipeline"][recon_name] = (
+                    missing_subjects
+                )
                 for missing_subj in missing_subjects:
                     self.add_missing_item(
                         f"QSIRecon subject missing from reconstruction pipeline:\n"
@@ -1513,7 +1513,7 @@ class BIDSOutputValidator:
                 if issue_map:
                     if not quiet:
                         print(
-                            f"  Missing items clustered by subject group:",
+                            "  Missing items clustered by subject group:",
                             file=sys.stderr,
                         )
 
@@ -1524,7 +1524,7 @@ class BIDSOutputValidator:
                         # Display logic: show all in verbose, strictly limited in normal/quiet
                         if count > 10 and not self.verbose:
                             sub_str = (
-                                ", ".join(sub_list[:10]) + f" ... and {count-10} more"
+                                ", ".join(sub_list[:10]) + f" ... and {count - 10} more"
                             )
                         else:
                             sub_str = ", ".join(sub_list)
@@ -1539,13 +1539,13 @@ class BIDSOutputValidator:
                 # Print global issues
                 if global_issues:
                     if not quiet:
-                        print(f"  Global Issues:", file=sys.stderr)
+                        print("  Global Issues:", file=sys.stderr)
                     for issue in global_issues[:10]:
                         msg = issue.split("\n")[0].strip()
                         print(f"    - {msg}", file=sys.stderr)
                     if len(global_issues) > 10:
                         print(
-                            f"    ... and {len(global_issues)-10} more global issues",
+                            f"    ... and {len(global_issues) - 10} more global issues",
                             file=sys.stderr,
                         )
 
@@ -1578,7 +1578,7 @@ class BIDSOutputValidator:
     def _print_pipeline_statistics(self, pipeline_name: str, stats: Dict):
         """Print detailed statistics for a pipeline."""
         if pipeline_name == "qsiprep" and stats:
-            print(f"  📊 Subject Statistics:", file=sys.stderr)
+            print("  📊 Subject Statistics:", file=sys.stderr)
             print(
                 f"    Total subjects checked: {stats.get('total_subjects', 0)}",
                 file=sys.stderr,
@@ -1593,7 +1593,7 @@ class BIDSOutputValidator:
                 # Session-specific statistics
                 session_stats = stats.get("session_statistics", {})
                 if session_stats:
-                    print(f"  📋 Session-specific Issues:", file=sys.stderr)
+                    print("  📋 Session-specific Issues:", file=sys.stderr)
                     for session, session_data in sorted(session_stats.items()):
                         missing_count = len(session_data.get("missing_subjects", []))
                         total_count = session_data.get("total_subjects", 0)
@@ -1653,7 +1653,7 @@ class BIDSOutputValidator:
                         )
 
         elif pipeline_name == "qsirecon" and stats:
-            print(f"  📊 Reconstruction Statistics:", file=sys.stderr)
+            print("  📊 Reconstruction Statistics:", file=sys.stderr)
             print(
                 f"    Total subjects checked: {stats.get('total_subjects', 0)}",
                 file=sys.stderr,
@@ -1671,7 +1671,7 @@ class BIDSOutputValidator:
                 )
                 print(f"      Pipelines: {', '.join(recon_pipelines)}", file=sys.stderr)
 
-                print(f"  📋 Pipeline-specific Results:", file=sys.stderr)
+                print("  📋 Pipeline-specific Results:", file=sys.stderr)
                 subjects_by_pipeline = stats.get("subjects_by_pipeline", {})
                 missing_by_pipeline = stats.get("missing_subjects_by_pipeline", {})
 
@@ -1702,7 +1702,7 @@ class BIDSOutputValidator:
                                 )
             else:
                 print(
-                    f"    No reconstruction pipelines found in derivatives structure",
+                    "    No reconstruction pipelines found in derivatives structure",
                     file=sys.stderr,
                 )
 
