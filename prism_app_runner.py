@@ -1296,6 +1296,7 @@ def list_dirs():
     payload = request.json or {}
     path = payload.get("path", "/")
     include_files = bool(payload.get("include_files"))
+    include_hidden = bool(payload.get("include_hidden"))
     extensions = payload.get("extensions") or []
     file_name = payload.get("file_name") or ""
     if not path:
@@ -1315,11 +1316,11 @@ def list_dirs():
             items.append({"name": "..", "path": str(p.parent), "is_dir": True})
 
         for child in sorted(p.iterdir()):
-            if child.is_dir() and not child.name.startswith("."):
+            if child.is_dir() and (include_hidden or not child.name.startswith(".")):
                 items.append(
                     {"name": child.name, "path": str(child.absolute()), "is_dir": True}
                 )
-            elif include_files and child.is_file() and not child.name.startswith("."):
+            elif include_files and child.is_file() and (include_hidden or not child.name.startswith(".")):
                 if file_name and child.name != file_name:
                     continue
                 if extensions:
@@ -1480,6 +1481,34 @@ def save_config():
         return jsonify({"error": str(e)}), 500
 
 
+def _extract_fs_license_path(options):
+    """Extract FreeSurfer license path from app options."""
+    if not options:
+        return None
+    for i, opt in enumerate(options):
+        if opt == "--fs-license-file" and i + 1 < len(options):
+            return options[i + 1]
+        if opt.startswith("--fs-license-file="):
+            return opt.split("=", 1)[1]
+    return None
+
+
+def _map_container_path_to_host(container_path, mounts):
+    """Map a container path to a host path using mounts."""
+    if not container_path or not mounts:
+        return None
+    for mount in mounts:
+        source = mount.get("source")
+        target = mount.get("target")
+        if not source or not target:
+            continue
+        target_norm = target.rstrip("/")
+        if container_path == target_norm or container_path.startswith(target_norm + "/"):
+            rel = container_path[len(target_norm):].lstrip("/")
+            return os.path.join(source, rel) if rel else source
+    return None
+
+
 @app.route("/run_app", methods=["POST"])
 def run_app():
     global GUI_SESSION_STARTED
@@ -1501,6 +1530,9 @@ def run_app():
             "Templateflow Folder": common.get("templateflow_dir"),
         }
 
+        if common.get("fs_license_file"):
+            paths_to_check["FreeSurfer License File"] = common.get("fs_license_file")
+
         missing = []
         for name, path in paths_to_check.items():
             if path and not os.path.exists(path):
@@ -1517,6 +1549,61 @@ def run_app():
                 ),
                 400,
             )
+
+        # FreeSurfer license preflight for fMRIPrep
+        app_cfg = cfg.get("app", {})
+        options = app_cfg.get("options", [])
+        mounts = app_cfg.get("mounts", [])
+        container_name = str(common.get("container", "")).lower()
+
+        if "fmriprep" in container_name or "qsiprep" in container_name:
+            fs_license_path = common.get("fs_license_file")
+            fs_license_arg = _extract_fs_license_path(options)
+
+            if not fs_license_path and not fs_license_arg:
+                return (
+                    jsonify(
+                        {
+                            "error": "FreeSurfer license required",
+                            "details": "fMRIPrep/QSIPrep requires a FreeSurfer license. Provide it in the FreeSurfer License File field or add custom args: --fs-license-file /fs/license.txt with an appropriate bind mount.",
+                        }
+                    ),
+                    400,
+                )
+
+            if fs_license_path and not os.path.exists(fs_license_path):
+                return (
+                    jsonify(
+                        {
+                            "error": "FreeSurfer license file not found",
+                            "details": f"FreeSurfer license file not found at {fs_license_path}.",
+                        }
+                    ),
+                    400,
+                )
+
+            if fs_license_arg and fs_license_arg.startswith("/"):
+                host_license = _map_container_path_to_host(fs_license_arg, mounts)
+                if host_license is None:
+                    return (
+                        jsonify(
+                            {
+                                "error": "FreeSurfer license path not mounted",
+                                "details": f"--fs-license-file {fs_license_arg} is not under any custom mount target. Add a mount that makes the license file available in the container.",
+                            }
+                        ),
+                        400,
+                    )
+                if not os.path.exists(host_license):
+                    return (
+                        jsonify(
+                            {
+                                "error": "FreeSurfer license file not found",
+                                "details": f"--fs-license-file points to {fs_license_arg} but host file not found at {host_license}. Check custom mounts/args.",
+                            }
+                        ),
+                        400,
+                    )
 
         # Check container engine availability
         engine = common.get("container_engine", "apptainer")
@@ -1582,14 +1669,33 @@ def run_app():
         if "--nohup" not in cmd:
             cmd.append("--nohup")
 
+        # Generate log filename and create output redirection
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_filename = f"run_{timestamp}.log"
+        log_file_path = work_dir / log_filename
+        
         print(f"[GUI] Executing: {' '.join(cmd)} in {work_dir}")
-        subprocess.Popen(cmd, cwd=str(work_dir))
+        print(f"[GUI] Logging output to: {log_file_path}")
+        
+        # Open log file and redirect both stdout and stderr to it
+        with open(log_file_path, "w") as log_f:
+            # Write command that's being executed for reference
+            log_f.write(f"[{datetime.now().isoformat()}] Executing: {' '.join(cmd)}\n")
+            log_f.write(f"[{datetime.now().isoformat()}] Working directory: {work_dir}\n")
+            log_f.write("=" * 80 + "\n\n")
+            log_f.flush()
+            
+            # Launch subprocess with output redirected to log file
+            subprocess.Popen(
+                cmd, 
+                cwd=str(work_dir),
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                preexec_fn=os.setpgrp  # Detach from terminal group
+            )
 
         # Update project's last_log if project_id is provided
         if project_id:
-            # Generate log filename based on timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            log_filename = f"run_{timestamp}.log"
             ProjectManager.update_project_log(project_id, log_filename)
 
         GUI_SESSION_STARTED = True

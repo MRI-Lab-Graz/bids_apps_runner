@@ -20,6 +20,7 @@ import glob
 import multiprocessing
 import concurrent.futures
 import random
+from collections import deque
 from typing import Dict, Any
 from argparse import Namespace
 from datetime import datetime
@@ -78,11 +79,16 @@ def _sanitize_apptainer_args(apptainer_args):
 
 def _build_common_mounts(common, tmp_dir):
     """Build common mount points for the container."""
+    bids_mount = f"{common['bids_folder']}:/bids:ro"
     mounts = [
         f"{tmp_dir}:/tmp",
         f"{common['output_folder']}:/output",
-        f"{common['bids_folder']}:/bids",
+        bids_mount,
     ]
+
+    # FreeSurfer license file (optional)
+    if common.get("fs_license_file") and os.path.exists(common["fs_license_file"]):
+        mounts.append(f"{common['fs_license_file']}:/fs/license.txt:ro")
 
     # Only add templateflow if it's specified and exists
     if common.get("templateflow_dir") and os.path.exists(common["templateflow_dir"]):
@@ -170,9 +176,38 @@ def _run_container(
                         return_code, cmd, result.stdout, result.stderr
                     )
         else:
-            result = subprocess.run(
-                cmd, check=True, env=run_env, capture_output=True, text=True
+            process = subprocess.Popen(
+                cmd,
+                env=run_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
             )
+
+            output_tail = deque(maxlen=2000)
+            if process.stdout:
+                for line in process.stdout:
+                    cleaned = line.rstrip("\n")
+                    if cleaned:
+                        logging.info(cleaned)
+                    output_tail.append(cleaned)
+
+            return_code = process.wait()
+            stdout_combined = "\n".join(output_tail)
+
+            class RunResult:
+                def __init__(self, returncode, stdout, stderr):
+                    self.returncode = returncode
+                    self.stdout = stdout
+                    self.stderr = stderr
+
+            result = RunResult(return_code, stdout_combined, "")
+
+            if return_code != 0:
+                raise subprocess.CalledProcessError(
+                    return_code, cmd, result.stdout, result.stderr
+                )
 
         logging.info("Container execution completed successfully")
         return result
@@ -357,6 +392,14 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
 
         if app.get("options"):
             cmd.extend(app["options"])
+
+        # Ensure FreeSurfer license is passed if provided
+        fs_license_file = common.get("fs_license_file")
+        if fs_license_file:
+            if "--fs-license-file" not in cmd and not any(
+                a.startswith("--fs-license-file=") for a in cmd
+            ):
+                cmd.extend(["--fs-license-file", "/fs/license.txt"])
 
         cmd.extend(["--participant-label", subject.replace("sub-", ""), "-w", "/tmp"])
 

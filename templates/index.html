@@ -179,6 +179,16 @@
                             </div>
                         </div>
                     </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Optional: Required for fMRIPrep/QSIPrep to run FreeSurfer">FreeSurfer License File (Optional)</label>
+                            <div class="input-group">
+                                <input type="text" id="fs_license_file" class="form-control" placeholder="/path/to/license.txt">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openFileBrowser('fs_license_file', [], '', true)">...</button>
+                            </div>
+                            <div class="form-text">Optional: required for fMRIPrep and QSIPrep when FreeSurfer is used.</div>
+                        </div>
+                    </div>
 
                     <div class="section-header">2. Container Settings</div>
                     <div class="row align-items-end">
@@ -767,6 +777,7 @@
         let browserFileExts = [];
         let browserFileName = '';
         let browserSelectedFile = '';
+        let browserIncludeHidden = false;
 
         function setNavbarProjectName(name) {
             const container = document.getElementById('navbarProject');
@@ -913,6 +924,7 @@
             document.getElementById('output_folder').value = common.output_folder || '';
             document.getElementById('tmp_folder').value = common.tmp_folder || '';
             document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
+            document.getElementById('fs_license_file').value = common.fs_license_file || '';
             document.getElementById('jobs').value = common.jobs || 1;
             document.getElementById('analysis_level').value = app.analysis_level || 'participant';
             document.getElementById('container_engine').value = common.container_engine || 'apptainer';
@@ -1064,6 +1076,7 @@
             browserFileExts = [];
             browserFileName = '';
             browserSelectedFile = '';
+            browserIncludeHidden = false;
             const currentVal = document.getElementById(id).value;
             try {
                 await loadDirectory(currentVal || browserCurrentPath);
@@ -1075,13 +1088,14 @@
             }
         }
 
-        async function openFileBrowser(id, extensions = [], fileName = '') {
+        async function openFileBrowser(id, extensions = [], fileName = '', includeHidden = false) {
             console.log("Opening file browser for target:", id);
             currentTargetId = id;
             browserSelectFiles = true;
             browserFileExts = extensions || [];
             browserFileName = fileName || '';
             browserSelectedFile = '';
+            browserIncludeHidden = !!includeHidden;
             const currentVal = document.getElementById(id).value;
             try {
                 await loadDirectory(currentVal || browserCurrentPath);
@@ -1112,7 +1126,8 @@
                         path: path,
                         include_files: browserSelectFiles,
                         extensions: browserFileExts,
-                        file_name: browserFileName
+                        file_name: browserFileName,
+                        include_hidden: browserIncludeHidden
                     }) 
                 });
                 
@@ -1608,6 +1623,7 @@
                     output_folder: document.getElementById('output_folder').value,
                     tmp_folder: document.getElementById('tmp_folder').value,
                     templateflow_dir: document.getElementById('templateflow_dir').value,
+                    fs_license_file: document.getElementById('fs_license_file').value,
                     container_engine: engine,
                     container: containerPath,
                     container_locked: containerLocked,
@@ -1766,6 +1782,7 @@
                 document.getElementById('output_folder').value = cfg.common.output_folder || '';
                 document.getElementById('tmp_folder').value = cfg.common.tmp_folder || '';
                 document.getElementById('templateflow_dir').value = cfg.common.templateflow_dir || '';
+                document.getElementById('fs_license_file').value = cfg.common.fs_license_file || '';
                 document.getElementById('jobs').value = cfg.common.jobs || 1;
                 document.getElementById('analysis_level').value = cfg.app.analysis_level || 'participant';
                 document.getElementById('config_name').value = filename;
