@@ -3,8 +3,8 @@
   "name": "white_matter_dance",
   "description": "DWI preproc of dance study",
   "created": "2026-03-03T08:23:27.313014",
-  "last_modified": "2026-03-03T11:11:23.310863",
-  "last_log": "run_20260303_111123.log",
+  "last_modified": "2026-03-03T12:53:17.494098",
+  "last_log": "run_20260303_125317.log",
   "config": {
     "common": {
       "bids_folder": "/data/mrivault/_0_STAGING/134/rawdata",
@@ -12,6 +12,7 @@
       "tmp_folder": "/data/local/134_AF19/derivatives/qsirecon_temp",
       "templateflow_dir": "/data/local/templateflow",
       "fs_license_file": "/data/local/freesurfer/license.txt",
+      "notify_email": "karl.koschutnig@uni-graz.at",
       "container_engine": "apptainer",
       "container": "/data/local/container/qsiprep/qsiprep_1.1.1.sif",
       "container_locked": true,
@@ -20,11 +21,20 @@
     "app": {
       "analysis_level": "participant",
       "options": [
+        "--omp-nthreads",
+        "4",
+        "--anat-modality",
+        "T1w",
         "--output-resolution",
         "2.3",
         "--subject-anatomical-reference",
         "unbiased",
-        "--skip-bids-validation"
+        "--unringing-method",
+        "mrdegibbs",
+        "--skip-bids-validation",
+        "--resource-monitor",
+        "--nthreads",
+        "8"
       ],
       "mounts": []
     }

@@ -429,6 +429,35 @@ def _create_success_marker(subject, common):
         return False
 
 
+def _wait_for_output_detection(subject, common, app, max_wait_seconds=90, interval_seconds=5):
+    """Wait briefly for outputs to appear after container exits successfully."""
+    deadline = time.time() + max_wait_seconds
+
+    while True:
+        output_exists = _check_generic_output_exists(subject, common)
+
+        if not output_exists:
+            pattern = app.get("output_check", {}).get("pattern", "")
+            if pattern:
+                check_dir = os.path.join(
+                    common["output_folder"],
+                    app["output_check"].get("directory", ""),
+                )
+                full_pattern = os.path.join(
+                    check_dir, pattern.replace("{subject}", subject)
+                )
+                matches = glob.glob(full_pattern)
+                output_exists = len(matches) > 0
+
+        if output_exists:
+            return True
+
+        if time.time() >= deadline:
+            return False
+
+        time.sleep(interval_seconds)
+
+
 def _process_subject(subject, common, app, dry_run=False, force=False, debug=False):
     """Process a single subject with comprehensive error handling."""
     logging.info(f"Starting processing for subject: {subject}")
@@ -552,23 +581,13 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
                         common["output_folder"], subject, dry_run
                     )
 
-                time.sleep(1)  # Wait for filesystem sync
-
-                # Check if output exists
-                output_exists = _check_generic_output_exists(subject, common)
-
-                if not output_exists:
-                    pattern = app.get("output_check", {}).get("pattern", "")
-                    if pattern:
-                        check_dir = os.path.join(
-                            common["output_folder"],
-                            app["output_check"].get("directory", ""),
-                        )
-                        full_pattern = os.path.join(
-                            check_dir, pattern.replace("{subject}", subject)
-                        )
-                        matches = glob.glob(full_pattern)
-                        output_exists = len(matches) > 0
+                output_exists = _wait_for_output_detection(
+                    subject,
+                    common,
+                    app,
+                    max_wait_seconds=90,
+                    interval_seconds=5,
+                )
 
                 if output_exists:
                     _create_success_marker(subject, common)
@@ -581,7 +600,7 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
                     return True
                 else:
                     logging.warning(
-                        f"Container completed for {subject} but no output detected"
+                        f"Container completed for {subject} but no output detected after waiting 90s"
                     )
                     return False
             else:
@@ -589,11 +608,9 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
                 return False
 
         return True
-
     except Exception as e:
         logging.error(f"Error processing subject {subject}: {e}")
         return False
-
 
 # ============================================================================
 # Main Execution Function
@@ -677,16 +694,20 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
     if dry_run:
         logging.info("DRY RUN MODE - No actual processing will occur")
         for subject in subjects:
-            _process_subject(
+            success = _process_subject(
                 subject, common, app, dry_run=True, force=force, debug=debug
             )
-            processed_subjects.append(subject)
+            if success:
+                processed_subjects.append(subject)
+            else:
+                failed_subjects.append(subject)
     elif jobs == 1:
         # Serial processing (supports debug mode)
         for subject in subjects:
             success = _process_subject(subject, common, app, False, force, debug)
-            processed_subjects.append(subject)
-            if not success:
+            if success:
+                processed_subjects.append(subject)
+            else:
                 failed_subjects.append(subject)
     else:
         # Parallel processing
@@ -700,11 +721,12 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
 
             for future in concurrent.futures.as_completed(future_to_subject):
                 subject = future_to_subject[future]
-                processed_subjects.append(subject)
 
                 try:
                     success = future.result()
-                    if not success:
+                    if success:
+                        processed_subjects.append(subject)
+                    else:
                         failed_subjects.append(subject)
                 except Exception as e:
                     logging.error(f"Exception processing {subject}: {e}")
