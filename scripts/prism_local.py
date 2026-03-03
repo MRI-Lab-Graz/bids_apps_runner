@@ -20,6 +20,7 @@ import glob
 import multiprocessing
 import concurrent.futures
 import random
+import json
 from collections import deque
 from typing import Dict, Any
 from argparse import Namespace
@@ -77,9 +78,10 @@ def _sanitize_apptainer_args(apptainer_args):
     return sanitized
 
 
-def _build_common_mounts(common, tmp_dir):
+def _build_common_mounts(common, tmp_dir, bids_folder_override=None):
     """Build common mount points for the container."""
-    bids_mount = f"{common['bids_folder']}:/bids:ro"
+    bids_source = bids_folder_override or common["bids_folder"]
+    bids_mount = f"{bids_source}:/bids:ro"
     mounts = [
         f"{tmp_dir}:/tmp",
         f"{common['output_folder']}:/output",
@@ -98,6 +100,119 @@ def _build_common_mounts(common, tmp_dir):
         mounts.append(f"{common['optional_folder']}:/base")
 
     return mounts
+
+
+def _fix_bids_uri_intendedfor_for_subject(bids_folder, subject):
+    """Normalize IntendedFor entries using bids:: URIs for one subject.
+
+    Older pybids/upath stacks may fail with "Protocol not known: 'bids'".
+    This rewrites only subject fmap JSON files that include bids:: in IntendedFor.
+    """
+    subject_label = subject.replace("sub-", "")
+    subject_dir = os.path.join(bids_folder, f"sub-{subject_label}")
+    if not os.path.isdir(subject_dir):
+        return 0
+
+    fixed_files = 0
+    fmap_jsons = glob.glob(os.path.join(subject_dir, "**", "fmap", "*.json"), recursive=True)
+
+    for json_file in fmap_jsons:
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+
+        intended_for = data.get("IntendedFor")
+        if not intended_for:
+            continue
+
+        was_string = isinstance(intended_for, str)
+        intended_list = [intended_for] if was_string else list(intended_for)
+        changed = False
+        normalized = []
+
+        for item in intended_list:
+            if not isinstance(item, str):
+                normalized.append(item)
+                continue
+
+            new_item = item
+            if new_item.startswith("bids::"):
+                new_item = new_item[len("bids::") :]
+                changed = True
+
+            if new_item.startswith("/"):
+                new_item = new_item.lstrip("/")
+                changed = True
+
+            normalized.append(new_item)
+
+        if not changed:
+            continue
+
+        data["IntendedFor"] = normalized[0] if was_string and len(normalized) == 1 else normalized
+        try:
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+                f.write("\n")
+            fixed_files += 1
+        except Exception as exc:
+            logging.warning(f"Could not update IntendedFor in {json_file}: {exc}")
+
+    return fixed_files
+
+
+def _prepare_qsiprep_runtime_bids_view(bids_folder, tmp_dir, subject):
+    """Create a subject-scoped temporary BIDS tree for non-destructive fixes."""
+    subject_label = subject if subject.startswith("sub-") else f"sub-{subject}"
+    source_root = os.path.abspath(bids_folder)
+    source_subject = os.path.join(source_root, subject_label)
+    if not os.path.isdir(source_subject):
+        raise FileNotFoundError(f"Subject folder not found in BIDS dataset: {source_subject}")
+
+    runtime_root = os.path.join(tmp_dir, "bids_runtime")
+    os.makedirs(runtime_root, exist_ok=True)
+
+    # Copy minimal top-level BIDS files that many tools expect.
+    for filename in [
+        "dataset_description.json",
+        "participants.tsv",
+        "participants.json",
+        "README",
+        "CHANGES",
+    ]:
+        src = os.path.join(source_root, filename)
+        dst = os.path.join(runtime_root, filename)
+        if os.path.isfile(src):
+            shutil.copy2(src, dst)
+
+    # Copy only the target subject tree.
+    dst_subject = os.path.join(runtime_root, subject_label)
+    if os.path.exists(dst_subject):
+        shutil.rmtree(dst_subject)
+    shutil.copytree(source_subject, dst_subject)
+
+    return runtime_root
+
+
+def _is_qsiprep_container(container_ref):
+    """Return True only for QSIPrep container references."""
+    ref = str(container_ref or "").strip().lower()
+    if not ref:
+        return False
+
+    # Match common refs:
+    # - /path/to/qsiprep_1.1.1.sif
+    # - pennlinc/qsiprep:1.1.1
+    # - qsiprep:latest
+    if "/qsiprep:" in ref:
+        return True
+    if ref.startswith("qsiprep:"):
+        return True
+
+    base = os.path.basename(ref)
+    return base.startswith("qsiprep")
 
 
 def _run_container(
@@ -348,6 +463,21 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
 
         # Build container command
         engine = common.get("container_engine", "apptainer")
+        container_ref = common.get("container", "")
+        bids_mount_source = common["bids_folder"]
+
+        # QSIPrep compatibility translation layer:
+        # create subject-scoped runtime BIDS view and apply IntendedFor fixes there,
+        # leaving raw dataset unchanged.
+        if not dry_run and _is_qsiprep_container(container_ref):
+            bids_mount_source = _prepare_qsiprep_runtime_bids_view(
+                common["bids_folder"], tmp_dir, subject
+            )
+            fixed_count = _fix_bids_uri_intendedfor_for_subject(bids_mount_source, subject)
+            if fixed_count > 0:
+                logging.info(
+                    f"Normalized IntendedFor bids:: URIs in runtime BIDS view ({fixed_count} fmap JSON file(s)) for {subject}."
+                )
 
         if engine == "docker":
             cmd = ["docker", "run", "--rm"]
@@ -359,7 +489,7 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
 
             cmd.extend(["-e", "TEMPLATEFLOW_HOME=/templateflow"])
 
-            for mnt in _build_common_mounts(common, tmp_dir):
+            for mnt in _build_common_mounts(common, tmp_dir, bids_mount_source):
                 cmd.extend(["-v", mnt])
 
             for mount in app.get("mounts", []):
@@ -377,7 +507,7 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
             else:
                 cmd.append("--containall")
 
-            for mnt in _build_common_mounts(common, tmp_dir):
+            for mnt in _build_common_mounts(common, tmp_dir, bids_mount_source):
                 cmd.extend(["-B", mnt])
 
             for mount in app.get("mounts", []):

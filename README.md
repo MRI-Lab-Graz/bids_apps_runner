@@ -211,6 +211,49 @@ The project ships with a lightweight Flask/Waitress application (`prism_app_runn
 
 The interface fetches the container's `--help` output to surface pipeline-specific arguments, links directly to the upstream documentation, and runs `run_bids_apps.py` in the background via `--nohup`. Read the GUI reference on Read the Docs to see how the REST endpoints, log tailing, and help parsing work.
 
+### Email notifications for long/detached runs
+
+The GUI can send completion/failure emails when a run finishes, even if the browser is closed.
+
+Where to store SMTP settings:
+
+- Primary location (recommended): `DATA_DIR/configs/smtp_settings.json`
+   - In development this is usually: `./configs/smtp_settings.json`
+   - In packaged/non-writable installs this is usually: `~/.bids_apps_runner/configs/smtp_settings.json`
+
+Setup:
+
+```bash
+# 1) Create config from template
+cp configs/smtp_settings.example.json configs/smtp_settings.json
+
+# 2) Edit values (host, sender, username, password, etc.)
+# 3) Restrict permissions (recommended)
+chmod 600 configs/smtp_settings.json
+```
+
+`smtp_settings.json` schema:
+
+```json
+{
+   "host": "smtp.your-org.example",
+   "port": 587,
+   "sender": "bids-runner@your-org.example",
+   "username": "bids-runner@your-org.example",
+   "password": "CHANGE_ME",
+   "use_tls": true
+}
+```
+
+Environment variables are supported and override file values per key:
+
+- `BIDS_RUNNER_SMTP_HOST`
+- `BIDS_RUNNER_SMTP_PORT`
+- `BIDS_RUNNER_SMTP_SENDER`
+- `BIDS_RUNNER_SMTP_USERNAME`
+- `BIDS_RUNNER_SMTP_PASSWORD`
+- `BIDS_RUNNER_SMTP_USE_TLS` (`1`/`0`)
+
 ## Installation
 
 1. **Clone the repository**

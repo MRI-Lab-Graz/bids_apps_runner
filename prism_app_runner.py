@@ -8,6 +8,13 @@ import glob
 import subprocess
 import time
 import logging
+import uuid
+import signal
+import gzip
+import struct
+import smtplib
+import ssl
+from email.message import EmailMessage
 
 # Check for GUI dependencies
 try:
@@ -165,6 +172,7 @@ class ProjectManager:
                     "output_folder": "",
                     "tmp_folder": "",
                     "templateflow_dir": "",
+                    "notify_email": "",
                     "container_engine": "apptainer",
                     "container": "",
                     "jobs": 1,
@@ -352,6 +360,83 @@ def _record_build_log(path, command, stdout, stderr):
         pass
 
 
+def _read_nifti_zooms(nifti_path):
+    try:
+        if str(nifti_path).endswith(".gz"):
+            with gzip.open(nifti_path, "rb") as f:
+                header = f.read(348)
+        else:
+            with open(nifti_path, "rb") as f:
+                header = f.read(348)
+
+        if len(header) < 108:
+            return None
+
+        little = struct.unpack("<i", header[0:4])[0]
+        big = struct.unpack(">i", header[0:4])[0]
+        if little == 348:
+            endian = "<"
+        elif big == 348:
+            endian = ">"
+        else:
+            return None
+
+        pixdim = struct.unpack(f"{endian}8f", header[76:108])
+        zooms = [abs(float(pixdim[1])), abs(float(pixdim[2])), abs(float(pixdim[3]))]
+        if any(z <= 0 for z in zooms):
+            return None
+        return zooms
+    except Exception:
+        return None
+
+
+def _find_first_dwi_nifti(bids_dir):
+    patterns = [
+        "sub-*/dwi/*_dwi.nii.gz",
+        "sub-*/dwi/*_dwi.nii",
+        "sub-*/ses-*/dwi/*_dwi.nii.gz",
+        "sub-*/ses-*/dwi/*_dwi.nii",
+    ]
+    for pattern in patterns:
+        matches = sorted(Path(bids_dir).glob(pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
+@app.route("/get_dwi_native_resolution", methods=["POST"])
+def get_dwi_native_resolution():
+    data = request.get_json(silent=True) or {}
+    bids_dir = (data.get("bids_dir") or "").strip()
+    if not bids_dir:
+        return jsonify({"error": "bids_dir is required"}), 400
+
+    bids_path = Path(os.path.expanduser(bids_dir))
+    if not bids_path.exists() or not bids_path.is_dir():
+        return jsonify({"error": f"BIDS folder not found: {bids_path}"}), 400
+
+    dwi_file = _find_first_dwi_nifti(bids_path)
+    if dwi_file is None:
+        return jsonify({"error": "No DWI NIfTI file found in BIDS folder."}), 404
+
+    zooms = _read_nifti_zooms(dwi_file)
+    if not zooms:
+        return jsonify({"error": f"Could not read voxel size from: {dwi_file.name}"}), 500
+
+    is_near_isotropic = (max(zooms) - min(zooms)) <= 0.05
+    default_resolution = zooms[0] if is_near_isotropic else max(zooms)
+
+    return jsonify(
+        {
+            "resolution_mm": round(default_resolution, 1),
+            "voxel_sizes_mm": [round(z, 1) for z in zooms],
+            "is_near_isotropic": is_near_isotropic,
+            "strategy": "native" if is_near_isotropic else "max_dim_no_upsample",
+            "source_file": str(dwi_file),
+        }
+    )
+
+
 def get_latest_version_from_dockerhub(repo):
     """Fetch the latest tag from Docker Hub for a given repo."""
     try:
@@ -372,6 +457,17 @@ def get_latest_version_from_dockerhub(repo):
         return None
 
 
+def _strip_container_extension(value):
+    return re.sub(r"\.(sif|simg|img)$", "", value, flags=re.IGNORECASE)
+
+
+def _numeric_version_key(version_text):
+    match = re.match(r"^(\d+(?:\.\d+)*)", version_text)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
 @app.route("/check_container_version", methods=["POST"])
 def check_container_version():
     container_path = request.json.get("container")
@@ -379,11 +475,13 @@ def check_container_version():
         return jsonify({"error": "No container path provided"}), 400
 
     filename = os.path.basename(container_path)
-    # Remove extension first
-    filename_no_ext = os.path.splitext(filename)[0]
+    filename_no_ext = _strip_container_extension(filename)
 
     # Common pattern: appname_version or appname-version
-    match = re.search(r"^([a-zA-Z0-9-]+)[_-](v?\d+\.[\w\.-]+)", filename_no_ext)
+    match = re.search(
+        r"^([a-zA-Z0-9-]+)[_-](v?\d+(?:\.\d+)*(?:[A-Za-z0-9._-]*)?)$",
+        filename_no_ext,
+    )
 
     if not match:
         # Fallback: try to just guess app name from string
@@ -415,10 +513,18 @@ def check_container_version():
 
     if latest_version:
         # Normalize versions for comparison
-        clean_current = current_version.lower().replace(".sif", "").replace(".simg", "")
-        clean_latest = latest_version.lower().lstrip("v")
+        clean_current = _strip_container_extension(current_version.lower()).lstrip("v")
+        clean_latest = _strip_container_extension(latest_version.lower()).lstrip("v")
 
-        is_newer = clean_latest != clean_current
+        if clean_current in ["", "unknown"]:
+            is_newer = False
+        else:
+            current_key = _numeric_version_key(clean_current)
+            latest_key = _numeric_version_key(clean_latest)
+            if current_key and latest_key:
+                is_newer = latest_key > current_key
+            else:
+                is_newer = clean_latest != clean_current
         return jsonify(
             {
                 "app": app_name,
@@ -481,9 +587,536 @@ def get_docker_tags():
 # Global state to track if a job was started in this GUI session
 GUI_SESSION_STARTED = False
 
+# Track runner processes launched from this GUI session
+RUN_JOBS = {}
+RUN_JOBS_LOCK = threading.Lock()
+
 # Simple cache for log polling to reduce file system calls
 _log_cache = {"timestamp": 0, "content": "", "filename": "none", "is_active": False}
 _log_cache_ttl = 1.0  # Cache for 1 second
+
+# Track background Apptainer builds started from GUI utility tab
+APPTAINER_BUILDS = {}
+APPTAINER_BUILDS_LOCK = threading.Lock()
+
+
+def _get_active_tracked_run_jobs():
+    """Return active run jobs launched by this GUI session and prune finished ones."""
+    active_jobs = []
+    stale_ids = []
+    with RUN_JOBS_LOCK:
+        for run_id, state in RUN_JOBS.items():
+            process = state.get("process")
+            if process is None:
+                stale_ids.append(run_id)
+                continue
+
+            if process.poll() is None:
+                active_jobs.append(state)
+            else:
+                stale_ids.append(run_id)
+
+        for run_id in stale_ids:
+            RUN_JOBS.pop(run_id, None)
+
+    return active_jobs
+
+
+def _terminate_pid_group(pid):
+    """Terminate a process group first, then process as fallback."""
+    try:
+        pgid = os.getpgid(pid)
+        os.killpg(pgid, signal.SIGTERM)
+        return True
+    except OSError:
+        pass
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except OSError:
+        return False
+
+
+def _terminate_tracked_run(state):
+    process = state.get("process")
+    if process is None:
+        return False
+    state["stop_requested"] = True
+    return _terminate_pid_group(process.pid)
+
+
+def _get_smtp_settings():
+    """Load SMTP settings from DATA_DIR/configs/smtp_settings.json with env overrides."""
+    file_settings = {}
+    smtp_config_path = DATA_DIR / "configs" / "smtp_settings.json"
+    try:
+        if smtp_config_path.exists():
+            with open(smtp_config_path, "r", encoding="utf-8") as f:
+                file_settings = json.load(f) or {}
+            if not isinstance(file_settings, dict):
+                file_settings = {}
+    except Exception as exc:
+        print(f"[GUI] Failed to read SMTP config file {smtp_config_path}: {exc}", flush=True)
+        file_settings = {}
+
+    host = (os.environ.get("BIDS_RUNNER_SMTP_HOST") or file_settings.get("host") or "").strip()
+    sender = (os.environ.get("BIDS_RUNNER_SMTP_SENDER") or file_settings.get("sender") or "").strip()
+    username = (os.environ.get("BIDS_RUNNER_SMTP_USERNAME") or file_settings.get("username") or "").strip()
+    password = os.environ.get("BIDS_RUNNER_SMTP_PASSWORD")
+    if password is None:
+        password = file_settings.get("password") or ""
+
+    port_source = os.environ.get("BIDS_RUNNER_SMTP_PORT")
+    if port_source is None:
+        port_source = file_settings.get("port", 587)
+
+    use_tls_source = os.environ.get("BIDS_RUNNER_SMTP_USE_TLS")
+    if use_tls_source is None:
+        use_tls_source = file_settings.get("use_tls", True)
+
+    if not host:
+        return None
+
+    try:
+        port = int(str(port_source).strip())
+    except ValueError:
+        port = 587
+
+    if isinstance(use_tls_source, bool):
+        use_tls = use_tls_source
+    else:
+        use_tls = str(use_tls_source).strip().lower() not in {"0", "false", "no", "off"}
+
+    if not sender:
+        sender = username
+
+    if not sender:
+        return None
+
+    return {
+        "host": host,
+        "port": port,
+        "sender": sender,
+        "username": username,
+        "password": password,
+        "use_tls": use_tls,
+    }
+
+
+def _send_run_completion_email(recipient, subject, body):
+    settings = _get_smtp_settings()
+    if not settings:
+        return False, "SMTP not configured"
+
+    message = EmailMessage()
+    message["From"] = settings["sender"]
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(body)
+
+    try:
+        with smtplib.SMTP(settings["host"], settings["port"], timeout=30) as server:
+            if settings["use_tls"]:
+                server.starttls(context=ssl.create_default_context())
+            if settings["username"]:
+                server.login(settings["username"], settings["password"])
+            server.send_message(message)
+        return True, "sent"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _read_log_last_lines(log_path, max_lines=30, max_bytes=131072):
+    """Read the last N lines from a log file efficiently."""
+    text = _read_log_tail(log_path, max_bytes=max_bytes)
+    if not text:
+        return ""
+    lines = text.splitlines()
+    return "\n".join(lines[-max_lines:])
+
+
+def _extract_failure_summary(log_excerpt, max_items=6):
+    """Extract compact error-focused lines from a log excerpt."""
+    if not log_excerpt:
+        return ""
+
+    patterns = [
+        r"\berror\b",
+        r"\bexception\b",
+        r"traceback",
+        r"\bfailed\b",
+        r"\bfatal\b",
+        r"\bcritical\b",
+    ]
+    regex = re.compile("|".join(patterns), re.IGNORECASE)
+
+    selected = []
+    for line in log_excerpt.splitlines():
+        clean = line.strip()
+        if not clean:
+            continue
+        if regex.search(clean):
+            selected.append(clean)
+            if len(selected) >= max_items:
+                break
+
+    if not selected:
+        return ""
+
+    return "\n".join(f"- {line}" for line in selected)
+
+
+def _run_smtp_diagnostics():
+    settings = _get_smtp_settings()
+    if not settings:
+        return {
+            "configured": False,
+            "error": "SMTP not configured",
+        }
+
+    result = {
+        "configured": True,
+        "host": settings.get("host"),
+        "port": settings.get("port"),
+        "use_tls": bool(settings.get("use_tls")),
+        "sender": settings.get("sender"),
+        "username_set": bool(settings.get("username")),
+        "password_set": bool(settings.get("password")),
+        "connected": False,
+        "ehlo_ok": False,
+        "starttls_advertised": False,
+        "starttls_ok": False,
+        "auth_methods": [],
+        "login_ok": None,
+    }
+
+    try:
+        with smtplib.SMTP(settings["host"], settings["port"], timeout=20) as server:
+            result["connected"] = True
+
+            ehlo_code, ehlo_msg = server.ehlo()
+            result["ehlo_ok"] = 200 <= ehlo_code < 300
+            result["ehlo_code"] = ehlo_code
+            result["ehlo_message"] = (
+                ehlo_msg.decode("utf-8", errors="replace")
+                if isinstance(ehlo_msg, (bytes, bytearray))
+                else str(ehlo_msg)
+            )
+
+            features = dict(server.esmtp_features or {})
+            result["starttls_advertised"] = "starttls" in features
+            auth_raw = features.get("auth", "")
+            auth_methods = [m.strip().upper() for m in auth_raw.split() if m.strip()]
+            result["auth_methods"] = sorted(list(set(auth_methods)))
+
+            if settings.get("use_tls"):
+                if result["starttls_advertised"]:
+                    server.starttls(context=ssl.create_default_context())
+                    result["starttls_ok"] = True
+                    server.ehlo()
+                    features = dict(server.esmtp_features or {})
+                    auth_raw = features.get("auth", "")
+                    auth_methods = [m.strip().upper() for m in auth_raw.split() if m.strip()]
+                    result["auth_methods"] = sorted(list(set(auth_methods)))
+                else:
+                    result["starttls_error"] = "TLS requested but STARTTLS not advertised"
+
+            username = settings.get("username")
+            if username:
+                try:
+                    server.login(username, settings.get("password", ""))
+                    result["login_ok"] = True
+                except Exception as exc:
+                    result["login_ok"] = False
+                    result["login_error"] = str(exc)
+
+    except Exception as exc:
+        result["error"] = str(exc)
+
+    return result
+
+
+def _monitor_run_job(run_id):
+    with RUN_JOBS_LOCK:
+        state = RUN_JOBS.get(run_id)
+        if not state:
+            return
+        process = state.get("process")
+
+    if process is None:
+        return
+
+    return_code = process.wait()
+
+    with RUN_JOBS_LOCK:
+        state = RUN_JOBS.get(run_id)
+        if not state:
+            return
+
+        state["returncode"] = return_code
+        finished_at = time.time()
+        state["finished_at"] = finished_at
+        state["process"] = None
+
+        stop_requested = bool(state.get("stop_requested"))
+        notify_email = (state.get("notify_email") or "").strip()
+        project_id = state.get("project_id")
+        log_file = state.get("log_file")
+        cmd = state.get("cmd") or []
+        started_at = float(state.get("started_at", time.time()))
+
+    if stop_requested:
+        status_label = "Stopped"
+        result_label = "STOPPED"
+    elif return_code == 0:
+        status_label = "Completed"
+        result_label = "SUCCESS"
+    else:
+        status_label = "Failed"
+        result_label = "FAILED"
+
+    if not notify_email:
+        return
+
+    duration_seconds = max(0, int(time.time() - started_at))
+    host_name = platform.node() or "unknown-host"
+    command_text = " ".join(str(c) for c in cmd)
+    started_iso = datetime.fromtimestamp(started_at).isoformat(timespec="seconds")
+    finished_iso = datetime.fromtimestamp(finished_at).isoformat(timespec="seconds")
+
+    project_name = "N/A"
+    if project_id:
+        try:
+            project = ProjectManager.load_project(project_id)
+            if project:
+                project_name = project.get("name") or project_id
+        except Exception:
+            project_name = project_id
+
+    log_excerpt = _read_log_last_lines(log_file, max_lines=30) if log_file else ""
+    if not log_excerpt:
+        log_excerpt = "<No log excerpt available>"
+    failure_summary = _extract_failure_summary(log_excerpt)
+
+    subject = f"BIDS App Runner {status_label}: {run_id}"
+    failure_summary_block = ""
+    if result_label != "SUCCESS":
+        if failure_summary:
+            failure_summary_block = f"\nFailure summary:\n{failure_summary}\n"
+        else:
+            failure_summary_block = "\nFailure summary:\n- No explicit ERROR/Traceback lines found in the last 30 log lines.\n"
+
+    body = (
+        f"Run ID: {run_id}\n"
+        f"Result: {result_label}\n"
+        f"Status: {status_label}\n"
+        f"Return code: {return_code}\n"
+        f"Start time: {started_iso}\n"
+        f"End time: {finished_iso}\n"
+        f"Duration (seconds): {duration_seconds}\n"
+        f"Host: {host_name}\n"
+        f"Project: {project_name}\n"
+        f"Project ID: {project_id or 'N/A'}\n"
+        f"Log file: {log_file or 'N/A'}\n"
+        f"\nCommand:\n{command_text}\n"
+    ) + failure_summary_block + f"\nLast 30 log lines:\n{log_excerpt}\n"
+
+    sent, details = _send_run_completion_email(notify_email, subject, body)
+    with RUN_JOBS_LOCK:
+        state = RUN_JOBS.get(run_id)
+        if not state:
+            return
+        state["email_notified"] = bool(sent)
+        state["email_details"] = details
+
+    if sent:
+        print(f"[GUI] Completion email sent to {notify_email} for {run_id}", flush=True)
+    else:
+        print(
+            f"[GUI] Failed to send completion email to {notify_email} for {run_id}: {details}",
+            flush=True,
+        )
+
+
+def _read_log_tail(log_path, max_bytes=65536):
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            start = max(0, file_size - max_bytes)
+            f.seek(start, os.SEEK_SET)
+            data = f.read().decode("utf-8", errors="replace")
+            if start > 0:
+                newline_pos = data.find("\n")
+                if newline_pos != -1:
+                    data = data[newline_pos + 1 :]
+            return data
+    except OSError:
+        return ""
+
+
+def _prepare_apptainer_build(data):
+    output_dir = (data.get("output_dir") or "").strip()
+    tmp_dir = (data.get("tmp_dir") or "").strip()
+    if not output_dir or not tmp_dir:
+        return None, (jsonify({"error": "Output directory and temporary directory are required."}), 400)
+
+    output_path = Path(os.path.expanduser(output_dir))
+    tmp_path = Path(os.path.expanduser(tmp_dir))
+    output_path.mkdir(parents=True, exist_ok=True)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+
+    _ensure_logs_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = LOG_DIR / f"build_apptainer_{timestamp}.log"
+
+    dockerfile = (data.get("dockerfile") or "").strip()
+    docker_repo = (data.get("docker_repo") or "").strip()
+    docker_tag = (data.get("docker_tag") or "").strip()
+    keep_temp = bool(data.get("keep_temp"))
+    timeout_seconds = int(data.get("timeout", 7200))
+
+    cmd = []
+    built_image = None
+    per_build_dir = None
+    build_env = os.environ.copy()
+    cache_dir = None
+
+    if dockerfile:
+        script_path = BASE_DIR / "scripts" / "build_apptainer.sh"
+        if not script_path.exists():
+            return None, (jsonify({"error": "Build script missing from project."}), 500)
+        cmd = ["bash", str(script_path), "-o", str(output_path), "-t", str(tmp_path)]
+        if keep_temp:
+            cmd.append("--no-temp-del")
+        cmd.extend(["-d", dockerfile])
+        if docker_repo:
+            cmd.extend(["--docker-repo", docker_repo])
+        if docker_tag:
+            cmd.extend(["--docker-tag", docker_tag])
+        cache_dir = tmp_path / "apptainer_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        if not docker_repo or not docker_tag:
+            return (
+                None,
+                (
+                    jsonify(
+                        {
+                            "error": "Docker repository and tag are required when no Dockerfile is provided."
+                        }
+                    ),
+                    400,
+                ),
+            )
+        if shutil.which("apptainer") is None:
+            return None, (jsonify({"error": "Apptainer is not available on this host."}), 500)
+        per_build_dir = tempfile.mkdtemp(prefix="apptainer_build_", dir=str(tmp_path))
+        cache_dir = Path(per_build_dir) / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        built_image = output_path / f"{Path(docker_repo).name}_{docker_tag}.sif"
+        cmd = [
+            "apptainer",
+            "build",
+            "--force",
+            "--tmpdir",
+            per_build_dir,
+            str(built_image),
+            f"docker://{docker_repo}:{docker_tag}",
+        ]
+
+    build_env["APPTAINER_TMPDIR"] = str(tmp_path)
+    build_env["SINGULARITY_TMPDIR"] = str(tmp_path)
+    build_env["TMPDIR"] = str(tmp_path)
+    if cache_dir is not None:
+        build_env["APPTAINER_CACHEDIR"] = str(cache_dir)
+        build_env["SINGULARITY_CACHEDIR"] = str(cache_dir)
+
+    return {
+        "cmd": cmd,
+        "log_file": str(log_file),
+        "output_image": str(built_image) if built_image else None,
+        "per_build_dir": per_build_dir,
+        "keep_temp": keep_temp,
+        "timeout_seconds": timeout_seconds,
+        "cwd": str(BASE_DIR),
+        "env": build_env,
+    }, None
+
+
+def _run_apptainer_build_async(build_id):
+    with APPTAINER_BUILDS_LOCK:
+        state = APPTAINER_BUILDS.get(build_id)
+        if not state:
+            return
+
+    log_file = state["log_file"]
+    cmd = state["cmd"]
+    per_build_dir = state.get("per_build_dir")
+    keep_temp = bool(state.get("keep_temp"))
+
+    try:
+        with open(log_file, "w", encoding="utf-8") as logf:
+            logf.write(f"Command: {' '.join(cmd)}\n")
+            logf.write(f"Started: {datetime.now().isoformat()}\n\n")
+            logf.flush()
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=state["cwd"],
+                env=state["env"],
+                start_new_session=True,
+            )
+
+            with APPTAINER_BUILDS_LOCK:
+                if build_id in APPTAINER_BUILDS:
+                    APPTAINER_BUILDS[build_id]["process"] = process
+                    APPTAINER_BUILDS[build_id]["pid"] = process.pid
+
+            return_code = process.wait(timeout=state.get("timeout_seconds", 7200))
+
+        with APPTAINER_BUILDS_LOCK:
+            if build_id in APPTAINER_BUILDS:
+                cancelled = bool(APPTAINER_BUILDS[build_id].get("cancel_requested"))
+                APPTAINER_BUILDS[build_id]["returncode"] = return_code
+                APPTAINER_BUILDS[build_id]["process"] = None
+                APPTAINER_BUILDS[build_id]["finished_at"] = time.time()
+                if cancelled:
+                    APPTAINER_BUILDS[build_id]["status"] = "cancelled"
+                elif return_code == 0:
+                    APPTAINER_BUILDS[build_id]["status"] = "completed"
+                else:
+                    APPTAINER_BUILDS[build_id]["status"] = "failed"
+    except subprocess.TimeoutExpired:
+        with APPTAINER_BUILDS_LOCK:
+            process = APPTAINER_BUILDS.get(build_id, {}).get("process")
+        if process:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except OSError:
+                pass
+        with APPTAINER_BUILDS_LOCK:
+            if build_id in APPTAINER_BUILDS:
+                APPTAINER_BUILDS[build_id]["status"] = "failed"
+                APPTAINER_BUILDS[build_id]["returncode"] = 124
+                APPTAINER_BUILDS[build_id]["error"] = "Apptainer build timed out"
+                APPTAINER_BUILDS[build_id]["process"] = None
+                APPTAINER_BUILDS[build_id]["finished_at"] = time.time()
+    except Exception as exc:
+        with APPTAINER_BUILDS_LOCK:
+            if build_id in APPTAINER_BUILDS:
+                APPTAINER_BUILDS[build_id]["status"] = "failed"
+                APPTAINER_BUILDS[build_id]["returncode"] = 1
+                APPTAINER_BUILDS[build_id]["error"] = str(exc)
+                APPTAINER_BUILDS[build_id]["process"] = None
+                APPTAINER_BUILDS[build_id]["finished_at"] = time.time()
+    finally:
+        if per_build_dir and not keep_temp:
+            shutil.rmtree(per_build_dir, ignore_errors=True)
 
 
 @app.route("/get_log", methods=["GET"])
@@ -663,6 +1296,35 @@ def health():
 def check_system():
     """Endpoint to check system dependencies."""
     return jsonify(check_system_dependencies())
+
+
+@app.route("/smtp_diagnostics", methods=["POST"])
+def smtp_diagnostics():
+    """Inspect SMTP capabilities and optionally send a test email."""
+    data = request.get_json(silent=True) or {}
+    send_test = bool(data.get("send_test", False))
+    recipient = (data.get("recipient") or "").strip()
+
+    diagnostics = _run_smtp_diagnostics()
+    response = {"diagnostics": diagnostics}
+
+    if send_test:
+        if not recipient:
+            return jsonify({"error": "recipient is required when send_test=true"}), 400
+
+        subject = "BIDS App Runner SMTP diagnostic test"
+        body = (
+            "This is a diagnostic test email from BIDS App Runner.\n"
+            f"Time: {datetime.now().isoformat()}\n"
+        )
+        sent, details = _send_run_completion_email(recipient, subject, body)
+        response["test_email"] = {
+            "recipient": recipient,
+            "sent": bool(sent),
+            "details": details,
+        }
+
+    return jsonify(response), 200
 
 
 @app.route("/list_reports", methods=["POST"])
@@ -907,118 +1569,115 @@ def make_dir():
 @app.route("/build_apptainer", methods=["POST"])
 def build_apptainer():
     data = request.get_json(silent=True) or {}
-    output_dir = (data.get("output_dir") or "").strip()
-    tmp_dir = (data.get("tmp_dir") or "").strip()
-    if not output_dir or not tmp_dir:
-        return (
-            jsonify(
-                {"error": "Output directory and temporary directory are required."}
-            ),
-            400,
-        )
+    prepared, error_response = _prepare_apptainer_build(data)
+    if error_response:
+        return error_response
 
-    output_path = Path(os.path.expanduser(output_dir))
-    tmp_path = Path(os.path.expanduser(tmp_dir))
-    output_path.mkdir(parents=True, exist_ok=True)
-    tmp_path.mkdir(parents=True, exist_ok=True)
+    build_id = f"build_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    with APPTAINER_BUILDS_LOCK:
+        APPTAINER_BUILDS[build_id] = {
+            "id": build_id,
+            "status": "running",
+            "cmd": prepared["cmd"],
+            "log_file": prepared["log_file"],
+            "output_image": prepared["output_image"],
+            "per_build_dir": prepared["per_build_dir"],
+            "keep_temp": prepared["keep_temp"],
+            "timeout_seconds": prepared["timeout_seconds"],
+            "cwd": prepared["cwd"],
+            "env": prepared["env"],
+            "process": None,
+            "pid": None,
+            "cancel_requested": False,
+            "returncode": None,
+            "error": None,
+            "started_at": time.time(),
+            "finished_at": None,
+        }
 
-    _ensure_logs_dir()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = LOG_DIR / f"build_apptainer_{timestamp}.log"
-
-    dockerfile = (data.get("dockerfile") or "").strip()
-    docker_repo = (data.get("docker_repo") or "").strip()
-    docker_tag = (data.get("docker_tag") or "").strip()
-    keep_temp = bool(data.get("keep_temp"))
-
-    cmd = []
-    built_image = None
-    per_build_dir = None
-
-    if dockerfile:
-        script_path = BASE_DIR / "scripts" / "build_apptainer.sh"
-        if not script_path.exists():
-            return jsonify({"error": "Build script missing from project."}), 500
-        cmd = ["bash", str(script_path), "-o", str(output_path), "-t", str(tmp_path)]
-        if keep_temp:
-            cmd.append("--no-temp-del")
-        cmd.extend(["-d", dockerfile])
-        if docker_repo:
-            cmd.extend(["--docker-repo", docker_repo])
-        if docker_tag:
-            cmd.extend(["--docker-tag", docker_tag])
-    else:
-        if not docker_repo or not docker_tag:
-            return (
-                jsonify(
-                    {
-                        "error": "Docker repository and tag are required when no Dockerfile is provided."
-                    }
-                ),
-                400,
-            )
-        if shutil.which("apptainer") is None:
-            return jsonify({"error": "Apptainer is not available on this host."}), 500
-        per_build_dir = tempfile.mkdtemp(prefix="apptainer_build_", dir=str(tmp_path))
-        built_image = output_path / f"{Path(docker_repo).name}_{docker_tag}.sif"
-        cmd = [
-            "apptainer",
-            "build",
-            "--force",
-            "--tmpdir",
-            per_build_dir,
-            str(built_image),
-            f"docker://{docker_repo}:{docker_tag}",
-        ]
-
-    timeout_seconds = int(data.get("timeout", 7200))
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            cwd=str(BASE_DIR),
-        )
-    except subprocess.TimeoutExpired as exc:
-        return (
-            jsonify(
-                {
-                    "error": "Apptainer build timed out",
-                    "details": str(exc),
-                    "log_file": str(log_file),
-                }
-            ),
-            500,
-        )
-    finally:
-        if per_build_dir and not keep_temp:
-            shutil.rmtree(per_build_dir, ignore_errors=True)
-
-    if not dockerfile:
-        _record_build_log(log_file, cmd, result.stdout, result.stderr)
-    else:
-        try:
-            # Ensure log file exists even if script deleted it
-            log_file.touch(exist_ok=True)
-        except OSError:
-            pass
-
-    if not built_image:
-        match = re.search(r"Apptainer image built successfully at: (.+)", result.stdout)
-        if match:
-            built_image = Path(match.group(1).strip())
+    worker = threading.Thread(
+        target=_run_apptainer_build_async,
+        args=(build_id,),
+        daemon=True,
+    )
+    worker.start()
 
     return jsonify(
         {
-            "success": result.returncode == 0,
-            "returncode": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "log_file": str(log_file),
-            "output_image": str(built_image) if built_image else None,
+            "success": True,
+            "build_id": build_id,
+            "status": "running",
+            "log_file": prepared["log_file"],
+            "output_image": prepared["output_image"],
         }
     )
+
+
+@app.route("/build_apptainer_status", methods=["GET"])
+def build_apptainer_status():
+    build_id = (request.args.get("build_id") or "").strip()
+    if not build_id:
+        return jsonify({"error": "build_id is required"}), 400
+
+    with APPTAINER_BUILDS_LOCK:
+        state = APPTAINER_BUILDS.get(build_id)
+        if not state:
+            return jsonify({"error": "Build not found"}), 404
+        status = state.get("status", "unknown")
+        returncode = state.get("returncode")
+        output_image = state.get("output_image")
+        log_file = state.get("log_file")
+        error = state.get("error")
+        pid = state.get("pid")
+
+    log_tail = _read_log_tail(log_file)
+
+    if not output_image and status in {"completed", "failed"}:
+        match = re.search(r"Apptainer image built successfully at:\s*(.+)", log_tail)
+        if match:
+            output_image = match.group(1).strip()
+
+    return jsonify(
+        {
+            "build_id": build_id,
+            "status": status,
+            "success": status == "completed",
+            "returncode": returncode,
+            "output_image": output_image,
+            "log_file": log_file,
+            "log_tail": log_tail,
+            "error": error,
+            "pid": pid,
+        }
+    )
+
+
+@app.route("/build_apptainer_cancel", methods=["POST"])
+def build_apptainer_cancel():
+    data = request.get_json(silent=True) or {}
+    build_id = (data.get("build_id") or "").strip()
+    if not build_id:
+        return jsonify({"error": "build_id is required"}), 400
+
+    with APPTAINER_BUILDS_LOCK:
+        state = APPTAINER_BUILDS.get(build_id)
+        if not state:
+            return jsonify({"error": "Build not found"}), 404
+        status = state.get("status")
+        process = state.get("process")
+
+        if status != "running":
+            return jsonify({"success": True, "status": status, "message": "Build already finished."})
+
+        state["cancel_requested"] = True
+
+    if process is not None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+    return jsonify({"success": True, "status": "cancelling", "build_id": build_id})
 
 
 @app.route("/get_app_help", methods=["POST"])
@@ -1066,6 +1725,42 @@ def get_app_help():
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         output = result.stdout + result.stderr
+
+        usage_lines = []
+        lines = output.splitlines()
+        usage_started = False
+        for line in lines:
+            if not usage_started and line.strip().startswith("usage:"):
+                usage_started = True
+                usage_lines.append(line)
+                continue
+            if usage_started:
+                if line.startswith(" "):
+                    usage_lines.append(line)
+                    continue
+                break
+
+        usage_block = "\n".join(usage_lines)
+        usage_all_flags = set(re.findall(r"--[a-zA-Z0-9-]+", usage_block))
+        usage_optional_flags = set(re.findall(r"\[\s*(--[a-zA-Z0-9-]+)", usage_block))
+        usage_required_flags = usage_all_flags - usage_optional_flags
+
+        deprecated_flags = set()
+        for line in output.splitlines():
+            lower_line = line.lower()
+            if "deprecated" not in lower_line:
+                continue
+            for dep_flag in re.findall(r"--[a-zA-Z0-9-]+", line):
+                deprecated_flags.add(dep_flag)
+
+        # Compatibility guard: some apps still list legacy flags in --help
+        # without marking them deprecated. If the modern replacement is present,
+        # hide the legacy flag from dynamic UI generation.
+        if (
+            "--subject-anatomical-reference" in output
+            and "--longitudinal" in output
+        ):
+            deprecated_flags.add("--longitudinal")
 
         if result.returncode != 0:
             print(
@@ -1123,6 +1818,8 @@ def get_app_help():
                     continue
                 flag = flag_match.group(1)
                 if flag in exclude:
+                    continue
+                if flag in deprecated_flags:
                     continue
 
                 # Detect if it's already in options (sometimes flags ARE repeated in help)
@@ -1215,6 +1912,7 @@ def get_app_help():
                         "description": description,
                         "has_value": has_value,
                         "is_multiple": is_multiple,
+                        "required": flag in usage_required_flags,
                     }
                 )
 
@@ -1224,6 +1922,60 @@ def get_app_help():
                         "title": header,
                         "options": sorted(options, key=lambda x: x["name"]),
                     }
+                )
+
+        parsed_flags = {
+            o.get("flag")
+            for section in sections
+            for o in section.get("options", [])
+            if o.get("flag")
+        }
+
+        # Fallback for QSIPrep compatibility: if legacy longitudinal is hidden and
+        # the replacement signature exists in help output but was not parsed,
+        # add it explicitly so users can still select it in the UI.
+        if (
+            "--subject-anatomical-reference" not in parsed_flags
+            and "--subject-anatomical-reference" in output
+        ):
+            choices = []
+            choice_match = re.search(
+                r"--subject-anatomical-reference\s+\{([^}]+)\}", output
+            )
+            if choice_match:
+                choices = [
+                    c.strip() for c in choice_match.group(1).split(",") if c.strip()
+                ]
+
+            fallback_option = {
+                "flag": "--subject-anatomical-reference",
+                "name": "Subject Anatomical Reference",
+                "is_negated": False,
+                "choices": choices,
+                "description": "Replacement for deprecated --longitudinal behavior.",
+                "has_value": True,
+                "is_multiple": False,
+                "required": "--subject-anatomical-reference" in usage_required_flags,
+            }
+
+            target_section = None
+            for section in sections:
+                if section.get("title", "").lower() == "workflow configuration":
+                    target_section = section
+                    break
+
+            if target_section is None:
+                sections.append(
+                    {
+                        "title": "Workflow configuration",
+                        "options": [fallback_option],
+                    }
+                )
+            else:
+                target_section_options = target_section.get("options", [])
+                target_section_options.append(fallback_option)
+                target_section["options"] = sorted(
+                    target_section_options, key=lambda x: x["name"]
                 )
 
         # Identify app for Doc link
@@ -1244,6 +1996,7 @@ def get_app_help():
             {
                 "sections": sections,
                 "app_info": {"name": app_name, "url": doc_url},
+                "deprecated_flags": sorted(list(deprecated_flags)),
                 "raw_help": output if not sections else None,
             }
         )
@@ -1512,9 +2265,11 @@ def _map_container_path_to_host(container_path, mounts):
 @app.route("/run_app", methods=["POST"])
 def run_app():
     global GUI_SESSION_STARTED
-    config_path = request.json.get("config_path")
-    project_id = request.json.get("project_id")  # NEW: project context
-    runner_args = request.json.get("runner_args", [])
+    data = request.get_json(silent=True) or {}
+    config_path = data.get("config_path")
+    project_id = data.get("project_id")  # NEW: project context
+    runner_args = data.get("runner_args", [])
+    notify_email = (data.get("notify_email") or "").strip()
     if not config_path:
         return jsonify({"error": "No config path provided"}), 400
 
@@ -1524,6 +2279,12 @@ def run_app():
             cfg = json.load(f)
 
         common = cfg.get("common", {})
+        if not notify_email:
+            notify_email = str(common.get("notify_email", "")).strip()
+
+        if notify_email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", notify_email):
+            return jsonify({"error": "Notification email format is invalid."}), 400
+
         paths_to_check = {
             "BIDS Folder": common.get("bids_folder"),
             "Container Image": common.get("container"),
@@ -1686,13 +2447,36 @@ def run_app():
             log_f.flush()
             
             # Launch subprocess with output redirected to log file
-            subprocess.Popen(
+            process = subprocess.Popen(
                 cmd, 
                 cwd=str(work_dir),
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
                 preexec_fn=os.setpgrp  # Detach from terminal group
             )
+
+        run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        with RUN_JOBS_LOCK:
+            RUN_JOBS[run_id] = {
+                "id": run_id,
+                "process": process,
+                "pid": process.pid,
+                "project_id": project_id,
+                "log_file": str(log_file_path),
+                "started_at": time.time(),
+                "cmd": cmd,
+                "notify_email": notify_email,
+                "stop_requested": False,
+                "returncode": None,
+                "finished_at": None,
+            }
+
+        monitor_thread = threading.Thread(
+            target=_monitor_run_job,
+            args=(run_id,),
+            daemon=True,
+        )
+        monitor_thread.start()
 
         # Update project's last_log if project_id is provided
         if project_id:
@@ -1702,7 +2486,15 @@ def run_app():
 
         return jsonify(
             {
-                "message": f"BIDS App Runner started in background. Command: {' '.join(cmd)}"
+                "message": (
+                    f"BIDS App Runner started in background. Command: {' '.join(cmd)}"
+                    + (
+                        f". Completion email will be sent to {notify_email}."
+                        if notify_email
+                        else ""
+                    )
+                ),
+                "run_id": run_id,
             }
         )
     except Exception as e:
@@ -1711,32 +2503,71 @@ def run_app():
 
 @app.route("/kill_job", methods=["POST"])
 def kill_job():
-    # Attempt to kill run_bids_apps.py and associated apptainer processes
+    # Stop current run or all runs
     try:
-        cmd_find = ["pgrep", "-f", "scripts/run_bids_apps.py"]
-        result = subprocess.run(cmd_find, capture_output=True, text=True)
-        pids = result.stdout.strip().split("\n")
+        data = request.get_json(silent=True) or {}
+        scope = str(data.get("scope", "current")).strip().lower()
+        if scope not in {"current", "all"}:
+            return jsonify({"error": "Invalid scope. Use 'current' or 'all'."}), 400
 
-        if not pids or not pids[0]:
-            return (
-                jsonify({"message": "No active BIDS App Runner processes found."}),
-                200,
-            )
+        tracked_jobs = _get_active_tracked_run_jobs()
+        killed = 0
 
-        for pid in pids:
-            if pid:
-                subprocess.run(["kill", pid])
+        if scope == "current":
+            target = None
+            if tracked_jobs:
+                target = max(tracked_jobs, key=lambda state: state.get("started_at", 0))
 
-        subprocess.run(["pkill", "-f", "apptainer"])
-        subprocess.run(
-            ["pkill", "-f", "appinit"]
-        )  # Specific to some BIDS implementations
+            if target is not None:
+                if _terminate_tracked_run(target):
+                    killed += 1
+            else:
+                # Fallback for runs not tracked in current GUI memory
+                result = subprocess.run(
+                    ["pgrep", "-f", "scripts/run_bids_apps.py"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                pids = [p.strip() for p in result.stdout.splitlines() if p.strip()]
+                if pids:
+                    newest_pid = max(int(p) for p in pids)
+                    if _terminate_pid_group(newest_pid):
+                        killed += 1
 
-        return jsonify(
-            {
-                "message": f"Termination signal sent to {len(pids)} runner process(es) and containers."
-            }
+            if killed == 0:
+                return jsonify({"message": "No active BIDS App Runner process found to stop."}), 200
+
+            return jsonify({"message": "Stop signal sent to current run."}), 200
+
+        # scope == "all"
+        for state in tracked_jobs:
+            if _terminate_tracked_run(state):
+                killed += 1
+
+        # Also catch any untracked runner processes
+        result = subprocess.run(
+            ["pgrep", "-f", "scripts/run_bids_apps.py"],
+            capture_output=True,
+            text=True,
+            timeout=2,
         )
+        pids = [p.strip() for p in result.stdout.splitlines() if p.strip()]
+        for pid in pids:
+            try:
+                if _terminate_pid_group(int(pid)):
+                    killed += 1
+            except ValueError:
+                continue
+
+        # Best effort cleanup for app-initiated containers
+        subprocess.run(["pkill", "-f", "apptainer"], check=False)
+        subprocess.run(["pkill", "-f", "appinit"], check=False)
+
+        if killed == 0:
+            return jsonify({"message": "No active BIDS App Runner processes found."}), 200
+
+        return jsonify({"message": f"Stop signal sent to all runs ({killed} process target(s))."}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

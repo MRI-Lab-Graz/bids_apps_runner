@@ -276,20 +276,24 @@
 
                     <div class="section-header">4. Execution Parameters</div>
                     <div class="row">
-                        <div class="col-md-4 mb-4">
+                        <div class="col-md-3 mb-4">
                             <label class="form-label">Analysis Level</label>
                             <select class="form-select" id="analysis_level">
                                 <option value="participant">Participant</option>
                                 <option value="group">Group</option>
                             </select>
                         </div>
-                        <div class="col-md-4 mb-4">
+                        <div class="col-md-3 mb-4">
                             <label class="form-label">Parallel Jobs</label>
                             <input type="number" class="form-control" id="jobs" value="1">
                         </div>
-                        <div class="col-md-4 mb-4">
+                        <div class="col-md-3 mb-4">
                             <label class="form-label">Config Filename</label>
                             <input type="text" class="form-control" id="config_name" placeholder="config.json">
+                        </div>
+                        <div class="col-md-3 mb-4">
+                            <label class="form-label">Notification Email</label>
+                            <input type="email" class="form-control" id="notify_email" placeholder="name@example.org">
                         </div>
                     </div>
 
@@ -368,7 +372,8 @@
                         <button class="btn btn-outline-success" type="button" onclick="handleSaveAndRun(false)"><i class="fas fa-save me-2"></i>Save Only</button>
                         <button class="btn btn-danger px-4" type="button" onclick="handleSaveAndRun(true)"><i class="fas fa-play-circle me-2"></i>Save & Start Runner</button>
                         <button class="btn btn-warning" id="runApp" style="display: none;" type="button" onclick="executeNow()"><i class="fas fa-bolt me-2"></i>Run (Cached)</button>
-                        <button class="btn btn-dark" id="killBtn" type="button" onclick="killApp()"><i class="fas fa-stop-circle me-2"></i>Stop Execution</button>
+                        <button class="btn btn-dark" id="killCurrentBtn" type="button" onclick="killApp('current')"><i class="fas fa-stop-circle me-2"></i>Stop Current Run</button>
+                        <button class="btn btn-outline-dark" id="killAllBtn" type="button" onclick="killApp('all')"><i class="fas fa-ban me-2"></i>Stop All Runs</button>
                     </div>
 
                     <div class="row mt-4 justify-content-center">
@@ -778,6 +783,8 @@
         let browserFileName = '';
         let browserSelectedFile = '';
         let browserIncludeHidden = false;
+        let currentDeprecatedFlags = new Set();
+        let checkAppVersionRequestId = 0;
 
         function setNavbarProjectName(name) {
             const container = document.getElementById('navbarProject');
@@ -906,6 +913,79 @@
             }
         }
 
+        function applySavedAppConfig(cfg) {
+            const options = (cfg.app && cfg.app.options) ? cfg.app.options : [];
+            const unhandledArgs = [];
+            const skippedDeprecated = [];
+
+            for (let i = 0; i < options.length; i++) {
+                const opt = options[i];
+                if (currentDeprecatedFlags.has(opt)) {
+                    skippedDeprecated.push(opt);
+                    while (i + 1 < options.length && !options[i + 1].startsWith('-')) {
+                        i++;
+                    }
+                    continue;
+                }
+
+                const el = document.querySelector(`[data-flag="${opt}"]`);
+                if (!el) {
+                    const multiEls = document.querySelectorAll(`.dynamic-opt-multi[data-flag="${opt}"]`);
+                    if (multiEls.length > 0) {
+                        while (i + 1 < options.length && !options[i + 1].startsWith('-')) {
+                            i++;
+                            const val = options[i];
+                            document
+                                .querySelectorAll(`.dynamic-opt-multi[data-flag="${opt}"][value="${val}"]`)
+                                .forEach(checkedEl => checkedEl.checked = true);
+                        }
+                    } else if (opt.startsWith('-')) {
+                        unhandledArgs.push(opt);
+                        while (i + 1 < options.length && !options[i + 1].startsWith('-')) {
+                            i++;
+                            unhandledArgs.push(options[i]);
+                        }
+                    }
+                    continue;
+                }
+
+                if (el.classList.contains('dynamic-opt-bool')) {
+                    const isNegated = el.dataset.negated === 'true';
+                    el.value = isNegated ? 'disabled' : 'enabled';
+                } else if (el.type === 'checkbox') {
+                    el.checked = true;
+                } else if (i + 1 < options.length && !options[i + 1].startsWith('-')) {
+                    if (el.tagName === 'TEXTAREA') {
+                        const vals = [];
+                        while (i + 1 < options.length && !options[i + 1].startsWith('-')) {
+                            i++;
+                            vals.push(options[i]);
+                        }
+                        el.value = vals.join('\n');
+                    } else {
+                        el.value = options[i + 1];
+                        i++;
+                    }
+                }
+
+                if (typeof updateOptPreview === 'function') updateOptPreview(el);
+            }
+
+            document.getElementById('custom_args').value = unhandledArgs.join(' ');
+
+            if (cfg.app && cfg.app.mounts) {
+                const mountLines = cfg.app.mounts.map(m => `${m.source}:${m.target}`);
+                document.getElementById('custom_mounts').value = mountLines.join('\n');
+            } else {
+                document.getElementById('custom_mounts').value = '';
+            }
+
+            if (skippedDeprecated.length > 0) {
+                const uniqueDeprecated = Array.from(new Set(skippedDeprecated));
+                showStatus(`Ignored deprecated option(s): ${uniqueDeprecated.join(', ')}`, true);
+            }
+        }
+
         async function applyProjectData(project, projectIdOverride) {
             // Load project config into the form
             const cfg = project.config || {};
@@ -925,6 +1005,7 @@
             document.getElementById('tmp_folder').value = common.tmp_folder || '';
             document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
             document.getElementById('fs_license_file').value = common.fs_license_file || '';
+            document.getElementById('notify_email').value = common.notify_email || '';
             document.getElementById('jobs').value = common.jobs || 1;
             document.getElementById('analysis_level').value = app.analysis_level || 'participant';
             document.getElementById('container_engine').value = common.container_engine || 'apptainer';
@@ -949,6 +1030,7 @@
                     if (folder) {
                         await scanContainers(); // Wait for containers to load
                         document.getElementById('container_select').value = filename; // Now select the file
+                        await checkAppVersion(); // Refresh alert for the saved container selection
                     }
                 }
             }
@@ -959,11 +1041,12 @@
             currentContainerPath = common.container || '';
             containerLocked = common.container_locked || false;
 
-            // Automatically load app options ONLY if not locked
-            const shouldLoadOptions = common.container && (!containerLocked);
+            // Always auto-load app options on project load so saved flags are restored
+            const shouldLoadOptions = !!common.container;
             if (shouldLoadOptions) {
                 try {
                     await fetchAppOptions();
+                    applySavedAppConfig(cfg);
                 } catch (e) {
                     console.warn('Failed to load app options:', e);
                 }
@@ -1046,6 +1129,7 @@
         }
 
         async function checkAppVersion() {
+            const requestId = ++checkAppVersionRequestId;
             const f = document.getElementById('container_folder').value;
             const c = document.getElementById('container_select').value;
             if (!c) return;
@@ -1059,6 +1143,7 @@
                     body: JSON.stringify({ container: f + '/' + c })
                 });
                 const data = await resp.json();
+                if (requestId !== checkAppVersionRequestId) return;
                 if (data.is_newer) {
                     alertEl.innerHTML = `<span style="color: #e67e22; font-weight: bold;"><i class="fas fa-exclamation-triangle me-1"></i> Update: <a href="${data.changelog_url}" target="_blank" style="color: #d35400;">${data.latest}</a> available</span>`;
                     alertEl.style.display = 'block';
@@ -1414,6 +1499,26 @@
             }
             if (!container) return;
 
+            let detectedOutputResolution = null;
+            let detectedOutputResolutionInfo = null;
+            const bidsFolder = document.getElementById('bids_folder').value.trim();
+            if (bidsFolder) {
+                try {
+                    const nativeResp = await fetch('/get_dwi_native_resolution', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ bids_dir: bidsFolder })
+                    });
+                    const nativeData = await nativeResp.json();
+                    if (nativeResp.ok && nativeData.resolution_mm) {
+                        detectedOutputResolution = String(nativeData.resolution_mm);
+                        detectedOutputResolutionInfo = nativeData;
+                    }
+                } catch (e) {
+                    console.warn('Could not detect native DWI resolution:', e);
+                }
+            }
+
             // Per-app defaults for boolean flags.
             // These defaults apply only to dynamically-discovered (help-parsed) options.
             const defaultCheckedFlags = new Set();
@@ -1453,6 +1558,7 @@
                 }
 
                 if (data.app_info) document.getElementById('docLink').href = data.app_info.url;
+                currentDeprecatedFlags = new Set(data.deprecated_flags || []);
                 containerEl.innerHTML = '';
                 
                 if (data.sections && data.sections.length > 0) {
@@ -1472,6 +1578,9 @@
                             item.className = 'p-3 border rounded bg-light d-flex flex-column';
                             let input = '';
                             let previewStr = '';
+                            const reqMark = opt.required ? ' <span class="text-danger">*</span>' : '';
+                            const reqAttr = opt.required ? ' data-required="true"' : '';
+                            const optDefaultValue = (opt.flag === '--output-resolution' && detectedOutputResolution) ? detectedOutputResolution : '';
 
                             if (opt.choices && opt.choices.length > 0) {
                                 if (opt.is_multiple) {
@@ -1479,17 +1588,17 @@
                                     opt.choices.forEach(ch => {
                                         chks += `<div class="form-check"><input type="checkbox" class="form-check-input dynamic-opt-multi" data-flag="${opt.flag}" value="${ch}"> <label class="form-check-label">${ch}</label></div>`;
                                     });
-                                    input = `<label class="form-label">${opt.name}</label><div style="max-height:120px;overflow:auto;border:1px solid #dee2e6;padding:10px;background:white;border-radius:6px;">${chks}</div>`;
+                                    input = `<label class="form-label">${opt.name}${reqMark}</label><div${reqAttr} class="dynamic-opt-multi-wrap" data-flag="${opt.flag}" style="max-height:120px;overflow:auto;border:1px solid #dee2e6;padding:10px;background:white;border-radius:6px;">${chks}</div>`;
                                 } else {
                                     let opts = '<option value="">-- Default --</option>';
                                     opt.choices.forEach(ch => opts += `<option value="${ch}">${ch}</option>`);
-                                    input = `<label class="form-label">${opt.name}</label><select class="dynamic-opt form-select" data-flag="${opt.flag}" onchange="updateOptPreview(this)">${opts}</select>`;
+                                    input = `<label class="form-label">${opt.name}${reqMark}</label><select class="dynamic-opt form-select" data-flag="${opt.flag}"${reqAttr} onchange="updateOptPreview(this)">${opts}</select>`;
                                 }
                             } else if (opt.has_value) {
                                 if (opt.is_multiple) {
-                                    input = `<label class="form-label">${opt.name}</label><textarea class="dynamic-opt form-control" data-flag="${opt.flag}" placeholder="Enter values (one per line)" oninput="updateOptPreview(this)"></textarea>`;
+                                    input = `<label class="form-label">${opt.name}${reqMark}</label><textarea class="dynamic-opt form-control" data-flag="${opt.flag}"${reqAttr} placeholder="Enter values (one per line)" oninput="updateOptPreview(this)"></textarea>`;
                                 } else {
-                                    input = `<label class="form-label">${opt.name}</label><input type="text" class="dynamic-opt form-control" data-flag="${opt.flag}" oninput="updateOptPreview(this)">`;
+                                    input = `<label class="form-label">${opt.name}${reqMark}</label><input type="text" class="dynamic-opt form-control" data-flag="${opt.flag}"${reqAttr} value="${optDefaultValue}" oninput="updateOptPreview(this)">`;
                                 }
                             } else {
                                 // Boolean Flag: use Enabled/Disabled toggle for clarity
@@ -1512,8 +1621,8 @@
                                                <option value="enabled"${isDefaultChecked ? ' selected' : ''}>Enabled</option>`;
                                 }
                                 
-                                input = `<label class="form-label">${opt.name}</label>
-                                         <select class="dynamic-opt-bool form-select" data-flag="${opt.flag}" data-negated="${opt.is_negated}" onchange="updateOptPreview(this)">
+                                          input = `<label class="form-label">${opt.name}${reqMark}</label>
+                                                      <select class="dynamic-opt-bool form-select" data-flag="${opt.flag}" data-negated="${opt.is_negated}"${reqAttr} onchange="updateOptPreview(this)">
                                             ${options}
                                          </select>`;
                             }
@@ -1530,6 +1639,11 @@
                         });
                         secDiv.appendChild(h); secDiv.appendChild(content); containerEl.appendChild(secDiv);
                     });
+
+                    if (detectedOutputResolution && detectedOutputResolutionInfo) {
+                        const zooms = (detectedOutputResolutionInfo.voxel_sizes_mm || []).join(' x ');
+                        showStatus(`Auto-filled --output-resolution from native DWI voxel size (${zooms} mm → ${detectedOutputResolution} mm).`);
+                    }
                 } else {
                     let msg = '<div class="text-center p-4">No specific options detected for this container.</div>';
                     if (data.raw_help) {
@@ -1545,6 +1659,35 @@
 
         async function handleSaveAndRun(shouldRun) {
             const opts = [];
+            const missingRequired = [];
+
+            document.querySelectorAll('.dynamic-opt[data-required="true"]').forEach(el => {
+                if (!el.value || !el.value.trim()) {
+                    missingRequired.push(el.dataset.flag);
+                }
+            });
+
+            document.querySelectorAll('.dynamic-opt-bool[data-required="true"]').forEach(el => {
+                const val = (el.value || '').trim();
+                if (!val) {
+                    missingRequired.push(el.dataset.flag);
+                }
+            });
+
+            document.querySelectorAll('.dynamic-opt-multi-wrap[data-required="true"]').forEach(el => {
+                const flag = el.dataset.flag;
+                const checked = document.querySelectorAll(`.dynamic-opt-multi[data-flag="${flag}"]:checked`).length;
+                if (checked === 0) {
+                    missingRequired.push(flag);
+                }
+            });
+
+            if (missingRequired.length > 0) {
+                const uniqueMissing = Array.from(new Set(missingRequired));
+                showStatus(`Please set required app option(s): ${uniqueMissing.join(', ')}`, true);
+                return;
+            }
+
             // Handle standard inputs
             document.querySelectorAll('.dynamic-opt').forEach(el => {
                 if (el.type === 'checkbox') { 
@@ -1624,6 +1767,7 @@
                     tmp_folder: document.getElementById('tmp_folder').value,
                     templateflow_dir: document.getElementById('templateflow_dir').value,
                     fs_license_file: document.getElementById('fs_license_file').value,
+                    notify_email: document.getElementById('notify_email').value.trim(),
                     container_engine: engine,
                     container: containerPath,
                     container_locked: containerLocked,
@@ -1680,6 +1824,7 @@
             showStatus("🚀 Starting BIDS App Runner...");
             try {
                 const payload = { config_path: lastSavedPath, runner_args: r_args };
+                payload.notify_email = (document.getElementById('notify_email').value || '').trim();
                 if (lastProjectId) {
                     payload.project_id = lastProjectId;
                 }
@@ -1697,10 +1842,19 @@
             }
         }
 
-        async function killApp() {
-            if (!confirm("Are you sure you want to terminate all runner processes and containers?")) return;
+        async function killApp(scope = 'current') {
+            const isAll = scope === 'all';
+            const confirmMsg = isAll
+                ? "Are you sure you want to terminate ALL active runner processes?"
+                : "Are you sure you want to terminate the CURRENT active run?";
+            if (!confirm(confirmMsg)) return;
+
             try {
-                const resp = await fetch('/kill_job', { method: 'POST' });
+                const resp = await fetch('/kill_job', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scope })
+                });
                 const data = await resp.json();
                 showStatus(data.message || data.error, !!data.error);
             } catch (e) {
@@ -1828,6 +1982,7 @@
                                 s.add(new Option(name + " (not in folder)", name));
                             }
                             s.value = name;
+                            await checkAppVersion();
                             
                             console.log("Auto-fetching help for loaded container...");
                             await fetchAppOptions();
@@ -1835,65 +1990,7 @@
                     }
                 }
                 
-                // Rest of the options parsing...
-                const options = cfg.app.options || [];
-                        const unhandledArgs = [];
-                        for (let i = 0; i < options.length; i++) {
-                            const opt = options[i];
-                            const el = document.querySelector(`[data-flag="${opt}"]`);
-                            if (!el) {
-                                const multiEls = document.querySelectorAll(`.dynamic-opt-multi[data-flag="${opt}"]`);
-                                if (multiEls.length > 0) {
-                                    while (i + 1 < options.length && !options[i+1].startsWith('-')) {
-                                        i++;
-                                        const val = options[i];
-                                        document.querySelectorAll(`.dynamic-opt-multi[data-flag="${opt}"][value="${val}"]`).forEach(checkedEl => checkedEl.checked = true);
-                                    }
-                                } else {
-                                    // Not found in dynamic UI, move to custom args
-                                    if (opt.startsWith('-')) {
-                                        unhandledArgs.push(opt);
-                                        while (i + 1 < options.length && !options[i+1].startsWith('-')) {
-                                            i++;
-                                            unhandledArgs.push(options[i]);
-                                        }
-                                    }
-                                }
-                                continue;
-                            }
-
-                            if (el.classList.contains('dynamic-opt-bool')) {
-                                // Logic: If the flag is PRESENT in config:
-                                //   Standard: Enabled (sets flag)
-                                //   Negated: Disabled (sets skip- flag)
-                                const isNegated = el.dataset.negated === 'true';
-                                el.value = isNegated ? 'disabled' : 'enabled';
-                            } else if (el.type === 'checkbox') {
-                                el.checked = true;
-                            } else {
-                                if (i + 1 < options.length && !options[i+1].startsWith('-')) {
-                                    if (el.tagName === 'TEXTAREA') {
-                                        const vals = [];
-                                        while (i + 1 < options.length && !options[i+1].startsWith('-')) {
-                                            i++;
-                                            vals.push(options[i]);
-                                        }
-                                        el.value = vals.join('\n');
-                                    } else {
-                                        el.value = options[i+1];
-                                        i++;
-                                    }
-                                }
-                            }
-                            if (typeof updateOptPreview === 'function') updateOptPreview(el);
-                        }
-                        document.getElementById('custom_args').value = unhandledArgs.join(' ');
-                
-                // Load mounts
-                if (cfg.app.mounts) {
-                    const mountLines = cfg.app.mounts.map(m => `${m.source}:${m.target}`);
-                    document.getElementById('custom_mounts').value = mountLines.join('\n');
-                }
+                applySavedAppConfig(cfg);
 
                 showStatus("Configuration loaded: " + filename);
             } catch (e) {
@@ -2601,17 +2698,114 @@
             }
         }
 
+        let apptainerBuildPollTimer = null;
+        let apptainerCurrentBuildId = null;
+        let apptainerBuildRunning = false;
+
+        function _setApptainerBuildButtonState(btn, isRunning) {
+            if (!btn) return;
+            btn.disabled = false;
+            btn.innerText = isRunning ? 'Cancel Build' : 'Start Build';
+        }
+
+        function _stopApptainerBuildPolling() {
+            if (apptainerBuildPollTimer) {
+                clearInterval(apptainerBuildPollTimer);
+                apptainerBuildPollTimer = null;
+            }
+        }
+
+        async function _pollApptainerBuildStatus() {
+            if (!apptainerCurrentBuildId) return;
+            const statusEl = document.getElementById('buildStatusBox');
+            const logEl = document.getElementById('buildOutput');
+            const btn = document.getElementById('buildApptainerBtn');
+
+            try {
+                const resp = await fetch(`/build_apptainer_status?build_id=${encodeURIComponent(apptainerCurrentBuildId)}`);
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    _setUtilityStatus(statusEl, data.error || 'Failed to fetch build status.', true);
+                    _stopApptainerBuildPolling();
+                    apptainerBuildRunning = false;
+                    apptainerCurrentBuildId = null;
+                    _setApptainerBuildButtonState(btn, false);
+                    return;
+                }
+
+                let logText = data.log_tail || '';
+                if (data.log_file) {
+                    logText += (logText ? '\n\n' : '') + `Log saved at: ${data.log_file}`;
+                }
+                logEl.innerText = logText;
+                logEl.scrollTop = logEl.scrollHeight;
+
+                if (data.status === 'running') {
+                    _setUtilityStatus(statusEl, 'Build running... you can cancel any time.', false);
+                    return;
+                }
+
+                _stopApptainerBuildPolling();
+                apptainerBuildRunning = false;
+                apptainerCurrentBuildId = null;
+                _setApptainerBuildButtonState(btn, false);
+
+                if (data.status === 'completed') {
+                    const message = data.output_image ? `Built ${data.output_image}` : 'Build completed';
+                    _setUtilityStatus(statusEl, message, false);
+                } else if (data.status === 'cancelled') {
+                    _setUtilityStatus(statusEl, 'Build cancelled by user.', true);
+                } else {
+                    _setUtilityStatus(statusEl, data.error || 'Build failed.', true);
+                }
+            } catch (err) {
+                _setUtilityStatus(statusEl, 'Build status polling failed: ' + err.message, true);
+                _stopApptainerBuildPolling();
+                apptainerBuildRunning = false;
+                apptainerCurrentBuildId = null;
+                _setApptainerBuildButtonState(btn, false);
+            }
+        }
+
+        async function cancelApptainerBuild() {
+            const statusEl = document.getElementById('buildStatusBox');
+            const btn = document.getElementById('buildApptainerBtn');
+            if (!apptainerCurrentBuildId) {
+                _setUtilityStatus(statusEl, 'No active build to cancel.', true);
+                _setApptainerBuildButtonState(btn, false);
+                apptainerBuildRunning = false;
+                return;
+            }
+            try {
+                _setUtilityStatus(statusEl, 'Cancelling build...', false);
+                await fetch('/build_apptainer_cancel', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ build_id: apptainerCurrentBuildId })
+                });
+            } catch (err) {
+                _setUtilityStatus(statusEl, 'Cancel request failed: ' + err.message, true);
+            }
+        }
+
         async function startApptainerBuild() {
             const statusEl = document.getElementById('buildStatusBox');
             const logEl = document.getElementById('buildOutput');
             const btn = document.getElementById('buildApptainerBtn');
+
+            if (apptainerBuildRunning) {
+                await cancelApptainerBuild();
+                return;
+            }
+
             const payload = {
                 output_dir: document.getElementById('build_output_dir').value.trim(),
                 tmp_dir: document.getElementById('build_tmp_dir').value.trim(),
                 docker_repo: document.getElementById('build_docker_repo').value.trim(),
                 docker_tag: document.getElementById('build_docker_tag').value.trim(),
                 dockerfile: document.getElementById('build_dockerfile').value.trim(),
-                keep_temp: document.getElementById('build_keep_temp').checked
+                keep_temp: document.getElementById('build_keep_temp').checked,
+                async: true
             };
             if (!payload.output_dir || !payload.tmp_dir) {
                 _setUtilityStatus(statusEl, 'Output and temporary directories are required.', true);
@@ -2621,9 +2815,11 @@
                 _setUtilityStatus(statusEl, 'Provide a Docker repo/tag or a Dockerfile path.', true);
                 return;
             }
-            btn.disabled = true;
-            btn.innerText = 'Building...';
+            apptainerBuildRunning = true;
+            _setApptainerBuildButtonState(btn, true);
             _setUtilityStatus(statusEl, 'Starting Apptainer build...', false);
+            logEl.innerText = '';
+
             try {
                 const resp = await fetch('/build_apptainer', {
                     method: 'POST',
@@ -2631,22 +2827,21 @@
                     body: JSON.stringify(payload)
                 });
                 const data = await resp.json();
-                if (!resp.ok || data.error) {
+                if (!resp.ok || data.error || !data.build_id) {
+                    apptainerBuildRunning = false;
+                    _setApptainerBuildButtonState(btn, false);
                     _setUtilityStatus(statusEl, data.error || 'Build failed.', true);
-                } else {
-                    const message = data.output_image ? `Built ${data.output_image}` : 'Build completed';
-                    _setUtilityStatus(statusEl, message, !data.success);
+                    return;
                 }
-                let logText = data.stdout || data.stderr || '';
-                if (data.log_file) {
-                    logText += (logText ? '\n\n' : '') + `Log saved at: ${data.log_file}`;
-                }
-                logEl.innerText = logText;
+                apptainerCurrentBuildId = data.build_id;
+                _setUtilityStatus(statusEl, 'Build started. Streaming logs...', false);
+                await _pollApptainerBuildStatus();
+                _stopApptainerBuildPolling();
+                apptainerBuildPollTimer = setInterval(_pollApptainerBuildStatus, 1500);
             } catch (err) {
+                apptainerBuildRunning = false;
+                _setApptainerBuildButtonState(btn, false);
                 _setUtilityStatus(statusEl, 'Build request failed: ' + err.message, true);
-            } finally {
-                btn.disabled = false;
-                btn.innerText = 'Start Build';
             }
         }
 

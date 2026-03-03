@@ -10,6 +10,7 @@ DOCKER_TAG_OVERRIDE=""
 NO_TEMP_DEL=false
 APPTAINER_BASE_TMPDIR=""
 APPTAINER_RUN_TMPDIR=""
+APPTAINER_RUN_CACHEDIR=""
 
 OUTPUT_SET=false
 TMP_SET=false
@@ -231,8 +232,18 @@ fi
 
 echo "Using per-build temp dir: $APPTAINER_RUN_TMPDIR"
 
-# Set the temporary/cache directory for Apptainer to the per-build folder
-export APPTAINER_CACHEDIR="$APPTAINER_RUN_TMPDIR"
+# Set temporary/cache directories for Apptainer/Singularity to the per-build folder
+APPTAINER_RUN_CACHEDIR="$APPTAINER_RUN_TMPDIR/cache"
+mkdir -p "$APPTAINER_RUN_CACHEDIR" || { echo "Error: Failed to create cache directory '$APPTAINER_RUN_CACHEDIR'."; exit 1; }
+
+export APPTAINER_TMPDIR="$APPTAINER_RUN_TMPDIR"
+export SINGULARITY_TMPDIR="$APPTAINER_RUN_TMPDIR"
+export TMPDIR="$APPTAINER_RUN_TMPDIR"
+
+export APPTAINER_CACHEDIR="$APPTAINER_RUN_CACHEDIR"
+export SINGULARITY_CACHEDIR="$APPTAINER_RUN_CACHEDIR"
+
+echo "Using cache dir:      $APPTAINER_RUN_CACHEDIR"
 
 # --- Dockerfile Branch ---
 if [ -n "$DOCKERFILE" ]; then

@@ -1,0 +1,32 @@
+{
+  "id": "white_matter_dance",
+  "name": "white_matter_dance",
+  "description": "DWI preproc of dance study",
+  "created": "2026-03-03T08:23:27.313014",
+  "last_modified": "2026-03-03T11:11:23.310863",
+  "last_log": "run_20260303_111123.log",
+  "config": {
+    "common": {
+      "bids_folder": "/data/mrivault/_0_STAGING/134/rawdata",
+      "output_folder": "/data/local/134_AF19/derivatives/qsiprep",
+      "tmp_folder": "/data/local/134_AF19/derivatives/qsirecon_temp",
+      "templateflow_dir": "/data/local/templateflow",
+      "fs_license_file": "/data/local/freesurfer/license.txt",
+      "container_engine": "apptainer",
+      "container": "/data/local/container/qsiprep/qsiprep_1.1.1.sif",
+      "container_locked": true,
+      "jobs": 1
+    },
+    "app": {
+      "analysis_level": "participant",
+      "options": [
+        "--output-resolution",
+        "2.3",
+        "--subject-anatomical-reference",
+        "unbiased",
+        "--skip-bids-validation"
+      ],
+      "mounts": []
+    }
+  }
+}

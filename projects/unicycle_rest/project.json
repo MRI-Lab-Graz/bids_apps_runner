@@ -3,8 +3,8 @@
   "name": "UniCycle_rest",
   "description": "Resting state analysis of Cycling intervention study",
   "created": "2026-02-04T08:51:04.034867",
-  "last_modified": "2026-02-04T12:13:02.821810",
-  "last_log": "run_20260204_121302.log",
+  "last_modified": "2026-02-05T10:03:48.676235",
+  "last_log": "run_20260205_100348.log",
   "config": {
     "common": {
       "bids_folder": "/data/mrivault/_2_BACKUP/REPOSITORY/069_BW01/rawdata",
@@ -15,11 +15,15 @@
       "container_engine": "apptainer",
       "container": "/data/local/container/fmriprep/fmriprep_25.2.3.sif",
       "container_locked": true,
-      "jobs": 1
+      "jobs": 4
     },
     "app": {
       "analysis_level": "participant",
-      "options": [],
+      "options": [
+        "--subject-anatomical-reference",
+        "unbiased",
+        "--fs-no-reconall"
+      ],
       "mounts": []
     }
   }

@@ -371,6 +371,17 @@ def get_latest_version_from_dockerhub(repo):
         return None
 
 
+def _strip_container_extension(value):
+    return re.sub(r"\.(sif|simg|img)$", "", value, flags=re.IGNORECASE)
+
+
+def _numeric_version_key(version_text):
+    match = re.match(r"^(\d+(?:\.\d+)*)", version_text)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
 @app.route("/check_container_version", methods=["POST"])
 def check_container_version():
     container_path = request.json.get("container")
@@ -378,11 +389,13 @@ def check_container_version():
         return jsonify({"error": "No container path provided"}), 400
 
     filename = os.path.basename(container_path)
-    # Remove extension first
-    filename_no_ext = os.path.splitext(filename)[0]
+    filename_no_ext = _strip_container_extension(filename)
 
     # Common pattern: appname_version or appname-version
-    match = re.search(r"^([a-zA-Z0-9-]+)[_-](v?\d+\.[\w\.-]+)", filename_no_ext)
+    match = re.search(
+        r"^([a-zA-Z0-9-]+)[_-](v?\d+(?:\.\d+)*(?:[A-Za-z0-9._-]*)?)$",
+        filename_no_ext,
+    )
 
     if not match:
         # Fallback: try to just guess app name from string
@@ -414,10 +427,18 @@ def check_container_version():
 
     if latest_version:
         # Normalize versions for comparison
-        clean_current = current_version.lower().replace(".sif", "").replace(".simg", "")
-        clean_latest = latest_version.lower().lstrip("v")
+        clean_current = _strip_container_extension(current_version.lower()).lstrip("v")
+        clean_latest = _strip_container_extension(latest_version.lower()).lstrip("v")
 
-        is_newer = clean_latest != clean_current
+        if clean_current in ["", "unknown"]:
+            is_newer = False
+        else:
+            current_key = _numeric_version_key(clean_current)
+            latest_key = _numeric_version_key(clean_latest)
+            if current_key and latest_key:
+                is_newer = latest_key > current_key
+            else:
+                is_newer = clean_latest != clean_current
         return jsonify(
             {
                 "app": app_name,
