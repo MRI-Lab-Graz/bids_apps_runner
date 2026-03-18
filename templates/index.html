@@ -1818,7 +1818,21 @@
             document.querySelectorAll('.runner-opt').forEach(el => {
                 const flag = el.dataset.flag;
                 if (el.type === 'checkbox') { if (el.checked) r_args.push(flag); }
-                else if (el.value.trim()) { r_args.push(flag); r_args.push(el.value.trim()); }
+                else if (el.value.trim()) {
+                    if (flag === '--subjects') {
+                        const subjects = el.value
+                            .split(/[\s,]+/)
+                            .map(s => s.trim())
+                            .filter(Boolean);
+                        if (subjects.length > 0) {
+                            r_args.push(flag);
+                            r_args.push(...subjects);
+                        }
+                    } else {
+                        r_args.push(flag);
+                        r_args.push(el.value.trim());
+                    }
+                }
             });
 
             showStatus("🚀 Starting BIDS App Runner...");
@@ -2431,7 +2445,8 @@
             if (subjects) {
                 document.getElementById('runner_subjects').value = subjects;
                 switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
-                showStatus(`Applied ${subjects.split(' ').length} missing subjects to Runner filter.`);
+                const count = subjects.split(/[\s,]+/).filter(Boolean).length;
+                showStatus(`Applied ${count} missing subjects to Runner filter.`);
             }
         }
 

@@ -21,6 +21,7 @@ import multiprocessing
 import concurrent.futures
 import random
 import json
+import re
 from collections import deque
 from typing import Dict, Any
 from argparse import Namespace
@@ -644,7 +645,19 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
 
     # Get subjects
     if args.subjects:
-        subjects = [s if s.startswith("sub-") else f"sub-{s}" for s in args.subjects]
+        expanded = []
+        for raw in args.subjects:
+            expanded.extend([s for s in re.split(r"[\s,]+", str(raw).strip()) if s])
+
+        # Preserve order while removing accidental duplicates.
+        seen = set()
+        subjects = []
+        for s in expanded:
+            subj = s if s.startswith("sub-") else f"sub-{s}"
+            if subj not in seen:
+                seen.add(subj)
+                subjects.append(subj)
+
         logging.info(f"Processing specified subjects: {subjects}")
     else:
         bids_folder = common.get("bids_folder")

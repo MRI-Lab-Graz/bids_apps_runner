@@ -731,6 +731,43 @@ def _terminate_tracked_build(state):
     return _terminate_pid_group(process.pid)
 
 
+def _normalize_runner_args(runner_args):
+    """Normalize runner args, expanding multi-value --subjects inputs safely."""
+    if not isinstance(runner_args, list):
+        return []
+
+    normalized = []
+    i = 0
+    while i < len(runner_args):
+        token = str(runner_args[i]).strip()
+        if not token:
+            i += 1
+            continue
+
+        if token == "--subjects":
+            i += 1
+            subjects = []
+            while i < len(runner_args):
+                value = str(runner_args[i]).strip()
+                if not value:
+                    i += 1
+                    continue
+                if value.startswith("--"):
+                    break
+                subjects.extend([s for s in re.split(r"[\s,]+", value) if s])
+                i += 1
+
+            if subjects:
+                normalized.append("--subjects")
+                normalized.extend(subjects)
+            continue
+
+        normalized.append(token)
+        i += 1
+
+    return normalized
+
+
 def _get_smtp_settings():
     """Load SMTP settings from DATA_DIR/configs/smtp_settings.json with env overrides."""
     file_settings = {}
@@ -2354,7 +2391,7 @@ def run_app():
     data = request.get_json(silent=True) or {}
     config_path = data.get("config_path")
     project_id = data.get("project_id")  # NEW: project context
-    runner_args = data.get("runner_args", [])
+    runner_args = _normalize_runner_args(data.get("runner_args", []))
     notify_email = (data.get("notify_email") or "").strip()
     if not config_path:
         return jsonify({"error": "No config path provided"}), 400
