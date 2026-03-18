@@ -587,6 +587,10 @@ def get_docker_tags():
 # Global state to track if a job was started in this GUI session
 GUI_SESSION_STARTED = False
 
+# Marker propagated to child processes so stop-all can target app-launched jobs.
+APP_LAUNCH_ENV_KEY = "BIDS_APPS_RUNNER_LAUNCHED_BY_GUI"
+APP_LAUNCH_ENV_VALUE = "1"
+
 # Track runner processes launched from this GUI session
 RUN_JOBS = {}
 RUN_JOBS_LOCK = threading.Lock()
@@ -638,11 +642,92 @@ def _terminate_pid_group(pid):
         return False
 
 
+def _iter_proc_pids():
+    """Yield numeric process IDs from /proc."""
+    proc_root = Path("/proc")
+    try:
+        for entry in proc_root.iterdir():
+            if entry.name.isdigit():
+                yield int(entry.name)
+    except Exception:
+        return
+
+
+def _read_proc_cmdline(pid):
+    """Read process command line as a single lowercased string."""
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        if not raw:
+            return ""
+        return raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip().lower()
+    except Exception:
+        return ""
+
+
+def _is_marked_app_process(pid):
+    """Return True when process carries the app launch marker in its environment."""
+    needle = f"{APP_LAUNCH_ENV_KEY}={APP_LAUNCH_ENV_VALUE}".encode("utf-8")
+    try:
+        env_data = Path(f"/proc/{pid}/environ").read_bytes()
+    except Exception:
+        return False
+    return needle in env_data.split(b"\x00")
+
+
+def _find_app_related_pids(include_marked=True):
+    """Find PIDs tied to app-triggered runs for reliable stop behavior."""
+    pids = set()
+    patterns = ["run_bids_apps.py", "prism_runner.py"]
+
+    for pid in _iter_proc_pids():
+        cmdline = _read_proc_cmdline(pid)
+        if not cmdline:
+            continue
+
+        if any(pattern in cmdline for pattern in patterns):
+            pids.add(pid)
+            continue
+
+        if include_marked and _is_marked_app_process(pid):
+            pids.add(pid)
+
+    return pids
+
+
+def _terminate_pid_groups(pids):
+    """Terminate each unique process group represented by the given PID collection."""
+    terminated = 0
+    signaled_groups = set()
+
+    for pid in sorted(set(pids)):
+        try:
+            pgid = os.getpgid(pid)
+        except OSError:
+            continue
+
+        if pgid in signaled_groups:
+            continue
+
+        if _terminate_pid_group(pid):
+            signaled_groups.add(pgid)
+            terminated += 1
+
+    return terminated
+
+
 def _terminate_tracked_run(state):
     process = state.get("process")
     if process is None:
         return False
     state["stop_requested"] = True
+    return _terminate_pid_group(process.pid)
+
+
+def _terminate_tracked_build(state):
+    process = state.get("process")
+    if process is None:
+        return False
+    state["cancel_requested"] = True
     return _terminate_pid_group(process.pid)
 
 
@@ -1029,6 +1114,7 @@ def _prepare_apptainer_build(data):
     build_env["APPTAINER_TMPDIR"] = str(tmp_path)
     build_env["SINGULARITY_TMPDIR"] = str(tmp_path)
     build_env["TMPDIR"] = str(tmp_path)
+    build_env[APP_LAUNCH_ENV_KEY] = APP_LAUNCH_ENV_VALUE
     if cache_dir is not None:
         build_env["APPTAINER_CACHEDIR"] = str(cache_dir)
         build_env["SINGULARITY_CACHEDIR"] = str(cache_dir)
@@ -2426,10 +2512,6 @@ def run_app():
         if runner_args:
             cmd.extend(runner_args)
 
-        # Ensure --nohup is present
-        if "--nohup" not in cmd:
-            cmd.append("--nohup")
-
         # Generate log filename and create output redirection
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_filename = f"run_{timestamp}.log"
@@ -2445,6 +2527,9 @@ def run_app():
             log_f.write(f"[{datetime.now().isoformat()}] Working directory: {work_dir}\n")
             log_f.write("=" * 80 + "\n\n")
             log_f.flush()
+
+            launch_env = os.environ.copy()
+            launch_env[APP_LAUNCH_ENV_KEY] = APP_LAUNCH_ENV_VALUE
             
             # Launch subprocess with output redirected to log file
             process = subprocess.Popen(
@@ -2452,7 +2537,8 @@ def run_app():
                 cwd=str(work_dir),
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
-                preexec_fn=os.setpgrp  # Detach from terminal group
+                preexec_fn=os.setpgrp,  # Detach from terminal group
+                env=launch_env,
             )
 
         run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -2522,16 +2608,10 @@ def kill_job():
                 if _terminate_tracked_run(target):
                     killed += 1
             else:
-                # Fallback for runs not tracked in current GUI memory
-                result = subprocess.run(
-                    ["pgrep", "-f", "scripts/run_bids_apps.py"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                )
-                pids = [p.strip() for p in result.stdout.splitlines() if p.strip()]
-                if pids:
-                    newest_pid = max(int(p) for p in pids)
+                # Fallback for runs not tracked in current GUI memory.
+                candidate_pids = sorted(_find_app_related_pids(include_marked=True))
+                if candidate_pids:
+                    newest_pid = max(candidate_pids)
                     if _terminate_pid_group(newest_pid):
                         killed += 1
 
@@ -2545,24 +2625,19 @@ def kill_job():
             if _terminate_tracked_run(state):
                 killed += 1
 
-        # Also catch any untracked runner processes
-        result = subprocess.run(
-            ["pgrep", "-f", "scripts/run_bids_apps.py"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        pids = [p.strip() for p in result.stdout.splitlines() if p.strip()]
-        for pid in pids:
-            try:
-                if _terminate_pid_group(int(pid)):
-                    killed += 1
-            except ValueError:
-                continue
+        # Include active app-initiated apptainer builds.
+        build_pids = []
+        with APPTAINER_BUILDS_LOCK:
+            for state in APPTAINER_BUILDS.values():
+                process = state.get("process")
+                if process is not None and process.poll() is None:
+                    build_pids.append(process.pid)
+                    _terminate_tracked_build(state)
 
-        # Best effort cleanup for app-initiated containers
-        subprocess.run(["pkill", "-f", "apptainer"], check=False)
-        subprocess.run(["pkill", "-f", "appinit"], check=False)
+        killed += _terminate_pid_groups(build_pids)
+
+        # Catch untracked app-related processes (including inherited container children).
+        killed += _terminate_pid_groups(_find_app_related_pids(include_marked=True))
 
         if killed == 0:
             return jsonify({"message": "No active BIDS App Runner processes found."}), 200
