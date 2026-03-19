@@ -3,8 +3,8 @@
   "name": "white_matter_dance",
   "description": "DWI preproc of dance study",
   "created": "2026-03-03T08:23:27.313014",
-  "last_modified": "2026-03-18T09:15:54.190434",
-  "last_log": "run_20260318_091554.log",
+  "last_modified": "2026-03-19T07:14:55.589640",
+  "last_log": "run_20260319_071455.log",
   "config": {
     "common": {
       "bids_folder": "/data/mrivault/_1_REPOSITORY/134/rawdata",

@@ -387,28 +387,41 @@ def _subject_processed(subject, common, app, force=False):
     success_marker = os.path.join(
         common["output_folder"], ".bids_app_runner", f"{subject}_success.txt"
     )
-    if os.path.exists(success_marker):
-        logging.info(f"Subject '{subject}' already processed (success marker found)")
-        return True
+    marker_exists = os.path.exists(success_marker)
 
     # Check configured output pattern
     pattern = app.get("output_check", {}).get("pattern", "")
+    pattern_matches = []
     if pattern:
         check_dir = os.path.join(
             common["output_folder"], app["output_check"].get("directory", "")
         )
         full_pattern = os.path.join(check_dir, pattern.replace("{subject}", subject))
-        matches = glob.glob(full_pattern)
-        if matches:
+        pattern_matches = glob.glob(full_pattern)
+        if pattern_matches:
             logging.info(
                 f"Subject '{subject}' already processed (output pattern matched)"
             )
             return True
 
     # Generic output detection
-    if _check_generic_output_exists(subject, common):
+    generic_output_exists = _check_generic_output_exists(subject, common)
+    if generic_output_exists:
         logging.info(f"Subject '{subject}' already processed (output found)")
         return True
+
+    # A stale marker can happen when outputs were cleaned up after a previous run.
+    if marker_exists:
+        try:
+            os.remove(success_marker)
+            logging.warning(
+                f"Subject '{subject}' has a stale success marker (no detectable outputs); removed marker and reprocessing"
+            )
+        except Exception as e:
+            logging.warning(
+                f"Subject '{subject}' has a stale success marker (no detectable outputs); could not remove marker: {e}. Reprocessing anyway"
+            )
+        return False
 
     return False
 
