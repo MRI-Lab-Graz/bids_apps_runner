@@ -222,6 +222,21 @@ def _is_qsiprep_container(container_ref):
     return base.startswith("qsiprep")
 
 
+def _is_qsirecon_container(container_ref):
+    """Return True only for QSIRecon container references."""
+    ref = str(container_ref or "").strip().lower()
+    if not ref:
+        return False
+
+    if "/qsirecon:" in ref:
+        return True
+    if ref.startswith("qsirecon:"):
+        return True
+
+    base = os.path.basename(ref)
+    return base.startswith("qsirecon")
+
+
 def _run_container(
     cmd, env=None, dry_run=False, debug=False, subject=None, log_dir=None
 ):
@@ -362,6 +377,11 @@ def _check_generic_output_exists(subject, common):
         os.path.join(output_dir, subject, "anat", f"{subject}_*"),
         os.path.join(output_dir, subject, "dwi", f"{subject}_*"),
         os.path.join(output_dir, f"{subject}.html"),
+        # QSIRecon: outputs go to <output>/qsirecon-<workflow>/sub-X/ (flat)
+        os.path.join(output_dir, "qsirecon-*", subject),
+        # QSIRecon: outputs may also go to <output>/derivatives/qsirecon-<workflow>/sub-X/
+        os.path.join(output_dir, "derivatives", "qsirecon-*", subject),
+        os.path.join(output_dir, "derivatives", "qsirecon-*", f"{subject}_*.html"),
     ]
 
     for pattern in patterns_to_check:
@@ -605,11 +625,15 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
                         common["output_folder"], subject, dry_run
                     )
 
+                # QSIRecon writes large outputs and may need extra time to flush
+                # on network filesystems; use a longer wait for it.
+                max_wait = 300 if _is_qsirecon_container(container_ref) else 90
+
                 output_exists = _wait_for_output_detection(
                     subject,
                     common,
                     app,
-                    max_wait_seconds=90,
+                    max_wait_seconds=max_wait,
                     interval_seconds=5,
                 )
 
@@ -624,7 +648,7 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
                     return True
                 else:
                     logging.warning(
-                        f"Container completed for {subject} but no output detected after waiting 90s"
+                        f"Container completed for {subject} but no output detected after waiting {max_wait}s"
                     )
                     return False
             else:

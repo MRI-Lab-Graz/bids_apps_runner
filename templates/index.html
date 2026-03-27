@@ -153,7 +153,7 @@
                     <div class="section-header">1. Data Locations</div>
                     <div class="row">
                         <div class="col-md-6 mb-4">
-                            <label class="form-label" title="Path to raw BIDS data (must contain dataset_description.json)">BIDS Dataset Folder</label>
+                            <label id="bids_folder_label" class="form-label" title="Path to raw BIDS data (must contain dataset_description.json)">BIDS Dataset Folder</label>
                             <div class="input-group">
                                 <input type="text" id="bids_folder" class="form-control" placeholder="/path/to/rawdata">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('bids_folder')">...</button>
@@ -254,6 +254,85 @@
                                 </div>
                             </div>
                             <div id="versionAlert" style="margin-top: 8px; font-size: 0.85rem; display: none; padding-left: 15px;"></div>
+                        </div>
+                    </div>
+
+                    <!-- QSIRecon-specific panel: shown only when a qsirecon container is selected -->
+                    <div id="qsireconSection" style="display:none;">
+                        <div class="section-header">QSIRecon Settings</div>
+                        <div class="alert alert-info py-2 mb-3" style="font-size:0.88rem;">
+                            <i class="fas fa-info-circle me-1"></i>
+                            <strong>QSIRecon input:</strong> Set the <em>BIDS Dataset Folder</em> above to your
+                            <strong>QSIPrep derivatives folder</strong> (e.g. <code>derivatives/qsiprep</code>),
+                            not the raw BIDS dataset. The Output Folder will receive the QSIRecon results.
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-4">
+                                <label class="form-label" for="qsirecon_recon_spec">
+                                    Reconstruction Workflow (<code>--recon-spec</code>)
+                                    <a href="https://qsirecon.readthedocs.io/en/latest/builtin_workflows.html"
+                                       target="_blank" class="ms-1" style="font-size:0.8rem;" title="Built-in workflows documentation">
+                                        <i class="fas fa-book"></i>
+                                    </a>
+                                </label>
+                                <select id="qsirecon_recon_spec" class="form-select" onchange="updateQsireconFsDir()">
+                                    <option value="">-- select a workflow --</option>
+                                    <optgroup label="MRtrix3 — Multishell">
+                                        <option value="mrtrix_multishell_msmt_ACT-hsvs">mrtrix_multishell_msmt_ACT-hsvs (recommended)</option>
+                                        <option value="mrtrix_multishell_msmt_ACT-fast">mrtrix_multishell_msmt_ACT-fast (not recommended)</option>
+                                        <option value="mrtrix_multishell_msmt_noACT">mrtrix_multishell_msmt_noACT</option>
+                                        <option value="mrtrix_multishell_msmt_pyafq_tractometry">mrtrix_multishell_msmt_pyafq_tractometry</option>
+                                    </optgroup>
+                                    <optgroup label="MRtrix3 — Single-shell (SS3T)">
+                                        <option value="mrtrix_singleshell_ss3t_ACT-hsvs">mrtrix_singleshell_ss3t_ACT-hsvs (recommended)</option>
+                                        <option value="mrtrix_singleshell_ss3t_ACT-fast">mrtrix_singleshell_ss3t_ACT-fast (not recommended)</option>
+                                        <option value="mrtrix_singleshell_ss3t_noACT">mrtrix_singleshell_ss3t_noACT</option>
+                                        <option value="ss3t_fod_autotrack">ss3t_fod_autotrack</option>
+                                    </optgroup>
+                                    <optgroup label="DSI Studio">
+                                        <option value="dsi_studio_gqi">dsi_studio_gqi</option>
+                                        <option value="dsi_studio_autotrack">dsi_studio_autotrack</option>
+                                    </optgroup>
+                                    <optgroup label="Dipy">
+                                        <option value="dipy_mapmri">dipy_mapmri</option>
+                                        <option value="dipy_dki">dipy_dki</option>
+                                        <option value="dipy_3dshore">dipy_3dshore</option>
+                                        <option value="csdsi_3dshore">csdsi_3dshore</option>
+                                    </optgroup>
+                                    <optgroup label="Tractometry">
+                                        <option value="pyafq_tractometry">pyafq_tractometry</option>
+                                    </optgroup>
+                                    <optgroup label="Model fitting">
+                                        <option value="amico_noddi">amico_noddi</option>
+                                        <option value="TORTOISE">TORTOISE</option>
+                                        <option value="hbcd_scalar_maps">hbcd_scalar_maps</option>
+                                        <option value="multishell_scalarfest">multishell_scalarfest</option>
+                                    </optgroup>
+                                    <optgroup label="Utility">
+                                        <option value="reorient_fslstd">reorient_fslstd</option>
+                                    </optgroup>
+                                </select>
+                                <div class="form-text">Required for QSIRecon. Will be added as <code>--recon-spec &lt;workflow&gt;</code>.</div>
+                            </div>
+                            <div class="col-md-6 mb-4" id="qsirecon_fsdir_col" style="display:none;">
+                                <label class="form-label" for="qsirecon_fs_subjects_dir">
+                                    FreeSurfer / FastSurfer Subjects Dir (<code>--fs-subjects-dir</code>)
+                                </label>
+                                <div class="input-group">
+                                    <input type="text" id="qsirecon_fs_subjects_dir" class="form-control"
+                                           placeholder="/data/local/derivatives/fastsurfer">
+                                    <button type="button" class="btn btn-outline-secondary"
+                                            onclick="openBrowser('qsirecon_fs_subjects_dir')">...</button>
+                                </div>
+                                <div class="form-text">
+                                    Required for <code>ACT-hsvs</code> workflows. The directory will be mounted
+                                    read-only into the container and <code>--fs-subjects-dir</code> set automatically.
+                                </div>
+                                <div id="qsirecon_fsdir_warn" class="alert alert-warning py-1 mt-2 mb-0" style="display:none; font-size:0.82rem;">
+                                    <i class="fas fa-exclamation-triangle me-1"></i>
+                                    The selected workflow requires <code>--fs-subjects-dir</code>. Please provide the path above.
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -791,6 +870,48 @@
         let currentDeprecatedFlags = new Set();
         let checkAppVersionRequestId = 0;
 
+        function isQsireconContainer() {
+            const engine = document.getElementById('container_engine').value;
+            let name = '';
+            if (engine === 'docker') {
+                name = (document.getElementById('container_docker_repo').value || '').toLowerCase();
+            } else {
+                name = (document.getElementById('container_select').value || '').toLowerCase();
+            }
+            return name.includes('qsirecon');
+        }
+
+        const QSIRECON_HSVS_WORKFLOWS = new Set([
+            'mrtrix_multishell_msmt_ACT-hsvs',
+            'mrtrix_singleshell_ss3t_ACT-hsvs',
+        ]);
+
+        function updateQsireconFsDir() {
+            const spec = document.getElementById('qsirecon_recon_spec').value;
+            const needsHsvs = QSIRECON_HSVS_WORKFLOWS.has(spec);
+            const col = document.getElementById('qsirecon_fsdir_col');
+            col.style.display = needsHsvs ? '' : 'none';
+            const warn = document.getElementById('qsirecon_fsdir_warn');
+            if (needsHsvs) {
+                const hasPath = document.getElementById('qsirecon_fs_subjects_dir').value.trim();
+                warn.style.display = hasPath ? 'none' : '';
+            } else {
+                warn.style.display = 'none';
+            }
+        }
+
+        function updateQsireconUI() {
+            const isQR = isQsireconContainer();
+            document.getElementById('qsireconSection').style.display = isQR ? '' : 'none';
+            const bidsLabel = document.getElementById('bids_folder_label');
+            if (bidsLabel) {
+                bidsLabel.textContent = isQR
+                    ? 'QSIPrep Derivatives Folder (qsirecon input)'
+                    : 'BIDS Dataset Folder';
+            }
+            if (isQR) updateQsireconFsDir();
+        }
+
         function setNavbarProjectName(name) {
             const container = document.getElementById('navbarProject');
             const nameEl = document.getElementById('navbarProjectName');
@@ -986,11 +1107,23 @@
 
             document.getElementById('custom_args').value = unhandledArgs.join(' ');
 
+            // Restore qsirecon recon-spec from saved options
+            const reconSpecIdx = options.indexOf('--recon-spec');
+            if (reconSpecIdx !== -1 && reconSpecIdx + 1 < options.length) {
+                document.getElementById('qsirecon_recon_spec').value = options[reconSpecIdx + 1];
+            }
+            updateQsireconUI();
+
             if (cfg.app && cfg.app.mounts) {
-                const mountLines = cfg.app.mounts.map(m => `${m.source}:${m.target}`);
+                // Separate out the managed /fssubjects mount from user-defined custom mounts
+                const fsMountEntry = cfg.app.mounts.find(m => m.target === '/fssubjects:ro' || m.target === '/fssubjects');
+                const userMounts = cfg.app.mounts.filter(m => m.target !== '/fssubjects:ro' && m.target !== '/fssubjects');
+                const mountLines = userMounts.map(m => `${m.source}:${m.target}`);
                 document.getElementById('custom_mounts').value = mountLines.join('\n');
+                document.getElementById('qsirecon_fs_subjects_dir').value = fsMountEntry ? fsMountEntry.source : '';
             } else {
                 document.getElementById('custom_mounts').value = '';
+                document.getElementById('qsirecon_fs_subjects_dir').value = '';
             }
 
             if (skippedDeprecated.length > 0) {
@@ -1173,6 +1306,7 @@
                     alertEl.style.display = 'block';
                 }
             } catch (e) {}
+            updateQsireconUI();
         }
 
         async function openBrowser(id) {
@@ -1386,6 +1520,7 @@
                 apptainerFields.style.display = 'block';
                 dockerFields.style.display = 'none';
             }
+            updateQsireconUI();
         }
 
         async function scanContainers() {
@@ -1709,6 +1844,12 @@
                 return;
             }
 
+            // QSIRecon: require a recon-spec
+            if (isQsireconContainer() && !document.getElementById('qsirecon_recon_spec').value) {
+                showStatus('Please select a Reconstruction Workflow (--recon-spec) for QSIRecon.', true);
+                return;
+            }
+
             // Handle standard inputs
             document.querySelectorAll('.dynamic-opt').forEach(el => {
                 if (el.type === 'checkbox') { 
@@ -1754,6 +1895,34 @@
                 args.forEach(a => { if(a) opts.push(a); });
             }
 
+            // QSIRecon: the dropdown is the authoritative source for --recon-spec.
+            // Strip any --recon-spec already collected from dynamic options or custom_args,
+            // then inject the dropdown value so it always wins.
+            if (isQsireconContainer()) {
+                const reconSpec = document.getElementById('qsirecon_recon_spec').value;
+                // Remove existing --recon-spec <value> pair(s)
+                for (let i = opts.length - 1; i >= 0; i--) {
+                    if (opts[i] === '--recon-spec') {
+                        opts.splice(i, 2); // remove flag and its value
+                    }
+                }
+                if (reconSpec) {
+                    opts.push('--recon-spec', reconSpec);
+                }
+
+                // --fs-subjects-dir: remove any existing, then inject from the dedicated field.
+                // The actual bind mount is added to mounts below.
+                const fsDirHost = document.getElementById('qsirecon_fs_subjects_dir').value.trim();
+                for (let i = opts.length - 1; i >= 0; i--) {
+                    if (opts[i] === '--fs-subjects-dir') {
+                        opts.splice(i, 2);
+                    }
+                }
+                if (fsDirHost) {
+                    opts.push('--fs-subjects-dir', '/fssubjects');
+                }
+            }
+
             const mounts = [];
             document.getElementById('custom_mounts').value.split('\n').forEach(line => {
                 const parts = line.trim().split(':');
@@ -1761,6 +1930,17 @@
                     mounts.push({ source: parts[0].trim(), target: parts.slice(1).join(':').trim() });
                 }
             });
+
+            // QSIRecon: add bind mount for --fs-subjects-dir if provided
+            if (isQsireconContainer()) {
+                const fsDirHost = document.getElementById('qsirecon_fs_subjects_dir').value.trim();
+                if (fsDirHost) {
+                    // Remove any existing /fssubjects mount to avoid duplicates
+                    const idx = mounts.findIndex(m => m.target === '/fssubjects');
+                    if (idx !== -1) mounts.splice(idx, 1);
+                    mounts.push({ source: fsDirHost, target: '/fssubjects:ro' });
+                }
+            }
 
             const engine = document.getElementById('container_engine').value;
             let containerPath;

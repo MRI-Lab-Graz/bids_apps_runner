@@ -325,11 +325,14 @@ def check_system_dependencies():
     }
 
 
+SILENT_ENDPOINTS = {"/build_apptainer_status", "/get_log"}
+
 @app.before_request
 def log_request_info():
-    print(
-        f"[GUI] {request.method} {request.path} from {request.remote_addr}", flush=True
-    )
+    if request.path not in SILENT_ENDPOINTS:
+        print(
+            f"[GUI] {request.method} {request.path} from {request.remote_addr}", flush=True
+        )
 
 
 # Common BIDS Apps mapping to Docker Hub repos
@@ -337,6 +340,7 @@ APP_REPO_MAPPING = {
     "mriqc": "nipreps/mriqc",
     "fmriprep": "nipreps/fmriprep",
     "qsiprep": "pennlinc/qsiprep",
+    "qsirecon": "pennlinc/qsirecon",
     "nibabies": "nipreps/nibabies",
     "mritools": "bids/mritools",
     "freesurfer": "freesurfer/freesurfer",
@@ -2142,7 +2146,10 @@ def get_app_help():
         app_name = "BIDS App"
         doc_url = "https://bids-apps.neuroimaging.io/"
         container_lower = os.path.basename(container).lower()
-        if "qsiprep" in container_lower:
+        if "qsirecon" in container_lower:
+            app_name = "QSIRecon"
+            doc_url = "https://qsirecon.readthedocs.io/"
+        elif "qsiprep" in container_lower:
             app_name = "QSIPrep"
             doc_url = "https://qsiprep.readthedocs.io/"
         elif "fmriprep" in container_lower:
@@ -2483,7 +2490,7 @@ def run_app():
         mounts = app_cfg.get("mounts", [])
         container_name = str(common.get("container", "")).lower()
 
-        if "fmriprep" in container_name or "qsiprep" in container_name:
+        if "fmriprep" in container_name or "qsiprep" in container_name or "qsirecon" in container_name:
             fs_license_path = common.get("fs_license_file")
             fs_license_arg = _extract_fs_license_path(options)
 
@@ -2492,7 +2499,7 @@ def run_app():
                     jsonify(
                         {
                             "error": "FreeSurfer license required",
-                            "details": "fMRIPrep/QSIPrep requires a FreeSurfer license. Provide it in the FreeSurfer License File field or add custom args: --fs-license-file /fs/license.txt with an appropriate bind mount.",
+                            "details": "fMRIPrep/QSIPrep/QSIRecon requires a FreeSurfer license. Provide it in the FreeSurfer License File field or add custom args: --fs-license-file /fs/license.txt with an appropriate bind mount.",
                         }
                     ),
                     400,
