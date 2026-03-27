@@ -11,6 +11,7 @@ validation_reports/
 # Configuration and datasets
 config.json
 configs/
+projects/
 cache/
 data/
 missing_qsiprep.json

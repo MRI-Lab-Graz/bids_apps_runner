@@ -421,7 +421,10 @@ def get_dwi_native_resolution():
 
     zooms = _read_nifti_zooms(dwi_file)
     if not zooms:
-        return jsonify({"error": f"Could not read voxel size from: {dwi_file.name}"}), 500
+        return (
+            jsonify({"error": f"Could not read voxel size from: {dwi_file.name}"}),
+            500,
+        )
 
     is_near_isotropic = (max(zooms) - min(zooms)) <= 0.05
     default_resolution = zooms[0] if is_near_isotropic else max(zooms)
@@ -659,7 +662,9 @@ def _read_proc_cmdline(pid):
         raw = Path(f"/proc/{pid}/cmdline").read_bytes()
         if not raw:
             return ""
-        return raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip().lower()
+        return (
+            raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip().lower()
+        )
     except Exception:
         return ""
 
@@ -779,12 +784,23 @@ def _get_smtp_settings():
             if not isinstance(file_settings, dict):
                 file_settings = {}
     except Exception as exc:
-        print(f"[GUI] Failed to read SMTP config file {smtp_config_path}: {exc}", flush=True)
+        print(
+            f"[GUI] Failed to read SMTP config file {smtp_config_path}: {exc}",
+            flush=True,
+        )
         file_settings = {}
 
-    host = (os.environ.get("BIDS_RUNNER_SMTP_HOST") or file_settings.get("host") or "").strip()
-    sender = (os.environ.get("BIDS_RUNNER_SMTP_SENDER") or file_settings.get("sender") or "").strip()
-    username = (os.environ.get("BIDS_RUNNER_SMTP_USERNAME") or file_settings.get("username") or "").strip()
+    host = (
+        os.environ.get("BIDS_RUNNER_SMTP_HOST") or file_settings.get("host") or ""
+    ).strip()
+    sender = (
+        os.environ.get("BIDS_RUNNER_SMTP_SENDER") or file_settings.get("sender") or ""
+    ).strip()
+    username = (
+        os.environ.get("BIDS_RUNNER_SMTP_USERNAME")
+        or file_settings.get("username")
+        or ""
+    ).strip()
     password = os.environ.get("BIDS_RUNNER_SMTP_PASSWORD")
     if password is None:
         password = file_settings.get("password") or ""
@@ -939,10 +955,14 @@ def _run_smtp_diagnostics():
                     server.ehlo()
                     features = dict(server.esmtp_features or {})
                     auth_raw = features.get("auth", "")
-                    auth_methods = [m.strip().upper() for m in auth_raw.split() if m.strip()]
+                    auth_methods = [
+                        m.strip().upper() for m in auth_raw.split() if m.strip()
+                    ]
                     result["auth_methods"] = sorted(list(set(auth_methods)))
                 else:
-                    result["starttls_error"] = "TLS requested but STARTTLS not advertised"
+                    result["starttls_error"] = (
+                        "TLS requested but STARTTLS not advertised"
+                    )
 
             username = settings.get("username")
             if username:
@@ -1030,19 +1050,23 @@ def _monitor_run_job(run_id):
             failure_summary_block = "\nFailure summary:\n- No explicit ERROR/Traceback lines found in the last 30 log lines.\n"
 
     body = (
-        f"Run ID: {run_id}\n"
-        f"Result: {result_label}\n"
-        f"Status: {status_label}\n"
-        f"Return code: {return_code}\n"
-        f"Start time: {started_iso}\n"
-        f"End time: {finished_iso}\n"
-        f"Duration (seconds): {duration_seconds}\n"
-        f"Host: {host_name}\n"
-        f"Project: {project_name}\n"
-        f"Project ID: {project_id or 'N/A'}\n"
-        f"Log file: {log_file or 'N/A'}\n"
-        f"\nCommand:\n{command_text}\n"
-    ) + failure_summary_block + f"\nLast 30 log lines:\n{log_excerpt}\n"
+        (
+            f"Run ID: {run_id}\n"
+            f"Result: {result_label}\n"
+            f"Status: {status_label}\n"
+            f"Return code: {return_code}\n"
+            f"Start time: {started_iso}\n"
+            f"End time: {finished_iso}\n"
+            f"Duration (seconds): {duration_seconds}\n"
+            f"Host: {host_name}\n"
+            f"Project: {project_name}\n"
+            f"Project ID: {project_id or 'N/A'}\n"
+            f"Log file: {log_file or 'N/A'}\n"
+            f"\nCommand:\n{command_text}\n"
+        )
+        + failure_summary_block
+        + f"\nLast 30 log lines:\n{log_excerpt}\n"
+    )
 
     sent, details = _send_run_completion_email(notify_email, subject, body)
     with RUN_JOBS_LOCK:
@@ -1082,7 +1106,12 @@ def _prepare_apptainer_build(data):
     output_dir = (data.get("output_dir") or "").strip()
     tmp_dir = (data.get("tmp_dir") or "").strip()
     if not output_dir or not tmp_dir:
-        return None, (jsonify({"error": "Output directory and temporary directory are required."}), 400)
+        return None, (
+            jsonify(
+                {"error": "Output directory and temporary directory are required."}
+            ),
+            400,
+        )
 
     output_path = Path(os.path.expanduser(output_dir))
     tmp_path = Path(os.path.expanduser(tmp_dir))
@@ -1133,7 +1162,10 @@ def _prepare_apptainer_build(data):
                 ),
             )
         if shutil.which("apptainer") is None:
-            return None, (jsonify({"error": "Apptainer is not available on this host."}), 500)
+            return None, (
+                jsonify({"error": "Apptainer is not available on this host."}),
+                500,
+            )
         per_build_dir = tempfile.mkdtemp(prefix="apptainer_build_", dir=str(tmp_path))
         cache_dir = Path(per_build_dir) / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1696,7 +1728,9 @@ def build_apptainer():
     if error_response:
         return error_response
 
-    build_id = f"build_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    build_id = (
+        f"build_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    )
     with APPTAINER_BUILDS_LOCK:
         APPTAINER_BUILDS[build_id] = {
             "id": build_id,
@@ -1790,7 +1824,13 @@ def build_apptainer_cancel():
         process = state.get("process")
 
         if status != "running":
-            return jsonify({"success": True, "status": status, "message": "Build already finished."})
+            return jsonify(
+                {
+                    "success": True,
+                    "status": status,
+                    "message": "Build already finished.",
+                }
+            )
 
         state["cancel_requested"] = True
 
@@ -1879,10 +1919,7 @@ def get_app_help():
         # Compatibility guard: some apps still list legacy flags in --help
         # without marking them deprecated. If the modern replacement is present,
         # hide the legacy flag from dynamic UI generation.
-        if (
-            "--subject-anatomical-reference" in output
-            and "--longitudinal" in output
-        ):
+        if "--subject-anatomical-reference" in output and "--longitudinal" in output:
             deprecated_flags.add("--longitudinal")
 
         if result.returncode != 0:
@@ -2196,7 +2233,11 @@ def list_dirs():
                 items.append(
                     {"name": child.name, "path": str(child.absolute()), "is_dir": True}
                 )
-            elif include_files and child.is_file() and (include_hidden or not child.name.startswith(".")):
+            elif (
+                include_files
+                and child.is_file()
+                and (include_hidden or not child.name.startswith("."))
+            ):
                 if file_name and child.name != file_name:
                     continue
                 if extensions:
@@ -2379,8 +2420,10 @@ def _map_container_path_to_host(container_path, mounts):
         if not source or not target:
             continue
         target_norm = target.rstrip("/")
-        if container_path == target_norm or container_path.startswith(target_norm + "/"):
-            rel = container_path[len(target_norm):].lstrip("/")
+        if container_path == target_norm or container_path.startswith(
+            target_norm + "/"
+        ):
+            rel = container_path[len(target_norm) :].lstrip("/")
             return os.path.join(source, rel) if rel else source
     return None
 
@@ -2553,24 +2596,26 @@ def run_app():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_filename = f"run_{timestamp}.log"
         log_file_path = work_dir / log_filename
-        
+
         print(f"[GUI] Executing: {' '.join(cmd)} in {work_dir}")
         print(f"[GUI] Logging output to: {log_file_path}")
-        
+
         # Open log file and redirect both stdout and stderr to it
         with open(log_file_path, "w") as log_f:
             # Write command that's being executed for reference
             log_f.write(f"[{datetime.now().isoformat()}] Executing: {' '.join(cmd)}\n")
-            log_f.write(f"[{datetime.now().isoformat()}] Working directory: {work_dir}\n")
+            log_f.write(
+                f"[{datetime.now().isoformat()}] Working directory: {work_dir}\n"
+            )
             log_f.write("=" * 80 + "\n\n")
             log_f.flush()
 
             launch_env = os.environ.copy()
             launch_env[APP_LAUNCH_ENV_KEY] = APP_LAUNCH_ENV_VALUE
-            
+
             # Launch subprocess with output redirected to log file
             process = subprocess.Popen(
-                cmd, 
+                cmd,
                 cwd=str(work_dir),
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
@@ -2578,7 +2623,9 @@ def run_app():
                 env=launch_env,
             )
 
-        run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        run_id = (
+            f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        )
         with RUN_JOBS_LOCK:
             RUN_JOBS[run_id] = {
                 "id": run_id,
@@ -2653,7 +2700,12 @@ def kill_job():
                         killed += 1
 
             if killed == 0:
-                return jsonify({"message": "No active BIDS App Runner process found to stop."}), 200
+                return (
+                    jsonify(
+                        {"message": "No active BIDS App Runner process found to stop."}
+                    ),
+                    200,
+                )
 
             return jsonify({"message": "Stop signal sent to current run."}), 200
 
@@ -2677,9 +2729,19 @@ def kill_job():
         killed += _terminate_pid_groups(_find_app_related_pids(include_marked=True))
 
         if killed == 0:
-            return jsonify({"message": "No active BIDS App Runner processes found."}), 200
+            return (
+                jsonify({"message": "No active BIDS App Runner processes found."}),
+                200,
+            )
 
-        return jsonify({"message": f"Stop signal sent to all runs ({killed} process target(s))."}), 200
+        return (
+            jsonify(
+                {
+                    "message": f"Stop signal sent to all runs ({killed} process target(s))."
+                }
+            ),
+            200,
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2722,7 +2784,6 @@ def check_hpc_environment():
 def generate_hpc_script():
     """Legacy endpoint - script generation now happens client-side."""
     return jsonify({"error": "Script generation is now handled client-side"}), 400
-
 
 
 @app.route("/save_hpc_script", methods=["POST"])

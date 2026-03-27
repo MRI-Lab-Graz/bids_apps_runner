@@ -115,7 +115,9 @@ def _fix_bids_uri_intendedfor_for_subject(bids_folder, subject):
         return 0
 
     fixed_files = 0
-    fmap_jsons = glob.glob(os.path.join(subject_dir, "**", "fmap", "*.json"), recursive=True)
+    fmap_jsons = glob.glob(
+        os.path.join(subject_dir, "**", "fmap", "*.json"), recursive=True
+    )
 
     for json_file in fmap_jsons:
         try:
@@ -152,7 +154,9 @@ def _fix_bids_uri_intendedfor_for_subject(bids_folder, subject):
         if not changed:
             continue
 
-        data["IntendedFor"] = normalized[0] if was_string and len(normalized) == 1 else normalized
+        data["IntendedFor"] = (
+            normalized[0] if was_string and len(normalized) == 1 else normalized
+        )
         try:
             with open(json_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4)
@@ -170,7 +174,9 @@ def _prepare_qsiprep_runtime_bids_view(bids_folder, tmp_dir, subject):
     source_root = os.path.abspath(bids_folder)
     source_subject = os.path.join(source_root, subject_label)
     if not os.path.isdir(source_subject):
-        raise FileNotFoundError(f"Subject folder not found in BIDS dataset: {source_subject}")
+        raise FileNotFoundError(
+            f"Subject folder not found in BIDS dataset: {source_subject}"
+        )
 
     runtime_root = os.path.join(tmp_dir, "bids_runtime")
     os.makedirs(runtime_root, exist_ok=True)
@@ -443,7 +449,9 @@ def _create_success_marker(subject, common):
         return False
 
 
-def _wait_for_output_detection(subject, common, app, max_wait_seconds=90, interval_seconds=5):
+def _wait_for_output_detection(
+    subject, common, app, max_wait_seconds=90, interval_seconds=5
+):
     """Wait briefly for outputs to appear after container exits successfully."""
     deadline = time.time() + max_wait_seconds
 
@@ -516,7 +524,9 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
             bids_mount_source = _prepare_qsiprep_runtime_bids_view(
                 common["bids_folder"], tmp_dir, subject
             )
-            fixed_count = _fix_bids_uri_intendedfor_for_subject(bids_mount_source, subject)
+            fixed_count = _fix_bids_uri_intendedfor_for_subject(
+                bids_mount_source, subject
+            )
             if fixed_count > 0:
                 logging.info(
                     f"Normalized IntendedFor bids:: URIs in runtime BIDS view ({fixed_count} fmap JSON file(s)) for {subject}."
@@ -625,6 +635,7 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
     except Exception as e:
         logging.error(f"Error processing subject {subject}: {e}")
         return False
+
 
 # ============================================================================
 # Main Execution Function

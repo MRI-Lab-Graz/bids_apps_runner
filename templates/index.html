@@ -109,6 +109,11 @@
                             <div id="recentProjectsList" class="list-group">
                                 <div class="list-group-item text-muted">Loading projects...</div>
                             </div>
+                            <div class="mt-3 d-flex gap-2">
+                                <button type="button" class="btn btn-outline-success" onclick="saveCurrentProjectFromProjectsTab()">
+                                    <i class="fas fa-save me-1"></i>Save Loaded Project
+                                </button>
+                            </div>
                             <div class="mt-3">
                                 <label class="form-label">Load Project from File</label>
                                 <div class="input-group">
@@ -913,6 +918,14 @@
             }
         }
 
+        async function saveCurrentProjectFromProjectsTab() {
+            if (!lastProjectId) {
+                showStatus('Load a project first, then save it.', true);
+                return;
+            }
+            await handleSaveAndRun(false);
+        }
+
         function applySavedAppConfig(cfg) {
             const options = (cfg.app && cfg.app.options) ? cfg.app.options : [];
             const unhandledArgs = [];
@@ -1010,6 +1023,15 @@
             document.getElementById('analysis_level').value = app.analysis_level || 'participant';
             document.getElementById('container_engine').value = common.container_engine || 'apptainer';
 
+            // Load saved Check Output settings when present
+            const validation = cfg.validation || {};
+            document.getElementById('validation_bids_folder').value = validation.bids_folder || common.bids_folder || '';
+            document.getElementById('validation_derivatives_folder').value = validation.derivatives_folder || common.output_folder || '';
+            document.getElementById('validation_pipeline').value = validation.pipeline || '';
+            document.getElementById('validation_verbose').checked = !!validation.verbose;
+            document.getElementById('validation_quiet').checked = !!validation.quiet;
+            document.getElementById('validation_missing_only').checked = !!validation.list_missing;
+
             // Load container path based on engine
             const engine = common.container_engine || 'apptainer';
             if (engine === 'docker') {
@@ -1053,7 +1075,6 @@
             }
 
             showStatus(`Loaded project: ${project.name || project.id || 'project'}`);
-            switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
         }
         
         async function deleteProject(projectId) {
@@ -1777,6 +1798,14 @@
                     analysis_level: document.getElementById('analysis_level').value, 
                     options: opts,
                     mounts: mounts 
+                },
+                validation: {
+                    bids_folder: document.getElementById('validation_bids_folder').value.trim(),
+                    derivatives_folder: document.getElementById('validation_derivatives_folder').value.trim(),
+                    pipeline: document.getElementById('validation_pipeline').value,
+                    verbose: document.getElementById('validation_verbose').checked,
+                    quiet: document.getElementById('validation_quiet').checked,
+                    list_missing: document.getElementById('validation_missing_only').checked
                 }
             };
 
@@ -1954,6 +1983,14 @@
                 document.getElementById('jobs').value = cfg.common.jobs || 1;
                 document.getElementById('analysis_level').value = cfg.app.analysis_level || 'participant';
                 document.getElementById('config_name').value = filename;
+
+                const validation = cfg.validation || {};
+                document.getElementById('validation_bids_folder').value = validation.bids_folder || cfg.common.bids_folder || '';
+                document.getElementById('validation_derivatives_folder').value = validation.derivatives_folder || cfg.common.output_folder || '';
+                document.getElementById('validation_pipeline').value = validation.pipeline || '';
+                document.getElementById('validation_verbose').checked = !!validation.verbose;
+                document.getElementById('validation_quiet').checked = !!validation.quiet;
+                document.getElementById('validation_missing_only').checked = !!validation.list_missing;
                 
                 lastSavedPath = `/data/local/software/bids_apps_runner/configs/${filename}`;
                 document.getElementById('runApp').style.display = 'inline-block';

@@ -7,7 +7,6 @@ import json
 import glob
 import subprocess
 import time
-import logging
 
 # Check for GUI dependencies
 try:
@@ -1625,19 +1624,6 @@ def check_hpc_environment():
 def generate_hpc_script():
     """Legacy endpoint - script generation now happens client-side."""
     return jsonify({"error": "Script generation is now handled client-side"}), 400
-
-
-
-
-    except subprocess.CalledProcessError as e:
-        return jsonify({"error": f"Failed to submit job: {e.stderr}"}), 500
-    except FileNotFoundError:
-        return (
-            jsonify({"error": "sbatch not found - SLURM not available on this system"}),
-            400,
-        )
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/get_hpc_job_status", methods=["POST"])
