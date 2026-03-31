@@ -2451,6 +2451,10 @@ def run_app():
         with open(config_path, "r") as f:
             cfg = json.load(f)
 
+        # Handle project.json format — config is nested under "config" key
+        if "config" in cfg and isinstance(cfg["config"], dict) and "common" in cfg["config"]:
+            cfg = cfg["config"]
+
         common = cfg.get("common", {})
         if not notify_email:
             notify_email = str(common.get("notify_email", "")).strip()

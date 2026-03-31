@@ -334,6 +334,89 @@
                                 </div>
                             </div>
                         </div>
+                        <!-- Atlases row: shown for connectivity-producing workflows -->
+                        <div class="row" id="qsirecon_atlases_row" style="display:none;">
+                            <div class="col-12 mb-2">
+                                <label class="form-label mb-1">
+                                    Connectivity Atlases (<code>--atlases</code>)
+                                    <a href="https://qsirecon.readthedocs.io/en/latest/builtin_workflows.html#atlases"
+                                       target="_blank" class="ms-1" style="font-size:0.8rem;" title="Atlas documentation">
+                                        <i class="fas fa-book"></i>
+                                    </a>
+                                </label>
+                                <div class="form-text mb-2" style="font-size:0.82rem;">
+                                    Required for connectivity estimation. ★ = default set recommended by QSIRecon docs.
+                                </div>
+                                <div class="d-flex flex-wrap gap-4 align-items-start">
+                                    <div>
+                                        <div class="fw-semibold mb-1" style="font-size:0.82rem;">4S (Schaefer + subcortical CIT168)</div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_4S156Parcels" value="4S156Parcels" checked>
+                                            <label class="form-check-label" for="atlas_4S156Parcels">4S156 (Sch.100) ★</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_4S256Parcels" value="4S256Parcels" checked>
+                                            <label class="form-check-label" for="atlas_4S256Parcels">4S256 (Sch.200) ★</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_4S356Parcels" value="4S356Parcels">
+                                            <label class="form-check-label" for="atlas_4S356Parcels">4S356 (Sch.300)</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_4S456Parcels" value="4S456Parcels" checked>
+                                            <label class="form-check-label" for="atlas_4S456Parcels">4S456 (Sch.400) ★</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_4S556Parcels" value="4S556Parcels">
+                                            <label class="form-check-label" for="atlas_4S556Parcels">4S556 (Sch.500)</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_4S656Parcels" value="4S656Parcels">
+                                            <label class="form-check-label" for="atlas_4S656Parcels">4S656 (Sch.600)</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_4S756Parcels" value="4S756Parcels">
+                                            <label class="form-check-label" for="atlas_4S756Parcels">4S756 (Sch.700)</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_4S856Parcels" value="4S856Parcels">
+                                            <label class="form-check-label" for="atlas_4S856Parcels">4S856 (Sch.800)</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_4S956Parcels" value="4S956Parcels">
+                                            <label class="form-check-label" for="atlas_4S956Parcels">4S956 (Sch.900)</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_4S1056Parcels" value="4S1056Parcels">
+                                            <label class="form-check-label" for="atlas_4S1056Parcels">4S1056 (Sch.1000)</label>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div class="fw-semibold mb-1" style="font-size:0.82rem;">Classic atlases</div>
+                                        <div class="form-check">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_Brainnetome246Ext" value="Brainnetome246Ext" checked>
+                                            <label class="form-check-label" for="atlas_Brainnetome246Ext">Brainnetome246Ext ★</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_AICHA384Ext" value="AICHA384Ext" checked>
+                                            <label class="form-check-label" for="atlas_AICHA384Ext">AICHA384Ext ★</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_Gordon333Ext" value="Gordon333Ext" checked>
+                                            <label class="form-check-label" for="atlas_Gordon333Ext">Gordon333Ext ★</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input qsirecon-atlas" type="checkbox" id="atlas_AAL116" value="AAL116" checked>
+                                            <label class="form-check-label" for="atlas_AAL116">AAL116 ★</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="qsirecon_atlases_warn" class="alert alert-warning py-1 mt-2 mb-0" style="display:none; font-size:0.82rem;">
+                                    <i class="fas fa-exclamation-triangle me-1"></i>
+                                    At least one atlas must be selected for connectivity estimation.
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div id="dynamicOptionsSection" style="display: none;">
@@ -886,8 +969,22 @@
             'mrtrix_singleshell_ss3t_ACT-hsvs',
         ]);
 
+        // Workflows that perform connectivity matrix estimation and require --atlases
+        const QSIRECON_CONNECTIVITY_WORKFLOWS = new Set([
+            'mrtrix_multishell_msmt_ACT-hsvs',
+            'mrtrix_multishell_msmt_ACT-fast',
+            'mrtrix_multishell_msmt_noACT',
+            'mrtrix_singleshell_ss3t_ACT-hsvs',
+            'mrtrix_singleshell_ss3t_ACT-fast',
+            'mrtrix_singleshell_ss3t_noACT',
+            'dsi_studio_gqi',
+            'hbcd_scalar_maps',
+        ]);
+
         function updateQsireconFsDir() {
             const spec = document.getElementById('qsirecon_recon_spec').value;
+
+            // Show/hide --fs-subjects-dir field (ACT-hsvs only)
             const needsHsvs = QSIRECON_HSVS_WORKFLOWS.has(spec);
             const col = document.getElementById('qsirecon_fsdir_col');
             col.style.display = needsHsvs ? '' : 'none';
@@ -897,6 +994,18 @@
                 warn.style.display = hasPath ? 'none' : '';
             } else {
                 warn.style.display = 'none';
+            }
+
+            // Show/hide atlases row (connectivity workflows)
+            const needsAtlases = QSIRECON_CONNECTIVITY_WORKFLOWS.has(spec);
+            const atlasRow = document.getElementById('qsirecon_atlases_row');
+            atlasRow.style.display = needsAtlases ? '' : 'none';
+            const atlasWarn = document.getElementById('qsirecon_atlases_warn');
+            if (needsAtlases) {
+                const anyChecked = document.querySelectorAll('.qsirecon-atlas:checked').length > 0;
+                atlasWarn.style.display = anyChecked ? 'none' : '';
+            } else {
+                atlasWarn.style.display = 'none';
             }
         }
 
@@ -1112,6 +1221,21 @@
             if (reconSpecIdx !== -1 && reconSpecIdx + 1 < options.length) {
                 document.getElementById('qsirecon_recon_spec').value = options[reconSpecIdx + 1];
             }
+
+            // Restore qsirecon atlases from saved options
+            const atlasIdx = options.indexOf('--atlases');
+            if (atlasIdx !== -1) {
+                // Collect all non-flag values following --atlases
+                const savedAtlases = new Set();
+                for (let i = atlasIdx + 1; i < options.length && !options[i].startsWith('-'); i++) {
+                    savedAtlases.add(options[i]);
+                }
+                document.querySelectorAll('.qsirecon-atlas').forEach(cb => {
+                    cb.checked = savedAtlases.has(cb.value);
+                });
+            }
+            // (if --atlases not in saved options, keep the default checked state from HTML)
+
             updateQsireconUI();
 
             if (cfg.app && cfg.app.mounts) {
@@ -1920,6 +2044,22 @@
                 }
                 if (fsDirHost) {
                     opts.push('--fs-subjects-dir', '/fssubjects');
+                }
+
+                // --atlases: strip existing (may span multiple non-flag values), then inject checked atlases.
+                for (let i = opts.length - 1; i >= 0; i--) {
+                    if (opts[i] === '--atlases') {
+                        let j = i + 1;
+                        while (j < opts.length && !opts[j].startsWith('-')) j++;
+                        opts.splice(i, j - i);
+                    }
+                }
+                const spec = document.getElementById('qsirecon_recon_spec').value;
+                if (QSIRECON_CONNECTIVITY_WORKFLOWS.has(spec)) {
+                    const checkedAtlases = [...document.querySelectorAll('.qsirecon-atlas:checked')].map(cb => cb.value);
+                    if (checkedAtlases.length > 0) {
+                        opts.push('--atlases', ...checkedAtlases);
+                    }
                 }
             }
 
