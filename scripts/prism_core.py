@@ -61,7 +61,24 @@ def read_config(config_path: str) -> Dict[str, Any]:
         FileNotFoundError: If config file doesn't exist
         json.JSONDecodeError: If config file is invalid JSON
     """
-    config_file = Path(config_path)
+    config_file = Path(os.path.expanduser(config_path))
+
+    # Resolve relative paths from common runtime locations.
+    # The GUI can launch from a project log folder while passing a path such as
+    # "projects/<id>/project.json", so we also try paths relative to the
+    # scripts directory and its parent (application root).
+    if not config_file.is_absolute() and not config_file.exists():
+        scripts_dir = Path(__file__).resolve().parent
+        app_root = scripts_dir.parent
+        candidates = [
+            Path.cwd() / config_file,
+            scripts_dir / config_file,
+            app_root / config_file,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                config_file = candidate
+                break
 
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
@@ -75,7 +92,7 @@ def read_config(config_path: str) -> Dict[str, Any]:
             logging.debug("Detected project.json format, extracting nested config")
             config = config["config"]
 
-    logging.info(f"Loaded configuration from: {config_path}")
+    logging.info(f"Loaded configuration from: {config_file}")
     return config
 
 

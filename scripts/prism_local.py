@@ -237,6 +237,36 @@ def _is_qsirecon_container(container_ref):
     return base.startswith("qsirecon")
 
 
+def _is_mriqc_container(container_ref):
+    """Return True only for MRIQC container references."""
+    ref = str(container_ref or "").strip().lower()
+    if not ref:
+        return False
+
+    if "/mriqc:" in ref:
+        return True
+    if ref.startswith("mriqc:"):
+        return True
+
+    base = os.path.basename(ref)
+    return base.startswith("mriqc")
+
+
+def _ensure_mriqc_no_sub_option(container_ref, options):
+    """Ensure MRIQC does not fail on network upload timeout by default."""
+    opts = [str(x) for x in (options or [])]
+    if not _is_mriqc_container(container_ref):
+        return opts
+
+    if "--no-sub" in opts:
+        return opts
+
+    # Disable uploading anonymous metrics unless user explicitly opted out of this behavior.
+    opts.append("--no-sub")
+    logging.info("MRIQC detected: auto-appending --no-sub to disable metrics upload")
+    return opts
+
+
 def _run_container(
     cmd, env=None, dry_run=False, debug=False, subject=None, log_dir=None
 ):
@@ -370,18 +400,36 @@ def _check_generic_output_exists(subject, common):
     """Check for generic output patterns that most BIDS apps produce."""
     output_dir = common["output_folder"]
 
+    subject_raw = str(subject).strip()
+    subject_no_prefix = (
+        subject_raw[4:] if subject_raw.startswith("sub-") else subject_raw
+    )
+    subject_with_prefix = f"sub-{subject_no_prefix}"
+
     patterns_to_check = [
-        os.path.join(output_dir, subject),
-        os.path.join(output_dir, "derivatives", "*", subject),
-        os.path.join(output_dir, subject, "func", f"{subject}_*"),
-        os.path.join(output_dir, subject, "anat", f"{subject}_*"),
-        os.path.join(output_dir, subject, "dwi", f"{subject}_*"),
-        os.path.join(output_dir, f"{subject}.html"),
+        os.path.join(output_dir, subject_raw),
+        os.path.join(output_dir, subject_with_prefix),
+        os.path.join(output_dir, "derivatives", "*", subject_raw),
+        os.path.join(output_dir, "derivatives", "*", subject_with_prefix),
+        os.path.join(output_dir, subject_raw, "func", f"{subject_raw}_*"),
+        os.path.join(output_dir, subject_with_prefix, "func", f"{subject_with_prefix}_*"),
+        os.path.join(output_dir, subject_raw, "anat", f"{subject_raw}_*"),
+        os.path.join(output_dir, subject_with_prefix, "anat", f"{subject_with_prefix}_*"),
+        os.path.join(output_dir, subject_raw, "dwi", f"{subject_raw}_*"),
+        os.path.join(output_dir, subject_with_prefix, "dwi", f"{subject_with_prefix}_*"),
+        os.path.join(output_dir, f"{subject_raw}.html"),
+        os.path.join(output_dir, f"{subject_with_prefix}.html"),
+        # MRIQC often emits modality reports as <sub-XXX>_*.html at output root.
+        os.path.join(output_dir, f"{subject_raw}_*.html"),
+        os.path.join(output_dir, f"{subject_with_prefix}_*.html"),
         # QSIRecon: outputs go to <output>/qsirecon-<workflow>/sub-X/ (flat)
-        os.path.join(output_dir, "qsirecon-*", subject),
+        os.path.join(output_dir, "qsirecon-*", subject_raw),
+        os.path.join(output_dir, "qsirecon-*", subject_with_prefix),
         # QSIRecon: outputs may also go to <output>/derivatives/qsirecon-<workflow>/sub-X/
-        os.path.join(output_dir, "derivatives", "qsirecon-*", subject),
-        os.path.join(output_dir, "derivatives", "qsirecon-*", f"{subject}_*.html"),
+        os.path.join(output_dir, "derivatives", "qsirecon-*", subject_raw),
+        os.path.join(output_dir, "derivatives", "qsirecon-*", subject_with_prefix),
+        os.path.join(output_dir, "derivatives", "qsirecon-*", f"{subject_raw}_*.html"),
+        os.path.join(output_dir, "derivatives", "qsirecon-*", f"{subject_with_prefix}_*.html"),
     ]
 
     for pattern in patterns_to_check:
@@ -391,14 +439,15 @@ def _check_generic_output_exists(subject, common):
             return True
 
     # Check if subject directory exists and is non-empty
-    subject_dir = os.path.join(output_dir, subject)
-    if os.path.isdir(subject_dir):
-        try:
-            for root, dirs, files in os.walk(subject_dir):
-                if files:
-                    return True
-        except Exception:
-            pass
+    for candidate_subject in [subject_raw, subject_with_prefix]:
+        subject_dir = os.path.join(output_dir, candidate_subject)
+        if os.path.isdir(subject_dir):
+            try:
+                for root, dirs, files in os.walk(subject_dir):
+                    if files:
+                        return True
+            except Exception:
+                pass
 
     return False
 
@@ -419,11 +468,25 @@ def _subject_processed(subject, common, app, force=False):
     pattern = app.get("output_check", {}).get("pattern", "")
     pattern_matches = []
     if pattern:
+        subject_raw = str(subject).strip()
+        subject_no_prefix = (
+            subject_raw[4:] if subject_raw.startswith("sub-") else subject_raw
+        )
+        subject_with_prefix = f"sub-{subject_no_prefix}"
+
         check_dir = os.path.join(
             common["output_folder"], app["output_check"].get("directory", "")
         )
-        full_pattern = os.path.join(check_dir, pattern.replace("{subject}", subject))
-        pattern_matches = glob.glob(full_pattern)
+        pattern_variants = {
+            pattern.replace("{subject}", subject_raw),
+            pattern.replace("{subject}", subject_no_prefix),
+            pattern.replace("{subject}", subject_with_prefix),
+        }
+        for pattern_variant in pattern_variants:
+            full_pattern = os.path.join(check_dir, pattern_variant)
+            pattern_matches.extend(glob.glob(full_pattern))
+
+        pattern_matches = list(set(pattern_matches))
         if pattern_matches:
             logging.info(
                 f"Subject '{subject}' already processed (output pattern matched)"
@@ -481,15 +544,26 @@ def _wait_for_output_detection(
         if not output_exists:
             pattern = app.get("output_check", {}).get("pattern", "")
             if pattern:
+                subject_raw = str(subject).strip()
+                subject_no_prefix = (
+                    subject_raw[4:] if subject_raw.startswith("sub-") else subject_raw
+                )
+                subject_with_prefix = f"sub-{subject_no_prefix}"
+
                 check_dir = os.path.join(
                     common["output_folder"],
                     app["output_check"].get("directory", ""),
                 )
-                full_pattern = os.path.join(
-                    check_dir, pattern.replace("{subject}", subject)
-                )
-                matches = glob.glob(full_pattern)
-                output_exists = len(matches) > 0
+                pattern_variants = {
+                    pattern.replace("{subject}", subject_raw),
+                    pattern.replace("{subject}", subject_no_prefix),
+                    pattern.replace("{subject}", subject_with_prefix),
+                }
+                for pattern_variant in pattern_variants:
+                    full_pattern = os.path.join(check_dir, pattern_variant)
+                    if glob.glob(full_pattern):
+                        output_exists = True
+                        break
 
         if output_exists:
             return True
@@ -593,8 +667,9 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
         # Add common BIDS app arguments
         cmd.extend(["/bids", "/output", app.get("analysis_level", "participant")])
 
-        if app.get("options"):
-            cmd.extend(app["options"])
+        app_options = _ensure_mriqc_no_sub_option(container_ref, app.get("options", []))
+        if app_options:
+            cmd.extend(app_options)
 
         # Ensure FreeSurfer license is passed if provided
         fs_license_file = common.get("fs_license_file")

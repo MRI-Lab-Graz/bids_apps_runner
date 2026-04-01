@@ -198,12 +198,41 @@ python scripts/run_bids_apps.py -x configs/config.json --pilot --dry-run
 python scripts/run_bids_apps.py -x configs/config.json --pilot --debug
 ```
 
+### Pilot Resource Estimation (CPU/GPU/RAM)
+
+```bash
+# Auto-sweep CPU from 2 to detected max cores (default behavior)
+python scripts/pilot_resource_estimator.py \
+   --config configs/134_qsiprep.json \
+   --subject sub-134001
+
+# Use bounded auto-sweep (faster on large machines)
+python scripts/pilot_resource_estimator.py \
+   --config configs/134_qsiprep.json \
+   --subject sub-134001 \
+   --nprocs-min 2 --nprocs-max 32 --nprocs-step 2
+
+# Or force explicit sweep points
+python scripts/pilot_resource_estimator.py \
+   --config configs/134_qsiprep.json \
+   --subject sub-134001 \
+   --nprocs 4,8,16,24
+
+# Output report is written to logs/pilot_resource_estimator_*/pilot_resource_report.md
+```
+
+The estimator runs the same subject with different CPU settings, measures wall time,
+peak memory, and GPU activity (if nvidia-smi is available), and writes a suggested
+HPC block (`cpus`, `mem`, `time`, and optional `sbatch_gres`).
+
 ## Browser-based GUI
 
 The project ships with a lightweight Flask/Waitress application (`prism_app_runner.py` plus `templates/index.html`) so you can build configurations and drive `scripts/run_bids_apps.py` from a browser. Launch the GUI with `bash gui/start_gui.sh` (or `python prism_app_runner.py`) and point your browser at `http://localhost:8080` to:
 
 - scan a directory for Apptainer/Singularity images, check for newer releases, and load container-specific help automatically
 - assemble BIDS, derivatives, and temp folders along with runner overrides (subjects, pilot, dry-run, validation, etc.)
+- run pilot resource estimation from the Run App tab and generate recommended CPU/RAM/GPU settings
+- apply an optional per-run CPU cap (max usage %) to leave headroom for other containers on the same host
 - create new directories and browse your filesystem directly from the interface
 - stay updated with live Docker pull progress and system dependency badges
 - peek at live runner logs, start/stop the background job, and reuse previously saved configs

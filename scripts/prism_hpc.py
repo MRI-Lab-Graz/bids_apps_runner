@@ -21,6 +21,35 @@ from argparse import Namespace
 from prism_core import get_subjects_from_bids, run_command
 import prism_datalad
 
+
+def _is_mriqc_container(container_ref):
+    """Return True only for MRIQC container references."""
+    ref = str(container_ref or "").strip().lower()
+    if not ref:
+        return False
+
+    if "/mriqc:" in ref:
+        return True
+    if ref.startswith("mriqc:"):
+        return True
+
+    base = os.path.basename(ref)
+    return base.startswith("mriqc")
+
+
+def _ensure_mriqc_no_sub_option(container_ref, options):
+    """Ensure MRIQC does not fail on network upload timeout by default."""
+    opts = [str(x) for x in (options or [])]
+    if not _is_mriqc_container(container_ref):
+        return opts
+
+    if "--no-sub" in opts:
+        return opts
+
+    opts.append("--no-sub")
+    logging.info("MRIQC detected: auto-appending --no-sub to disable metrics upload")
+    return opts
+
 # ============================================================================
 # SLURM Job Management Functions
 # ============================================================================
@@ -86,6 +115,22 @@ echo ""
 
 # Load modules
 """
+
+        # Add additional SBATCH directives from hpc config.
+        # Example: "sbatch_gres": "gpu:1" -> #SBATCH --gres=gpu:1
+        for key, value in hpc.items():
+            if not key.startswith("sbatch_"):
+                continue
+            if value in (None, "", False):
+                continue
+
+            directive = key.replace("sbatch_", "").replace("_", "-")
+            if value is True:
+                script_content += f"#SBATCH --{directive}\n"
+            else:
+                script_content += f"#SBATCH --{directive}={value}\n"
+
+        script_content += "\n"
 
         # Add module loads
         for module in hpc.get("modules", []):
@@ -168,7 +213,8 @@ apptainer run \\"""
     /bids /output {app.get("analysis_level", "participant")} \\"""
 
         # Add app options
-        for option in app.get("options", []):
+        app_options = _ensure_mriqc_no_sub_option(common.get("container", ""), app.get("options", []))
+        for option in app_options:
             script_content += f"\n    {option} \\"
 
         # Clean subject label (remove sub- prefix if present)

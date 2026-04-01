@@ -46,6 +46,8 @@ Editable in the GUI under Advanced: SLURM Settings:
 - modules (list)
 - environment (JSON map)
 - monitor_jobs (boolean)
+- optional custom SBATCH directives via keys prefixed with ``sbatch_``
+  (for example ``sbatch_gres: gpu:1``)
 
 Example
 -------
@@ -76,6 +78,7 @@ Example
        "job_name": "fmriprep",
        "output_pattern": "slurm-%j.out",
        "error_pattern": "slurm-%j.err",
+       "sbatch_gres": "gpu:1",
        "modules": ["apptainer/1.2.0"],
        "environment": {"APPTAINER_CACHEDIR": "/tmp/.apptainer"},
        "monitor_jobs": true

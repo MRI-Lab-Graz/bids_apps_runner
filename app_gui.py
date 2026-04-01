@@ -5,6 +5,7 @@ import platform
 import sys
 import json
 import glob
+import copy
 import subprocess
 import time
 
@@ -131,6 +132,26 @@ PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
 APPTAINER_BUILDS = {}
 APPTAINER_BUILDS_LOCK = threading.Lock()
+
+
+def resolve_config_path(config_path: str) -> Path:
+    """Resolve config paths across common runtime locations."""
+    cfg = Path(os.path.expanduser(config_path))
+    if cfg.is_absolute() and cfg.exists():
+        return cfg
+    if cfg.exists():
+        return cfg.resolve()
+
+    candidates = [
+        DATA_DIR / cfg,
+        BASE_DIR / cfg,
+        (BASE_DIR / "scripts") / cfg,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+
+    raise FileNotFoundError(f"Config file not found: {config_path}")
 
 
 class ProjectManager:
@@ -317,6 +338,7 @@ def check_system_dependencies():
         "apptainer": shutil.which("apptainer") is not None,
         "singularity": shutil.which("singularity") is not None,
         "datalad": shutil.which("datalad") is not None,
+        "slurm": shutil.which("sbatch") is not None,
     }
 
 
@@ -358,6 +380,79 @@ def _record_build_log(path, command, stdout, stderr):
             logf.write((stderr or "<no errors>") + "\n")
     except OSError:
         pass
+
+
+def _extract_runtime_config(cfg: dict) -> dict:
+    """Return the runnable config payload from either config.json or project.json."""
+    if isinstance(cfg, dict) and isinstance(cfg.get("config"), dict):
+        return cfg["config"]
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _drop_flag_with_value(options, flag):
+    cleaned = []
+    i = 0
+    while i < len(options):
+        token = str(options[i])
+        if token == flag:
+            i += 2
+            continue
+        if token.startswith(flag + "="):
+            i += 1
+            continue
+        cleaned.append(token)
+        i += 1
+    return cleaned
+
+
+def _apply_max_usage_cap(runtime_cfg: dict, percent: int):
+    """Apply CPU cap to a runtime config without mutating the original object."""
+    capped = copy.deepcopy(runtime_cfg)
+
+    max_cores = os.cpu_count() or 1
+    allowed_cores = max(1, int(max_cores * (float(percent) / 100.0)))
+
+    common = capped.setdefault("common", {})
+    current_jobs = common.get("jobs", 1)
+    try:
+        current_jobs = int(current_jobs)
+    except (TypeError, ValueError):
+        current_jobs = 1
+    common["jobs"] = max(1, min(current_jobs, allowed_cores))
+
+    app_cfg = capped.setdefault("app", {})
+    options = [str(x) for x in app_cfg.get("options", [])]
+    cpu_flags = ["--nprocs", "--nthreads", "--n_cpus", "--n-cpus"]
+    for flag in cpu_flags:
+        options = _drop_flag_with_value(options, flag)
+
+    options.extend(["--nprocs", str(allowed_cores)])
+    app_cfg["options"] = options
+
+    return capped, allowed_cores, max_cores
+
+
+def _get_total_memory_bytes():
+    """Best-effort total memory detection without external dependencies."""
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        phys_pages = os.sysconf("SC_PHYS_PAGES")
+        if page_size and phys_pages and page_size > 0 and phys_pages > 0:
+            return int(page_size) * int(phys_pages)
+    except (AttributeError, OSError, ValueError):
+        pass
+
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    parts = line.split()
+                    # MemTotal is in KiB
+                    return int(parts[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+
+    return None
 
 
 def get_latest_version_from_dockerhub(repo):
@@ -665,6 +760,22 @@ def health():
 def check_system():
     """Endpoint to check system dependencies."""
     return jsonify(check_system_dependencies())
+
+
+@app.route("/system_resources", methods=["GET"])
+def system_resources():
+    """Return lightweight host resource info for GUI defaults."""
+    mem_bytes = _get_total_memory_bytes()
+    mem_gib = round(mem_bytes / (1024**3), 2) if mem_bytes is not None else None
+    return jsonify(
+        {
+            "cpu_count": os.cpu_count() or 1,
+            "memory_total_bytes": mem_bytes,
+            "memory_total_gib": mem_gib,
+            "gpu_available": shutil.which("nvidia-smi") is not None,
+            "slurm_available": shutil.which("sbatch") is not None,
+        }
+    )
 
 
 @app.route("/list_reports", methods=["POST"])
@@ -1066,9 +1177,13 @@ def build_apptainer():
             f"docker://{docker_repo}:{docker_tag}",
         ]
 
+    cache_dir = tmp_path / "apptainer_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
     build_env["APPTAINER_TMPDIR"] = str(tmp_path)
     build_env["SINGULARITY_TMPDIR"] = str(tmp_path)
     build_env["TMPDIR"] = str(tmp_path)
+    build_env["APPTAINER_CACHEDIR"] = str(cache_dir)
+    build_env["SINGULARITY_CACHEDIR"] = str(cache_dir)
 
     build_id = (
         f"build_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -1460,6 +1575,9 @@ def list_dirs():
     path = request.json.get("path", "/")
     if not path:
         path = "/"
+    include_files = bool(request.json.get("include_files", False))
+    extensions = request.json.get("extensions") or []
+    include_hidden = bool(request.json.get("include_hidden", False))
 
     try:
         p = Path(path)
@@ -1473,10 +1591,17 @@ def list_dirs():
             items.append({"name": "..", "path": str(p.parent), "is_dir": True})
 
         for child in sorted(p.iterdir()):
-            if child.is_dir() and not child.name.startswith("."):
+            if not include_hidden and child.name.startswith("."):
+                continue
+            if child.is_dir():
                 items.append(
                     {"name": child.name, "path": str(child.absolute()), "is_dir": True}
                 )
+            elif include_files:
+                if not extensions or any(child.name.endswith(ext) for ext in extensions):
+                    items.append(
+                        {"name": child.name, "path": str(child.absolute()), "is_dir": False}
+                    )
         return jsonify({"current_path": str(p.absolute()), "items": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1571,11 +1696,11 @@ def save_config():
                 return jsonify({"error": f"Project {project_id} not found"}), 404
 
             project = ProjectManager.load_project(project_id)
-            config_path = f"projects/{project_id}/project.json"
+            config_path = (PROJECTS_DIR / project_id / "project.json").resolve()
             return jsonify(
                 {
                     "message": "Project config saved successfully",
-                    "path": config_path,
+                    "path": str(config_path),
                     "project": project,
                 }
             )
@@ -1608,18 +1733,33 @@ def save_config():
 @app.route("/run_app", methods=["POST"])
 def run_app():
     global GUI_SESSION_STARTED
-    config_path = request.json.get("config_path")
-    project_id = request.json.get("project_id")  # NEW: project context
-    runner_args = request.json.get("runner_args", [])
-    if not config_path:
+    req = request.get_json(silent=True) or {}
+    config_path_raw = req.get("config_path")
+    project_id = req.get("project_id")  # NEW: project context
+    runner_args = req.get("runner_args", [])
+    max_usage_enabled = bool(req.get("max_usage_enabled", False))
+    max_usage_percent = req.get("max_usage_percent", 100)
+    if not config_path_raw:
         return jsonify({"error": "No config path provided"}), 400
 
     try:
+        config_path = resolve_config_path(config_path_raw)
+
+        # 0. Determine working directory (project-specific if available)
+        if project_id:
+            work_dir = PROJECTS_DIR / project_id / "logs"
+            work_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            work_dir = DATA_DIR
+            work_dir.mkdir(parents=True, exist_ok=True)
+
         # 1. Path Validation
         with open(config_path, "r") as f:
-            cfg = json.load(f)
+            cfg_raw = json.load(f)
 
-        common = cfg.get("common", {})
+        runtime_cfg = _extract_runtime_config(cfg_raw)
+        common = runtime_cfg.get("common", {})
+
         paths_to_check = {
             "BIDS Folder": common.get("bids_folder"),
             "Container Image": common.get("container"),
@@ -1676,14 +1816,42 @@ def run_app():
                 400,
             )
 
-        # 2. Determine working directory (project-specific if available)
-        if project_id:
-            work_dir = PROJECTS_DIR / project_id / "logs"
-            work_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            work_dir = DATA_DIR
+        runtime_config_path = config_path
+        runtime_note = ""
 
-        # 2. Launch run_bids_apps.py in background
+        # 3. Optional per-run CPU usage cap to leave resources free for other tasks.
+        if max_usage_enabled:
+            try:
+                max_usage_percent = int(max_usage_percent)
+            except (TypeError, ValueError):
+                return jsonify({"error": "max_usage_percent must be an integer"}), 400
+
+            if max_usage_percent < 10 or max_usage_percent > 100:
+                return (
+                    jsonify({"error": "max_usage_percent must be between 10 and 100"}),
+                    400,
+                )
+
+            capped_cfg, allowed_cores, host_cores = _apply_max_usage_cap(
+                runtime_cfg, max_usage_percent
+            )
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            runtime_config_path = work_dir / f"runtime_config_capped_{timestamp}.json"
+            with open(runtime_config_path, "w", encoding="utf-8") as f:
+                json.dump(capped_cfg, f, indent=2)
+
+            runtime_note = (
+                f" Resource cap enabled: {max_usage_percent}% of {host_cores} cores "
+                f"-> using up to {allowed_cores} core(s)."
+            )
+        elif runtime_cfg is not cfg_raw:
+            # project.json wrapper case: write a plain runtime config for execution
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            runtime_config_path = work_dir / f"runtime_config_{timestamp}.json"
+            with open(runtime_config_path, "w", encoding="utf-8") as f:
+                json.dump(runtime_cfg, f, indent=2)
+
+        # 4. Launch run_bids_apps.py in background
         if getattr(sys, "frozen", False):
             script_path = BUNDLE_DIR / "scripts" / "run_bids_apps.py"
         else:
@@ -1694,7 +1862,7 @@ def run_app():
             PYTHON_EXE,
             str(script_path),
             "-c",
-            str(config_path),
+            str(runtime_config_path),
         ]
 
         # Append runner arguments from UI
@@ -1719,7 +1887,92 @@ def run_app():
 
         return jsonify(
             {
-                "message": f"BIDS App Runner started in background. Command: {' '.join(cmd)}"
+                "message": f"BIDS App Runner started in background. Command: {' '.join(cmd)}{runtime_note}"
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/run_pilot_estimator", methods=["POST"])
+def run_pilot_estimator():
+    """Launch pilot_resource_estimator.py in background from the GUI."""
+    req = request.get_json(silent=True) or {}
+    config_path_raw = req.get("config_path")
+    project_id = req.get("project_id")
+    subject = (req.get("subject") or "").strip()
+    nprocs_mode = (req.get("nprocs_mode") or "auto").strip().lower()
+    nprocs = (req.get("nprocs") or "").strip()
+    force = bool(req.get("force", False))
+
+    if not config_path_raw:
+        return jsonify({"error": "config_path is required"}), 400
+
+    try:
+        config_path = resolve_config_path(config_path_raw)
+
+        if project_id:
+            work_dir = PROJECTS_DIR / project_id / "logs"
+            work_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            work_dir = DATA_DIR / "logs"
+            work_dir.mkdir(parents=True, exist_ok=True)
+
+        if getattr(sys, "frozen", False):
+            script_path = BUNDLE_DIR / "scripts" / "pilot_resource_estimator.py"
+        else:
+            script_path = BASE_DIR / "scripts" / "pilot_resource_estimator.py"
+
+        if not script_path.exists():
+            return jsonify({"error": f"Pilot estimator not found: {script_path}"}), 500
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = work_dir / f"pilot_resource_estimator_{timestamp}"
+        log_file = work_dir / f"pilot_resource_estimator_{timestamp}.log"
+
+        cmd = [
+            PYTHON_EXE,
+            str(script_path),
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+
+        if subject:
+            cmd.extend(["--subject", subject])
+
+        if nprocs_mode == "manual" and nprocs:
+            cmd.extend(["--nprocs", nprocs])
+        else:
+            # Auto mode with optional bounds
+            nprocs_min = req.get("nprocs_min", 2)
+            nprocs_max = req.get("nprocs_max")
+            nprocs_step = req.get("nprocs_step", 1)
+
+            try:
+                nprocs_min = int(nprocs_min)
+                nprocs_step = int(nprocs_step)
+                cmd.extend(["--nprocs-min", str(nprocs_min)])
+                cmd.extend(["--nprocs-step", str(nprocs_step)])
+                if nprocs_max not in (None, "", "null"):
+                    cmd.extend(["--nprocs-max", str(int(nprocs_max))])
+            except (TypeError, ValueError):
+                return jsonify({"error": "Invalid nprocs_min/nprocs_max/nprocs_step values"}), 400
+
+        if force:
+            cmd.append("--force")
+
+        with open(log_file, "w", encoding="utf-8") as logf:
+            subprocess.Popen(cmd, cwd=str(work_dir), stdout=logf, stderr=subprocess.STDOUT)
+
+        return jsonify(
+            {
+                "message": "Pilot estimator started in background.",
+                "command": " ".join(cmd),
+                "log_file": str(log_file),
+                "report_file": str(output_dir / "pilot_resource_report.md"),
+                "results_file": str(output_dir / "pilot_results.json"),
             }
         )
     except Exception as e:

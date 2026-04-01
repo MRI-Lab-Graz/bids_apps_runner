@@ -532,6 +532,76 @@
                         </div>
                     </div>
 
+                    <div class="section-header">5. Resource Controls</div>
+                    <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <div class="card bg-light border-0 shadow-none">
+                                <div class="card-body p-3">
+                                    <div class="form-check form-switch mb-2">
+                                        <input class="form-check-input" type="checkbox" id="limit_pipeline_usage" onchange="toggleMaxUsageControls()">
+                                        <label class="form-check-label" for="limit_pipeline_usage">
+                                            Cap Pipeline CPU Usage (per run)
+                                        </label>
+                                    </div>
+                                    <div class="input-group mb-2">
+                                        <span class="input-group-text">Max Usage</span>
+                                        <input type="number" class="form-control" id="max_usage_percent" value="75" min="10" max="100" disabled>
+                                        <span class="input-group-text">% of host cores</span>
+                                    </div>
+                                    <div class="form-text">
+                                        At launch, this injects a CPU cap for this run only and keeps the original project config unchanged.
+                                    </div>
+                                    <div class="form-text" id="resourceSummaryText">Host resources: detecting...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6 mb-4">
+                            <div class="card bg-light border-0 shadow-none">
+                                <div class="card-body p-3">
+                                    <div class="mb-2">
+                                        <label class="form-label mb-1">Pilot Subject (optional)</label>
+                                        <input type="text" class="form-control" id="pilot_subject" placeholder="sub-001">
+                                    </div>
+                                    <div class="row g-2 mb-2 align-items-end">
+                                        <div class="col-md-4">
+                                            <label class="form-label mb-1">Sweep Mode</label>
+                                            <select class="form-select" id="pilot_nprocs_mode" onchange="togglePilotSweepMode()">
+                                                <option value="auto" selected>Auto</option>
+                                                <option value="manual">Manual</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-8" id="pilotManualSweepBox" style="display:none;">
+                                            <label class="form-label mb-1">Manual nprocs list</label>
+                                            <input type="text" class="form-control" id="pilot_nprocs_list" placeholder="4,8,16,24">
+                                        </div>
+                                    </div>
+                                    <div class="row g-2 mb-2" id="pilotAutoSweepBox">
+                                        <div class="col-md-4">
+                                            <label class="form-label mb-1">Min</label>
+                                            <input type="number" class="form-control" id="pilot_nprocs_min" value="2" min="1">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label mb-1">Max</label>
+                                            <input type="number" class="form-control" id="pilot_nprocs_max" placeholder="auto">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label mb-1">Step</label>
+                                            <input type="number" class="form-control" id="pilot_nprocs_step" value="1" min="1">
+                                        </div>
+                                    </div>
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="pilot_force">
+                                        <label class="form-check-label" for="pilot_force">Force rerun during pilot</label>
+                                    </div>
+                                    <button class="btn btn-outline-primary btn-sm" type="button" onclick="runPilotEstimator()">
+                                        <i class="fas fa-chart-line me-1"></i>Run Pilot Estimator
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div id="statusAlert" style="display:none; padding: 15px; margin-bottom: 25px; border-radius: 8px; text-align: center; font-weight: 600;"></div>
 
                     <div class="d-flex flex-wrap gap-2 justify-content-center">
@@ -952,6 +1022,7 @@
         let browserIncludeHidden = false;
         let currentDeprecatedFlags = new Set();
         let checkAppVersionRequestId = 0;
+        let hostCpuCount = 1;
 
         function isQsireconContainer() {
             const engine = document.getElementById('container_engine').value;
@@ -1033,6 +1104,43 @@
             } else {
                 nameEl.textContent = 'No project loaded';
                 container.classList.add('is-empty');
+            }
+        }
+
+        function toggleMaxUsageControls() {
+            const enabled = document.getElementById('limit_pipeline_usage').checked;
+            document.getElementById('max_usage_percent').disabled = !enabled;
+        }
+
+        function togglePilotSweepMode() {
+            const mode = document.getElementById('pilot_nprocs_mode').value;
+            const autoBox = document.getElementById('pilotAutoSweepBox');
+            const manualBox = document.getElementById('pilotManualSweepBox');
+            autoBox.style.display = mode === 'auto' ? '' : 'none';
+            manualBox.style.display = mode === 'manual' ? '' : 'none';
+        }
+
+        async function fetchSystemResources() {
+            try {
+                const resp = await fetch('/system_resources');
+                if (!resp.ok) return;
+                const data = await resp.json();
+
+                hostCpuCount = parseInt(data.cpu_count || 1);
+                const memGiB = data.memory_total_gib != null ? `${data.memory_total_gib} GiB RAM` : 'RAM unknown';
+                const gpuInfo = data.gpu_available ? 'GPU available' : 'No GPU detected';
+
+                const summary = `Host resources: ${hostCpuCount} cores, ${memGiB}, ${gpuInfo}`;
+                const summaryEl = document.getElementById('resourceSummaryText');
+                if (summaryEl) summaryEl.textContent = summary;
+
+                const maxField = document.getElementById('pilot_nprocs_max');
+                if (maxField && !maxField.value) {
+                    maxField.placeholder = String(hostCpuCount);
+                }
+            } catch (e) {
+                const summaryEl = document.getElementById('resourceSummaryText');
+                if (summaryEl) summaryEl.textContent = 'Host resources: unavailable';
             }
         }
 
@@ -2188,6 +2296,8 @@
             try {
                 const payload = { config_path: lastSavedPath, runner_args: r_args };
                 payload.notify_email = (document.getElementById('notify_email').value || '').trim();
+                payload.max_usage_enabled = document.getElementById('limit_pipeline_usage').checked;
+                payload.max_usage_percent = parseInt(document.getElementById('max_usage_percent').value) || 100;
                 if (lastProjectId) {
                     payload.project_id = lastProjectId;
                 }
@@ -2202,6 +2312,65 @@
                 }
             } catch (e) {
                 showStatus("Execution request failed: " + e.message, true);
+            }
+        }
+
+        async function runPilotEstimator() {
+            if (!lastSavedPath) {
+                showStatus('Save the config first (Save Only or Save & Start Runner), then run the pilot estimator.', true);
+                return;
+            }
+
+            const mode = document.getElementById('pilot_nprocs_mode').value;
+            const payload = {
+                config_path: lastSavedPath,
+                nprocs_mode: mode,
+                subject: (document.getElementById('pilot_subject').value || '').trim(),
+                force: document.getElementById('pilot_force').checked
+            };
+
+            if (lastProjectId) {
+                payload.project_id = lastProjectId;
+            }
+
+            if (mode === 'manual') {
+                payload.nprocs = (document.getElementById('pilot_nprocs_list').value || '').trim();
+                if (!payload.nprocs) {
+                    showStatus('Enter a manual nprocs list (example: 4,8,16,24) or switch to auto mode.', true);
+                    return;
+                }
+            } else {
+                payload.nprocs_min = parseInt(document.getElementById('pilot_nprocs_min').value) || 2;
+                const maxRaw = (document.getElementById('pilot_nprocs_max').value || '').trim();
+                payload.nprocs_max = maxRaw ? parseInt(maxRaw) : hostCpuCount;
+                payload.nprocs_step = parseInt(document.getElementById('pilot_nprocs_step').value) || 1;
+            }
+
+            showStatus('Starting pilot estimator in background...');
+            try {
+                const resp = await fetch('/run_pilot_estimator', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+
+                if (!resp.ok || data.error) {
+                    showStatus(data.error || 'Failed to start pilot estimator.', true);
+                    return;
+                }
+
+                showStatus(`${data.message} Report: ${data.report_file}`);
+
+                const term = document.getElementById('terminal');
+                if (term) {
+                    term.innerText += `\n[PILOT] ${data.message}\n`;
+                    term.innerText += `[PILOT] Log: ${data.log_file}\n`;
+                    term.innerText += `[PILOT] Report: ${data.report_file}\n`;
+                    term.scrollTop = term.scrollHeight;
+                }
+            } catch (e) {
+                showStatus('Pilot estimator request failed: ' + e.message, true);
             }
         }
 
@@ -3267,7 +3436,10 @@
             switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
             toggleEngineFields();
             checkSystemStatus();
+            fetchSystemResources();
             setNavbarProjectName('');
+            toggleMaxUsageControls();
+            togglePilotSweepMode();
 
             // Clear tags if repo changes
             const buildRepoInput = document.getElementById('build_docker_repo');
