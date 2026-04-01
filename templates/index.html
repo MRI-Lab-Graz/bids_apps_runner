@@ -475,7 +475,11 @@
                                 <option value="ERROR">ERROR</option>
                             </select>
                         </div>
-                        <div class="col-md-9 mb-4">
+                        <div class="col-md-3 mb-4">
+                            <label class="form-label">Start Delay (sec)</label>
+                            <input type="number" class="form-control runner-opt" id="runner_start_delay" data-flag="--start-delay-sec" min="0" step="1" placeholder="0" title="Delay between launching subjects/jobs to smooth resource spikes">
+                        </div>
+                        <div class="col-md-6 mb-4">
                             <label class="form-label">Filter Subjects (IDs separated by space)</label>
                             <input type="text" class="form-control runner-opt" id="runner_subjects" data-flag="--subjects" placeholder="sub-01 sub-02" title="Process only specified subjects (e.g., sub-001 sub-002)">
                         </div>
@@ -597,6 +601,14 @@
                                     <button class="btn btn-outline-primary btn-sm" type="button" onclick="runPilotEstimator()">
                                         <i class="fas fa-chart-line me-1"></i>Run Pilot Estimator
                                     </button>
+                                    <div id="pilotStatusPanel" class="mt-3" style="display:none;">
+                                        <div id="pilotStatusText" class="small fw-bold mb-2 text-primary">Pilot status: starting...</div>
+                                        <div class="progress mb-2" style="height: 8px;">
+                                            <div id="pilotProgressBar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuemin="0" aria-valuemax="100"></div>
+                                        </div>
+                                        <div id="pilotArtifacts" class="small text-muted mb-2"></div>
+                                        <pre id="pilotLiveLog" style="max-height:180px; overflow:auto; background:#1e1e1e; color:#d4d4d4; padding:10px; border-radius:6px; font-size:0.75rem; margin:0;"></pre>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1023,6 +1035,8 @@
         let currentDeprecatedFlags = new Set();
         let checkAppVersionRequestId = 0;
         let hostCpuCount = 1;
+        let pilotMonitorTimer = null;
+        let pilotMonitorContext = null;
 
         function isQsireconContainer() {
             const engine = document.getElementById('container_engine').value;
@@ -1142,6 +1156,95 @@
                 const summaryEl = document.getElementById('resourceSummaryText');
                 if (summaryEl) summaryEl.textContent = 'Host resources: unavailable';
             }
+        }
+
+        function stopPilotMonitor() {
+            if (pilotMonitorTimer) {
+                clearInterval(pilotMonitorTimer);
+                pilotMonitorTimer = null;
+            }
+        }
+
+        function renderPilotStatus(data) {
+            const panel = document.getElementById('pilotStatusPanel');
+            const statusEl = document.getElementById('pilotStatusText');
+            const bar = document.getElementById('pilotProgressBar');
+            const artifactsEl = document.getElementById('pilotArtifacts');
+            const logEl = document.getElementById('pilotLiveLog');
+            if (!panel || !statusEl || !bar || !artifactsEl || !logEl) return;
+
+            panel.style.display = 'block';
+
+            const progress = data.progress || {};
+            const completed = progress.completed || 0;
+            const total = progress.total || null;
+            const percent = progress.percent != null ? progress.percent : 0;
+
+            let statusText = `Pilot status: ${data.status || 'unknown'}`;
+            if (total) {
+                statusText += ` (${completed}/${total})`;
+            }
+            if (data.status === 'completed') {
+                statusEl.className = 'small fw-bold mb-2 text-success';
+            } else if (data.status === 'failed') {
+                statusEl.className = 'small fw-bold mb-2 text-danger';
+            } else {
+                statusEl.className = 'small fw-bold mb-2 text-primary';
+            }
+            statusEl.textContent = statusText;
+
+            bar.style.width = `${percent}%`;
+            bar.setAttribute('aria-valuenow', String(percent));
+            bar.classList.remove('bg-success', 'bg-danger');
+            if (data.status === 'completed') {
+                bar.classList.add('bg-success');
+                bar.style.width = '100%';
+            } else if (data.status === 'failed') {
+                bar.classList.add('bg-danger');
+            }
+
+            artifactsEl.textContent = `Report: ${data.report_file || '-'} | Results: ${data.results_file || '-'}`;
+            if (typeof data.log_tail === 'string') {
+                logEl.textContent = data.log_tail || '[no log output yet]';
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+        }
+
+        async function pollPilotEstimatorStatus() {
+            if (!pilotMonitorContext) return;
+            try {
+                const resp = await fetch('/pilot_estimator_status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(pilotMonitorContext)
+                });
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    showStatus(data.error || 'Failed to poll pilot status.', true);
+                    stopPilotMonitor();
+                    return;
+                }
+
+                renderPilotStatus(data);
+
+                if (data.status === 'completed') {
+                    showStatus(`Pilot completed. Report: ${data.report_file}`);
+                    stopPilotMonitor();
+                } else if (data.status === 'failed') {
+                    showStatus('Pilot estimator failed. Check the live log for details.', true);
+                    stopPilotMonitor();
+                }
+            } catch (e) {
+                showStatus('Pilot status polling error: ' + e.message, true);
+                stopPilotMonitor();
+            }
+        }
+
+        function startPilotMonitor(context) {
+            pilotMonitorContext = context;
+            stopPilotMonitor();
+            pollPilotEstimatorStatus();
+            pilotMonitorTimer = setInterval(pollPilotEstimatorStatus, 3000);
         }
 
         // ===== PROJECT MANAGEMENT =====
@@ -2361,6 +2464,16 @@
                 }
 
                 showStatus(`${data.message} Report: ${data.report_file}`);
+
+                const monitorContext = {
+                    job_id: data.job_id || null,
+                    log_file: data.log_file,
+                    output_dir: data.output_dir,
+                    report_file: data.report_file,
+                    results_file: data.results_file,
+                    expected_runs: data.expected_runs || null
+                };
+                startPilotMonitor(monitorContext);
 
                 const term = document.getElementById('terminal');
                 if (term) {

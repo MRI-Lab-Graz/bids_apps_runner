@@ -487,11 +487,31 @@ def execute_hpc(config: Dict[str, Any], args: Namespace) -> bool:
     debug = args.debug if hasattr(args, "debug") else False
     dry_run = args.dry_run if hasattr(args, "dry_run") else False
     slurm_only = args.slurm_only if hasattr(args, "slurm_only") else False
+    start_delay_sec = args.start_delay_sec if hasattr(args, "start_delay_sec") else 0.0
+
+    try:
+        start_delay_sec = float(start_delay_sec or 0.0)
+    except (TypeError, ValueError):
+        start_delay_sec = 0.0
+
+    if start_delay_sec < 0:
+        logging.warning("Negative --start-delay-sec provided; using 0")
+        start_delay_sec = 0.0
 
     logging.info(f"Creating job scripts for {len(subjects)} subjects...")
+    if start_delay_sec > 0 and not dry_run and len(subjects) > 1:
+        logging.info(
+            f"Staggered launches enabled: waiting {start_delay_sec:.1f}s between SLURM submissions"
+        )
 
-    for subject in subjects:
+    for idx, subject in enumerate(subjects):
         try:
+            if idx > 0 and start_delay_sec > 0:
+                logging.info(
+                    f"Waiting {start_delay_sec:.1f}s before launching next subject ({subject})"
+                )
+                time.sleep(start_delay_sec)
+
             logging.info(f"Creating job for subject: {subject}")
 
             job_script = create_slurm_job(subject, config, work_dir, dry_run, debug)

@@ -128,6 +128,7 @@ Output validation tool supporting:
 --force              Force reprocessing (auto-enabled with --from-json)
 --dry-run            Test configuration without execution
 --pilot              Process one random subject for testing
+--start-delay-sec    Delay between launching subjects/jobs (seconds)
 --debug              Enable detailed container output
 --log-level          Set logging verbosity (DEBUG, INFO, WARNING, ERROR)
 ```

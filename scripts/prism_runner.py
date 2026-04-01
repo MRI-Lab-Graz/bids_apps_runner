@@ -115,6 +115,12 @@ For detailed documentation, see README.md
         "--force", action="store_true", help="Force reprocessing even if output exists"
     )
     parser.add_argument(
+        "--start-delay-sec",
+        type=float,
+        default=0.0,
+        help="Delay in seconds between launching subjects/jobs (default: 0)",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug mode with detailed container logs",

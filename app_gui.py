@@ -132,6 +132,8 @@ PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
 APPTAINER_BUILDS = {}
 APPTAINER_BUILDS_LOCK = threading.Lock()
+PILOT_JOBS = {}
+PILOT_JOBS_LOCK = threading.Lock()
 
 
 def resolve_config_path(config_path: str) -> Path:
@@ -453,6 +455,73 @@ def _get_total_memory_bytes():
         pass
 
     return None
+
+
+def _compute_auto_nprocs_values(nprocs_min=2, nprocs_max=None, nprocs_step=1):
+    """Compute auto nprocs sweep list for the pilot estimator."""
+    detected_max = os.cpu_count() or 1
+    start = max(1, int(nprocs_min))
+    step = max(1, int(nprocs_step))
+    stop = detected_max if nprocs_max is None else int(nprocs_max)
+    stop = min(stop, detected_max)
+
+    if start > stop:
+        start = stop
+
+    values = list(range(start, stop + 1, step))
+    if values and values[-1] != stop:
+        values.append(stop)
+    if not values:
+        values = [max(1, stop)]
+
+    return values
+
+
+def _is_process_alive(proc):
+    if proc is None:
+        return False
+    try:
+        return proc.poll() is None
+    except Exception:
+        return False
+
+
+def _is_pilot_process_running(output_dir: Path) -> bool:
+    """Best-effort process detection for a pilot estimator by output dir."""
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,args="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        marker = str(output_dir)
+        for line in result.stdout.splitlines():
+            if "pilot_resource_estimator.py" in line and marker in line:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _pilot_progress_from_output_dir(output_dir: Path, expected_total: int = None):
+    """Estimate pilot progress from generated per-step logs."""
+    completed = 0
+    if output_dir.exists():
+        for f in output_dir.glob("stdout_n*.log"):
+            try:
+                if f.stat().st_size > 0:
+                    completed += 1
+            except OSError:
+                continue
+
+    total = int(expected_total) if expected_total else None
+    percent = None
+    if total and total > 0:
+        percent = round(min(100.0, (completed / total) * 100.0), 1)
+
+    return completed, total, percent
 
 
 def get_latest_version_from_dockerhub(repo):
@@ -1927,11 +1996,16 @@ def run_pilot_estimator():
             return jsonify({"error": f"Pilot estimator not found: {script_path}"}), 500
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        job_id = f"pilot_{timestamp}_{uuid.uuid4().hex[:8]}"
         output_dir = work_dir / f"pilot_resource_estimator_{timestamp}"
         log_file = work_dir / f"pilot_resource_estimator_{timestamp}.log"
 
+        expected_nprocs = []
+        expected_runs = 0
+
         cmd = [
             PYTHON_EXE,
+            "-u",
             str(script_path),
             "--config",
             str(config_path),
@@ -1944,6 +2018,16 @@ def run_pilot_estimator():
 
         if nprocs_mode == "manual" and nprocs:
             cmd.extend(["--nprocs", nprocs])
+            try:
+                expected_nprocs = sorted(
+                    set(
+                        int(x.strip())
+                        for x in nprocs.split(",")
+                        if str(x).strip()
+                    )
+                )
+            except ValueError:
+                expected_nprocs = []
         else:
             # Auto mode with optional bounds
             nprocs_min = req.get("nprocs_min", 2)
@@ -1957,26 +2041,143 @@ def run_pilot_estimator():
                 cmd.extend(["--nprocs-step", str(nprocs_step)])
                 if nprocs_max not in (None, "", "null"):
                     cmd.extend(["--nprocs-max", str(int(nprocs_max))])
+
+                expected_nprocs = _compute_auto_nprocs_values(
+                    nprocs_min=nprocs_min,
+                    nprocs_max=(None if nprocs_max in (None, "", "null") else int(nprocs_max)),
+                    nprocs_step=nprocs_step,
+                )
             except (TypeError, ValueError):
                 return jsonify({"error": "Invalid nprocs_min/nprocs_max/nprocs_step values"}), 400
+
+        expected_runs = len(expected_nprocs)
 
         if force:
             cmd.append("--force")
 
         with open(log_file, "w", encoding="utf-8") as logf:
-            subprocess.Popen(cmd, cwd=str(work_dir), stdout=logf, stderr=subprocess.STDOUT)
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(work_dir),
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+            )
+
+        with PILOT_JOBS_LOCK:
+            PILOT_JOBS[job_id] = {
+                "job_id": job_id,
+                "pid": proc.pid,
+                "process": proc,
+                "started_at": datetime.now().isoformat(),
+                "command": [str(x) for x in cmd],
+                "log_file": str(log_file),
+                "output_dir": str(output_dir),
+                "report_file": str(output_dir / "pilot_resource_report.md"),
+                "results_file": str(output_dir / "pilot_results.json"),
+                "expected_runs": expected_runs,
+                "expected_nprocs": expected_nprocs,
+            }
 
         return jsonify(
             {
                 "message": "Pilot estimator started in background.",
+                "job_id": job_id,
                 "command": " ".join(cmd),
                 "log_file": str(log_file),
+                "output_dir": str(output_dir),
                 "report_file": str(output_dir / "pilot_resource_report.md"),
                 "results_file": str(output_dir / "pilot_results.json"),
+                "expected_runs": expected_runs,
             }
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/pilot_estimator_status", methods=["POST"])
+def pilot_estimator_status():
+    """Return live status/progress for a pilot estimator run."""
+    req = request.get_json(silent=True) or {}
+    job_id = (req.get("job_id") or "").strip()
+
+    entry = None
+    if job_id:
+        with PILOT_JOBS_LOCK:
+            entry = PILOT_JOBS.get(job_id)
+
+    log_file = req.get("log_file")
+    output_dir = req.get("output_dir")
+    report_file = req.get("report_file")
+    results_file = req.get("results_file")
+    expected_runs = req.get("expected_runs")
+
+    if entry:
+        log_file = entry.get("log_file")
+        output_dir = entry.get("output_dir")
+        report_file = entry.get("report_file")
+        results_file = entry.get("results_file")
+        expected_runs = entry.get("expected_runs") or expected_runs
+
+    if not log_file and not output_dir:
+        return jsonify({"error": "job_id or log_file/output_dir required"}), 400
+
+    log_path = Path(str(log_file)).expanduser() if log_file else None
+    output_dir_path = Path(str(output_dir)).expanduser() if output_dir else None
+    report_path = Path(str(report_file)).expanduser() if report_file else None
+    results_path = Path(str(results_file)).expanduser() if results_file else None
+
+    running = False
+    exit_code = None
+    if entry:
+        proc = entry.get("process")
+        running = _is_process_alive(proc)
+        if not running and proc is not None:
+            try:
+                exit_code = proc.poll()
+            except Exception:
+                exit_code = None
+
+    if not running and output_dir_path is not None:
+        running = _is_pilot_process_running(output_dir_path)
+
+    report_exists = report_path.exists() if report_path else False
+    results_exists = results_path.exists() if results_path else False
+
+    completed, total, percent = (0, None, None)
+    if output_dir_path is not None:
+        completed, total, percent = _pilot_progress_from_output_dir(
+            output_dir_path, expected_total=expected_runs
+        )
+
+    status = "running"
+    if report_exists and results_exists:
+        status = "completed"
+        running = False
+    elif not running:
+        status = "failed" if exit_code not in (None, 0) else "idle"
+
+    tail = _read_log_tail(log_path) if log_path else ""
+
+    return jsonify(
+        {
+            "job_id": job_id or None,
+            "status": status,
+            "running": running,
+            "exit_code": exit_code,
+            "log_file": str(log_path) if log_path else None,
+            "output_dir": str(output_dir_path) if output_dir_path else None,
+            "report_file": str(report_path) if report_path else None,
+            "results_file": str(results_path) if results_path else None,
+            "report_exists": report_exists,
+            "results_exists": results_exists,
+            "progress": {
+                "completed": completed,
+                "total": total,
+                "percent": percent,
+            },
+            "log_tail": tail,
+        }
+    )
 
 
 @app.route("/kill_job", methods=["POST"])

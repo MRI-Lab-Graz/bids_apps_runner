@@ -812,6 +812,16 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
     debug = args.debug if hasattr(args, "debug") else False
     force = args.force if hasattr(args, "force") else False
     dry_run = args.dry_run if hasattr(args, "dry_run") else False
+    start_delay_sec = args.start_delay_sec if hasattr(args, "start_delay_sec") else 0.0
+
+    try:
+        start_delay_sec = float(start_delay_sec or 0.0)
+    except (TypeError, ValueError):
+        start_delay_sec = 0.0
+
+    if start_delay_sec < 0:
+        logging.warning("Negative --start-delay-sec provided; using 0")
+        start_delay_sec = 0.0
 
     if debug and jobs > 1:
         logging.warning("Debug mode not supported with parallel processing")
@@ -819,6 +829,11 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
         jobs = 1
 
     logging.info(f"Processing {len(subjects)} subjects with {jobs} parallel jobs")
+
+    if start_delay_sec > 0 and not dry_run and len(subjects) > 1:
+        logging.info(
+            f"Staggered launches enabled: waiting {start_delay_sec:.1f}s between subject starts"
+        )
 
     if debug:
         logging.info("Debug mode enabled - detailed container logs will be saved")
@@ -839,7 +854,13 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
                 failed_subjects.append(subject)
     elif jobs == 1:
         # Serial processing (supports debug mode)
-        for subject in subjects:
+        for idx, subject in enumerate(subjects):
+            if idx > 0 and start_delay_sec > 0:
+                logging.info(
+                    f"Waiting {start_delay_sec:.1f}s before launching next subject ({subject})"
+                )
+                time.sleep(start_delay_sec)
+
             success = _process_subject(subject, common, app, False, force, debug)
             if success:
                 processed_subjects.append(subject)
@@ -848,12 +869,18 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
     else:
         # Parallel processing
         with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as executor:
-            future_to_subject = {
-                executor.submit(
+            future_to_subject = {}
+            for idx, subject in enumerate(subjects):
+                if idx > 0 and start_delay_sec > 0:
+                    logging.info(
+                        f"Waiting {start_delay_sec:.1f}s before queueing next subject ({subject})"
+                    )
+                    time.sleep(start_delay_sec)
+
+                future = executor.submit(
                     _process_subject, subject, common, app, False, force, False
-                ): subject
-                for subject in subjects
-            }
+                )
+                future_to_subject[future] = subject
 
             for future in concurrent.futures.as_completed(future_to_subject):
                 subject = future_to_subject[future]
