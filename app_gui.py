@@ -26,6 +26,8 @@ import shutil
 import tempfile
 import webbrowser
 import threading
+import uuid
+import signal
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 from waitress import serve
@@ -126,6 +128,9 @@ DATA_DIR = _get_data_dir()
 LOG_DIR = DATA_DIR / "logs"
 PROJECTS_DIR = DATA_DIR / "projects"
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+
+APPTAINER_BUILDS = {}
+APPTAINER_BUILDS_LOCK = threading.Lock()
 
 
 class ProjectManager:
@@ -315,8 +320,13 @@ def check_system_dependencies():
     }
 
 
+SILENT_ENDPOINTS = {"/get_log", "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/build_apptainer_status"}
+
+
 @app.before_request
 def log_request_info():
+    if request.path in SILENT_ENDPOINTS:
+        return
     print(
         f"[GUI] {request.method} {request.path} from {request.remote_addr}", flush=True
     )
@@ -896,6 +906,97 @@ def make_dir():
         return jsonify({"error": str(e)}), 500
 
 
+def _read_log_tail(log_path, max_bytes=65536):
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            start = max(0, file_size - max_bytes)
+            f.seek(start, os.SEEK_SET)
+            data = f.read().decode("utf-8", errors="replace")
+            if start > 0:
+                newline_pos = data.find("\n")
+                if newline_pos != -1:
+                    data = data[newline_pos + 1:]
+            return data
+    except OSError:
+        return ""
+
+
+def _run_apptainer_build_async(build_id):
+    with APPTAINER_BUILDS_LOCK:
+        state = APPTAINER_BUILDS.get(build_id)
+        if not state:
+            return
+
+    log_file = state["log_file"]
+    cmd = state["cmd"]
+    per_build_dir = state.get("per_build_dir")
+    keep_temp = bool(state.get("keep_temp"))
+
+    try:
+        with open(log_file, "w", encoding="utf-8") as logf:
+            logf.write(f"Command: {' '.join(cmd)}\n")
+            logf.write(f"Started: {datetime.now().isoformat()}\n\n")
+            logf.flush()
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=state["cwd"],
+                env=state["env"],
+                start_new_session=True,
+            )
+
+            with APPTAINER_BUILDS_LOCK:
+                if build_id in APPTAINER_BUILDS:
+                    APPTAINER_BUILDS[build_id]["process"] = process
+                    APPTAINER_BUILDS[build_id]["pid"] = process.pid
+
+            return_code = process.wait(timeout=state.get("timeout_seconds", 7200))
+
+        with APPTAINER_BUILDS_LOCK:
+            if build_id in APPTAINER_BUILDS:
+                cancelled = bool(APPTAINER_BUILDS[build_id].get("cancel_requested"))
+                APPTAINER_BUILDS[build_id]["returncode"] = return_code
+                APPTAINER_BUILDS[build_id]["process"] = None
+                APPTAINER_BUILDS[build_id]["finished_at"] = time.time()
+                if cancelled:
+                    APPTAINER_BUILDS[build_id]["status"] = "cancelled"
+                elif return_code == 0:
+                    APPTAINER_BUILDS[build_id]["status"] = "completed"
+                else:
+                    APPTAINER_BUILDS[build_id]["status"] = "failed"
+    except subprocess.TimeoutExpired:
+        with APPTAINER_BUILDS_LOCK:
+            process = APPTAINER_BUILDS.get(build_id, {}).get("process")
+        if process:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except OSError:
+                pass
+        with APPTAINER_BUILDS_LOCK:
+            if build_id in APPTAINER_BUILDS:
+                APPTAINER_BUILDS[build_id]["status"] = "failed"
+                APPTAINER_BUILDS[build_id]["returncode"] = 124
+                APPTAINER_BUILDS[build_id]["error"] = "Apptainer build timed out"
+                APPTAINER_BUILDS[build_id]["process"] = None
+                APPTAINER_BUILDS[build_id]["finished_at"] = time.time()
+    except Exception as exc:
+        with APPTAINER_BUILDS_LOCK:
+            if build_id in APPTAINER_BUILDS:
+                APPTAINER_BUILDS[build_id]["status"] = "failed"
+                APPTAINER_BUILDS[build_id]["returncode"] = 1
+                APPTAINER_BUILDS[build_id]["error"] = str(exc)
+                APPTAINER_BUILDS[build_id]["process"] = None
+                APPTAINER_BUILDS[build_id]["finished_at"] = time.time()
+    finally:
+        if per_build_dir and not keep_temp:
+            shutil.rmtree(per_build_dir, ignore_errors=True)
+
+
 @app.route("/build_apptainer", methods=["POST"])
 def build_apptainer():
     data = request.get_json(silent=True) or {}
@@ -922,10 +1023,12 @@ def build_apptainer():
     docker_repo = (data.get("docker_repo") or "").strip()
     docker_tag = (data.get("docker_tag") or "").strip()
     keep_temp = bool(data.get("keep_temp"))
+    timeout_seconds = int(data.get("timeout", 7200))
 
     cmd = []
     built_image = None
     per_build_dir = None
+    build_env = os.environ.copy()
 
     if dockerfile:
         script_path = BASE_DIR / "scripts" / "build_apptainer.sh"
@@ -963,54 +1066,123 @@ def build_apptainer():
             f"docker://{docker_repo}:{docker_tag}",
         ]
 
-    timeout_seconds = int(data.get("timeout", 7200))
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            cwd=str(BASE_DIR),
-        )
-    except subprocess.TimeoutExpired as exc:
-        return (
-            jsonify(
-                {
-                    "error": "Apptainer build timed out",
-                    "details": str(exc),
-                    "log_file": str(log_file),
-                }
-            ),
-            500,
-        )
-    finally:
-        if per_build_dir and not keep_temp:
-            shutil.rmtree(per_build_dir, ignore_errors=True)
+    build_env["APPTAINER_TMPDIR"] = str(tmp_path)
+    build_env["SINGULARITY_TMPDIR"] = str(tmp_path)
+    build_env["TMPDIR"] = str(tmp_path)
 
-    if not dockerfile:
-        _record_build_log(log_file, cmd, result.stdout, result.stderr)
-    else:
-        try:
-            # Ensure log file exists even if script deleted it
-            log_file.touch(exist_ok=True)
-        except OSError:
-            pass
+    build_id = (
+        f"build_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    )
+    with APPTAINER_BUILDS_LOCK:
+        APPTAINER_BUILDS[build_id] = {
+            "id": build_id,
+            "status": "running",
+            "cmd": cmd,
+            "log_file": str(log_file),
+            "output_image": str(built_image) if built_image else None,
+            "per_build_dir": per_build_dir,
+            "keep_temp": keep_temp,
+            "timeout_seconds": timeout_seconds,
+            "cwd": str(BASE_DIR),
+            "env": build_env,
+            "process": None,
+            "pid": None,
+            "cancel_requested": False,
+            "returncode": None,
+            "error": None,
+            "started_at": time.time(),
+            "finished_at": None,
+        }
 
-    if not built_image:
-        match = re.search(r"Apptainer image built successfully at: (.+)", result.stdout)
-        if match:
-            built_image = Path(match.group(1).strip())
+    worker = threading.Thread(
+        target=_run_apptainer_build_async,
+        args=(build_id,),
+        daemon=True,
+    )
+    worker.start()
 
     return jsonify(
         {
-            "success": result.returncode == 0,
-            "returncode": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "success": True,
+            "build_id": build_id,
+            "status": "running",
             "log_file": str(log_file),
             "output_image": str(built_image) if built_image else None,
         }
     )
+
+
+@app.route("/build_apptainer_status", methods=["GET"])
+def build_apptainer_status():
+    build_id = (request.args.get("build_id") or "").strip()
+    if not build_id:
+        return jsonify({"error": "build_id is required"}), 400
+
+    with APPTAINER_BUILDS_LOCK:
+        state = APPTAINER_BUILDS.get(build_id)
+        if not state:
+            return jsonify({"error": "Build not found"}), 404
+        status = state.get("status", "unknown")
+        returncode = state.get("returncode")
+        output_image = state.get("output_image")
+        log_file = state.get("log_file")
+        error = state.get("error")
+        pid = state.get("pid")
+
+    log_tail = _read_log_tail(log_file)
+
+    if not output_image and status in {"completed", "failed"}:
+        match = re.search(r"Apptainer image built successfully at:\s*(.+)", log_tail)
+        if match:
+            output_image = match.group(1).strip()
+
+    return jsonify(
+        {
+            "build_id": build_id,
+            "status": status,
+            "success": status == "completed",
+            "returncode": returncode,
+            "output_image": output_image,
+            "log_file": log_file,
+            "log_tail": log_tail,
+            "error": error,
+            "pid": pid,
+        }
+    )
+
+
+@app.route("/build_apptainer_cancel", methods=["POST"])
+def build_apptainer_cancel():
+    data = request.get_json(silent=True) or {}
+    build_id = (data.get("build_id") or "").strip()
+    if not build_id:
+        return jsonify({"error": "build_id is required"}), 400
+
+    with APPTAINER_BUILDS_LOCK:
+        state = APPTAINER_BUILDS.get(build_id)
+        if not state:
+            return jsonify({"error": "Build not found"}), 404
+        status = state.get("status")
+        process = state.get("process")
+
+        if status != "running":
+            return jsonify(
+                {
+                    "success": True,
+                    "status": status,
+                    "message": "Build already finished.",
+                }
+            )
+
+        state["cancel_requested"] = True
+
+    if process is not None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+    return jsonify({"success": True, "status": "cancelling", "build_id": build_id})
 
 
 @app.route("/get_app_help", methods=["POST"])
