@@ -158,6 +158,11 @@ For detailed documentation, see README.md
         help="Reprocess subjects from validation JSON report (local mode only)",
     )
     local_group.add_argument(
+        "--clean-success-markers",
+        action="store_true",
+        help="Remove success markers before processing (local mode only)",
+    )
+    local_group.add_argument(
         "--pipeline",
         help="Specify pipeline when using --reprocess-from-json (local mode only)",
     )

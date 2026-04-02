@@ -1489,6 +1489,7 @@
             document.getElementById('notify_email').value = common.notify_email || '';
             document.getElementById('jobs').value = common.jobs || 1;
             document.getElementById('analysis_level').value = app.analysis_level || 'participant';
+            syncRunnerSubjectFilterWithAnalysisLevel();
             document.getElementById('container_engine').value = common.container_engine || 'apptainer';
 
             // Load saved Check Output settings when present
@@ -2369,17 +2370,38 @@
             }
         }
 
+        function syncRunnerSubjectFilterWithAnalysisLevel() {
+            const analysisEl = document.getElementById('analysis_level');
+            const subjectsEl = document.getElementById('runner_subjects');
+            if (!analysisEl || !subjectsEl) return;
+
+            if (analysisEl.value === 'group') {
+                subjectsEl.value = '';
+                subjectsEl.disabled = true;
+                subjectsEl.placeholder = 'Disabled for group analysis';
+                subjectsEl.title = 'Subject filtering is unavailable when analysis level is group.';
+            } else {
+                subjectsEl.disabled = false;
+                subjectsEl.placeholder = 'sub-01 sub-02';
+                subjectsEl.title = 'Process only specified subjects (e.g., sub-001 sub-002)';
+            }
+        }
+
         async function executeNow() {
             if (!lastSavedPath) {
                 showStatus("No config file ready. Please save first.", true);
                 return;
             }
+            const analysisLevel = document.getElementById('analysis_level').value;
             const r_args = [];
             document.querySelectorAll('.runner-opt').forEach(el => {
                 const flag = el.dataset.flag;
                 if (el.type === 'checkbox') { if (el.checked) r_args.push(flag); }
                 else if (el.value.trim()) {
                     if (flag === '--subjects') {
+                        if (analysisLevel === 'group') {
+                            return;
+                        }
                         const subjects = el.value
                             .split(/[\s,]+/)
                             .map(s => s.trim())
@@ -2584,6 +2606,7 @@
                 document.getElementById('fs_license_file').value = cfg.common.fs_license_file || '';
                 document.getElementById('jobs').value = cfg.common.jobs || 1;
                 document.getElementById('analysis_level').value = cfg.app.analysis_level || 'participant';
+                syncRunnerSubjectFilterWithAnalysisLevel();
                 document.getElementById('config_name').value = filename;
 
                 const validation = cfg.validation || {};
@@ -3553,6 +3576,12 @@
             setNavbarProjectName('');
             toggleMaxUsageControls();
             togglePilotSweepMode();
+            syncRunnerSubjectFilterWithAnalysisLevel();
+
+            const analysisLevelEl = document.getElementById('analysis_level');
+            if (analysisLevelEl) {
+                analysisLevelEl.addEventListener('change', syncRunnerSubjectFilterWithAnalysisLevel);
+            }
 
             // Clear tags if repo changes
             const buildRepoInput = document.getElementById('build_docker_repo');

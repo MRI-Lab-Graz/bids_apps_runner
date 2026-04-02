@@ -23,7 +23,8 @@ import random
 import json
 import re
 from collections import deque
-from typing import Dict, Any
+from pathlib import Path
+from typing import Dict, Any, Optional
 from argparse import Namespace
 from datetime import datetime
 
@@ -396,6 +397,179 @@ def _run_container(
 # ============================================================================
 
 
+def _normalize_subject_id(subject: str) -> str:
+    """Normalize subject identifiers to the canonical sub-<label> form."""
+    subject_str = str(subject or "").strip()
+    if not subject_str:
+        return ""
+    if subject_str.lower() == "group":
+        return "group"
+    return subject_str if subject_str.startswith("sub-") else f"sub-{subject_str}"
+
+
+def _resolve_project_json_path(config_path: Optional[str]) -> Optional[str]:
+    """Resolve a CLI config path to a valid project.json path when applicable."""
+    if not config_path:
+        return None
+
+    cfg = Path(os.path.expanduser(str(config_path)))
+    scripts_dir = Path(__file__).resolve().parent
+    app_root = scripts_dir.parent
+
+    candidates = [cfg] if cfg.is_absolute() else [Path.cwd() / cfg, scripts_dir / cfg, app_root / cfg]
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            continue
+
+        if not resolved.exists() or not resolved.is_file() or resolved.name != "project.json":
+            continue
+
+        try:
+            with open(resolved, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+
+        if isinstance(data, dict) and isinstance(data.get("config"), dict):
+            return str(resolved)
+
+    return None
+
+
+def _read_project_subject_state(project_json_path: Optional[str], subject: str) -> Optional[Dict[str, Any]]:
+    """Read per-subject runner state from project.json."""
+    if not project_json_path:
+        return None
+
+    try:
+        with open(project_json_path, "r", encoding="utf-8") as f:
+            project_data = json.load(f)
+    except Exception as e:
+        logging.warning(f"Could not read project state from {project_json_path}: {e}")
+        return None
+
+    subjects_state = project_data.get("runner_state", {}).get("subjects", {})
+    if not isinstance(subjects_state, dict):
+        return None
+
+    subject_state = subjects_state.get(_normalize_subject_id(subject))
+    return subject_state if isinstance(subject_state, dict) else None
+
+
+def _write_project_subject_state(
+    project_json_path: Optional[str],
+    subject: str,
+    status: str,
+    reason: str = "",
+) -> bool:
+    """Persist subject completion state in project.json."""
+    if not project_json_path:
+        return False
+
+    subject_id = _normalize_subject_id(subject)
+    if not subject_id:
+        return False
+
+    try:
+        with open(project_json_path, "r", encoding="utf-8") as f:
+            project_data = json.load(f)
+    except Exception as e:
+        logging.warning(f"Could not load project.json for subject state update: {e}")
+        return False
+
+    now_iso = datetime.now().isoformat()
+    runner_state = project_data.setdefault("runner_state", {})
+    subjects_state = runner_state.setdefault("subjects", {})
+
+    if not isinstance(subjects_state, dict):
+        subjects_state = {}
+        runner_state["subjects"] = subjects_state
+
+    state = subjects_state.get(subject_id, {})
+    if not isinstance(state, dict):
+        state = {}
+
+    state["status"] = status
+    state["finished"] = status == "finished"
+    state["updated_at"] = now_iso
+    if status == "finished":
+        state["finished_at"] = now_iso
+    elif status == "failed":
+        state["failed_at"] = now_iso
+    if reason:
+        state["reason"] = reason
+
+    subjects_state[subject_id] = state
+    project_data["last_modified"] = now_iso
+
+    tmp_path = f"{project_json_path}.tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(project_data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp_path, project_json_path)
+        return True
+    except Exception as e:
+        logging.warning(f"Could not write project.json subject state: {e}")
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        return False
+
+
+def _clear_success_markers(common: Dict[str, Any], project_json_path: Optional[str] = None) -> None:
+    """Clear filesystem and project success markers."""
+    removed_files = 0
+    marker_dir = os.path.join(common["output_folder"], ".bids_app_runner")
+
+    if os.path.isdir(marker_dir):
+        for marker_path in glob.glob(os.path.join(marker_dir, "*_success.txt")):
+            try:
+                os.remove(marker_path)
+                removed_files += 1
+            except Exception as e:
+                logging.warning(f"Could not remove marker {marker_path}: {e}")
+
+    cleared_project_markers = 0
+    if project_json_path:
+        try:
+            with open(project_json_path, "r", encoding="utf-8") as f:
+                project_data = json.load(f)
+
+            subjects_state = project_data.get("runner_state", {}).get("subjects", {})
+            if isinstance(subjects_state, dict):
+                to_remove = [
+                    sid
+                    for sid, state in subjects_state.items()
+                    if isinstance(state, dict)
+                    and (state.get("finished") or state.get("status") == "finished")
+                ]
+                for sid in to_remove:
+                    subjects_state.pop(sid, None)
+                cleared_project_markers = len(to_remove)
+
+                if to_remove:
+                    project_data["last_modified"] = datetime.now().isoformat()
+                    tmp_path = f"{project_json_path}.tmp"
+                    with open(tmp_path, "w", encoding="utf-8") as f:
+                        json.dump(project_data, f, indent=2)
+                        f.write("\n")
+                    os.replace(tmp_path, project_json_path)
+        except Exception as e:
+            logging.warning(f"Could not clear project.json success markers: {e}")
+
+    logging.info(
+        "Cleared %d success marker file(s) and %d project marker(s)",
+        removed_files,
+        cleared_project_markers,
+    )
+
+
 def _check_generic_output_exists(subject, common):
     """Check for generic output patterns that most BIDS apps produce."""
     output_dir = common["output_folder"]
@@ -452,17 +626,32 @@ def _check_generic_output_exists(subject, common):
     return False
 
 
-def _subject_processed(subject, common, app, force=False):
-    """Check if a subject has already been processed."""
+def _subject_processed(subject, common, app, force=False, project_json_path=None):
+    """Check if a subject has already been processed via explicit markers."""
     if force:
         logging.info(f"Force flag - will reprocess {subject}")
-        return False
+        return False, ""
+
+    subject_state = _read_project_subject_state(project_json_path, subject)
+    if subject_state and (
+        subject_state.get("finished") or subject_state.get("status") == "finished"
+    ):
+        logging.info(f"Subject '{subject}' already processed (project marker found)")
+        return True, "project-marker"
 
     # Check success marker file
     success_marker = os.path.join(
         common["output_folder"], ".bids_app_runner", f"{subject}_success.txt"
     )
     marker_exists = os.path.exists(success_marker)
+    if marker_exists:
+        logging.info(f"Subject '{subject}' already processed (success marker found)")
+        return True, "success-marker"
+
+    # In project mode, rely only on explicit markers to avoid false positives from
+    # partial output folders/files left by interrupted runs.
+    if project_json_path:
+        return False, ""
 
     # Check configured output pattern
     pattern = app.get("output_check", {}).get("pattern", "")
@@ -491,28 +680,9 @@ def _subject_processed(subject, common, app, force=False):
             logging.info(
                 f"Subject '{subject}' already processed (output pattern matched)"
             )
-            return True
+            return True, "pattern"
 
-    # Generic output detection
-    generic_output_exists = _check_generic_output_exists(subject, common)
-    if generic_output_exists:
-        logging.info(f"Subject '{subject}' already processed (output found)")
-        return True
-
-    # A stale marker can happen when outputs were cleaned up after a previous run.
-    if marker_exists:
-        try:
-            os.remove(success_marker)
-            logging.warning(
-                f"Subject '{subject}' has a stale success marker (no detectable outputs); removed marker and reprocessing"
-            )
-        except Exception as e:
-            logging.warning(
-                f"Subject '{subject}' has a stale success marker (no detectable outputs); could not remove marker: {e}. Reprocessing anyway"
-            )
-        return False
-
-    return False
+    return False, ""
 
 
 def _create_success_marker(subject, common):
@@ -574,7 +744,15 @@ def _wait_for_output_detection(
         time.sleep(interval_seconds)
 
 
-def _process_subject(subject, common, app, dry_run=False, force=False, debug=False):
+def _process_subject(
+    subject,
+    common,
+    app,
+    dry_run=False,
+    force=False,
+    debug=False,
+    project_json_path=None,
+):
     """Process a single subject with comprehensive error handling."""
     logging.info(f"Starting processing for subject: {subject}")
 
@@ -584,6 +762,7 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
 
     # Create temporary directory
     tmp_dir = os.path.join(common["tmp_folder"], subject)
+    analysis_level = str(app.get("analysis_level", "participant")).strip() or "participant"
 
     # Create debug log directory if in debug mode
     debug_log_dir = None
@@ -595,15 +774,22 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
         os.makedirs(tmp_dir, exist_ok=True)
 
         # Check if already processed
-        if _subject_processed(subject, common, app, force):
+        already_processed, skip_reason = _subject_processed(
+            subject,
+            common,
+            app,
+            force,
+            project_json_path=project_json_path,
+        )
+        if already_processed:
             try:
                 shutil.rmtree(tmp_dir)
             except:
                 pass
-            return True
+            return True, f"skipped-{skip_reason or 'marker'}"
 
-        # Get subject data if DataLad dataset
-        if is_input_datalad:
+        # Get subject data if DataLad dataset (participant mode only)
+        if is_input_datalad and analysis_level == "participant":
             prism_datalad.get_subject_data(common["bids_folder"], subject, dry_run)
 
         # Build container command
@@ -665,7 +851,7 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
             cmd.append(common["container"])
 
         # Add common BIDS app arguments
-        cmd.extend(["/bids", "/output", app.get("analysis_level", "participant")])
+        cmd.extend(["/bids", "/output", analysis_level])
 
         app_options = _ensure_mriqc_no_sub_option(container_ref, app.get("options", []))
         if app_options:
@@ -679,7 +865,15 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
             ):
                 cmd.extend(["--fs-license-file", "/fs/license.txt"])
 
-        cmd.extend(["--participant-label", subject.replace("sub-", ""), "-w", "/tmp"])
+        if analysis_level == "participant":
+            cmd.extend(["--participant-label", subject.replace("sub-", "")])
+        else:
+            logging.info(
+                "Group analysis selected: skipping --participant-label for subject %s",
+                subject,
+            )
+
+        cmd.extend(["-w", "/tmp"])
 
         # Execute the command
         result = _run_container(
@@ -694,11 +888,23 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
             if container_success:
                 logging.info(f"Container execution successful for {subject}")
 
-                # Save results if DataLad output dataset
-                if is_output_datalad:
+                # Save results if DataLad output dataset (participant mode only)
+                if is_output_datalad and analysis_level == "participant":
                     prism_datalad.save_results(
                         common["output_folder"], subject, dry_run
                     )
+
+                # Group mode runs once across all participants and should not be
+                # gated on participant-style output detection.
+                if analysis_level == "group":
+                    _create_success_marker(subject, common)
+                    logging.info("Group analysis completed successfully")
+
+                    try:
+                        shutil.rmtree(tmp_dir)
+                    except:
+                        pass
+                    return True, "finished"
 
                 # QSIRecon writes large outputs and may need extra time to flush
                 # on network filesystems; use a longer wait for it.
@@ -720,20 +926,20 @@ def _process_subject(subject, common, app, dry_run=False, force=False, debug=Fal
                         shutil.rmtree(tmp_dir)
                     except:
                         pass
-                    return True
+                    return True, "finished"
                 else:
                     logging.warning(
                         f"Container completed for {subject} but no output detected after waiting {max_wait}s"
                     )
-                    return False
+                    return False, "failed"
             else:
                 logging.error(f"Container execution failed for {subject}")
-                return False
+                return False, "failed"
 
-        return True
+        return True, "dry-run"
     except Exception as e:
         logging.error(f"Error processing subject {subject}: {e}")
-        return False
+        return False, "failed"
 
 
 # ============================================================================
@@ -757,6 +963,10 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
 
     common = config.get("common", {})
     app = config.get("app", {})
+    project_json_path = _resolve_project_json_path(getattr(args, "config", None))
+
+    if project_json_path:
+        logging.info(f"Project marker tracking enabled: {project_json_path}")
 
     # Create output directory if it doesn't exist
     output_folder = common.get("output_folder")
@@ -795,8 +1005,22 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
         else:
             logging.info(f"Auto-discovered {len(subjects)} subjects")
 
+    analysis_level = str(app.get("analysis_level", "participant")).strip().lower()
+    if not analysis_level:
+        analysis_level = "participant"
+
+    if analysis_level == "group":
+        if args.subjects:
+            logging.info("Group analysis selected: ignoring subject filter (--subjects)")
+        subjects = ["group"]
+        logging.info("Group analysis selected: running a single group-level execution")
+
     # Handle pilot mode
     pilot = args.pilot if hasattr(args, "pilot") else False
+    if analysis_level == "group" and pilot:
+        logging.info("Group analysis selected: ignoring pilot mode")
+        pilot = False
+
     if pilot:
         subject = random.choice(subjects)
         subjects = [subject]
@@ -807,11 +1031,17 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
     if pilot:
         jobs = 1
         logging.info("Pilot mode: forcing jobs=1")
+    if analysis_level == "group" and jobs != 1:
+        jobs = 1
+        logging.info("Group analysis selected: forcing jobs=1")
 
     # Handle debug mode
     debug = args.debug if hasattr(args, "debug") else False
     force = args.force if hasattr(args, "force") else False
     dry_run = args.dry_run if hasattr(args, "dry_run") else False
+    clean_success_markers = (
+        args.clean_success_markers if hasattr(args, "clean_success_markers") else False
+    )
     start_delay_sec = args.start_delay_sec if hasattr(args, "start_delay_sec") else 0.0
 
     try:
@@ -838,6 +1068,43 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
     if debug:
         logging.info("Debug mode enabled - detailed container logs will be saved")
 
+    if clean_success_markers:
+        if dry_run:
+            logging.info("Dry-run mode: skipping marker cleanup request")
+        else:
+            _clear_success_markers(common, project_json_path=project_json_path)
+
+    def _normalize_subject_result(result):
+        if isinstance(result, tuple) and len(result) == 2:
+            return bool(result[0]), str(result[1] or "")
+        return bool(result), "finished" if result else "failed"
+
+    def _record_project_status(subject, success, status):
+        if not project_json_path or dry_run:
+            return
+
+        if success and status == "finished":
+            _write_project_subject_state(
+                project_json_path,
+                subject,
+                "finished",
+                reason="container-success",
+            )
+        elif success and status == "skipped-success-marker":
+            _write_project_subject_state(
+                project_json_path,
+                subject,
+                "finished",
+                reason="success-marker-skip",
+            )
+        elif not success:
+            _write_project_subject_state(
+                project_json_path,
+                subject,
+                "failed",
+                reason="container-failed-or-incomplete",
+            )
+
     # Process subjects
     processed_subjects = []
     failed_subjects = []
@@ -845,13 +1112,21 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
     if dry_run:
         logging.info("DRY RUN MODE - No actual processing will occur")
         for subject in subjects:
-            success = _process_subject(
-                subject, common, app, dry_run=True, force=force, debug=debug
+            success_raw = _process_subject(
+                subject,
+                common,
+                app,
+                dry_run=True,
+                force=force,
+                debug=debug,
+                project_json_path=project_json_path,
             )
+            success, status = _normalize_subject_result(success_raw)
             if success:
                 processed_subjects.append(subject)
             else:
                 failed_subjects.append(subject)
+            _record_project_status(subject, success, status)
     elif jobs == 1:
         # Serial processing (supports debug mode)
         for idx, subject in enumerate(subjects):
@@ -861,11 +1136,21 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
                 )
                 time.sleep(start_delay_sec)
 
-            success = _process_subject(subject, common, app, False, force, debug)
+            success_raw = _process_subject(
+                subject,
+                common,
+                app,
+                False,
+                force,
+                debug,
+                project_json_path,
+            )
+            success, status = _normalize_subject_result(success_raw)
             if success:
                 processed_subjects.append(subject)
             else:
                 failed_subjects.append(subject)
+            _record_project_status(subject, success, status)
     else:
         # Parallel processing
         with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as executor:
@@ -878,7 +1163,14 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
                     time.sleep(start_delay_sec)
 
                 future = executor.submit(
-                    _process_subject, subject, common, app, False, force, False
+                    _process_subject,
+                    subject,
+                    common,
+                    app,
+                    False,
+                    force,
+                    False,
+                    project_json_path,
                 )
                 future_to_subject[future] = subject
 
@@ -886,14 +1178,17 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
                 subject = future_to_subject[future]
 
                 try:
-                    success = future.result()
+                    success_raw = future.result()
+                    success, status = _normalize_subject_result(success_raw)
                     if success:
                         processed_subjects.append(subject)
                     else:
                         failed_subjects.append(subject)
+                    _record_project_status(subject, success, status)
                 except Exception as e:
                     logging.error(f"Exception processing {subject}: {e}")
                     failed_subjects.append(subject)
+                    _record_project_status(subject, False, "failed")
 
     # Print summary
     end_time = time.time()
