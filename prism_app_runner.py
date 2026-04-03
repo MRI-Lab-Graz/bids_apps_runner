@@ -5,6 +5,7 @@ import platform
 import sys
 import json
 import glob
+import copy
 import subprocess
 import time
 import logging
@@ -271,6 +272,20 @@ class ProjectManager:
         return projects
 
     @staticmethod
+    def count_projects():
+        """Count available projects on disk."""
+        if not PROJECTS_DIR.exists():
+            return 0
+
+        total = 0
+        for project_dir in PROJECTS_DIR.iterdir():
+            if not project_dir.is_dir():
+                continue
+            if (project_dir / "project.json").exists():
+                total += 1
+        return total
+
+    @staticmethod
     def delete_project(project_id):
         """Delete a project and all its data."""
         project_dir = PROJECTS_DIR / project_id
@@ -280,6 +295,40 @@ class ProjectManager:
             return True
 
         return False
+
+
+def _validate_project_json_shape(project_json):
+    """Validate minimal shape for externally loaded project.json files."""
+    if not isinstance(project_json, dict):
+        return "Invalid project.json: top-level JSON value must be an object"
+
+    required_top_level = ["id", "name", "config"]
+    missing_top_level = [k for k in required_top_level if k not in project_json]
+    if missing_top_level:
+        return (
+            "Invalid project.json: missing top-level key(s): "
+            + ", ".join(missing_top_level)
+        )
+
+    project_id = project_json.get("id")
+    if not isinstance(project_id, str) or not project_id.strip():
+        return "Invalid project.json: id must be a non-empty string"
+
+    project_name = project_json.get("name")
+    if not isinstance(project_name, str) or not project_name.strip():
+        return "Invalid project.json: name must be a non-empty string"
+
+    config = project_json.get("config")
+    if not isinstance(config, dict):
+        return "Invalid project.json: config must be an object"
+
+    if not isinstance(config.get("common"), dict):
+        return "Invalid project.json: config.common must be an object"
+
+    if not isinstance(config.get("app"), dict):
+        return "Invalid project.json: config.app must be an object"
+
+    return None
 
 
 def _find_python_interpreter():
@@ -325,7 +374,11 @@ def check_system_dependencies():
     }
 
 
-SILENT_ENDPOINTS = {"/build_apptainer_status", "/get_log"}
+SILENT_ENDPOINTS = {
+    "/build_apptainer_status",
+    "/get_log",
+    "/pilot_estimator_status",
+}
 
 @app.before_request
 def log_request_info():
@@ -362,6 +415,165 @@ def _record_build_log(path, command, stdout, stderr):
             logf.write((stderr or "<no errors>") + "\n")
     except OSError:
         pass
+
+
+def resolve_config_path(config_path):
+    """Resolve config paths across common runtime locations."""
+    cfg = Path(os.path.expanduser(str(config_path)))
+    if cfg.is_absolute() and cfg.exists():
+        return cfg
+    if cfg.exists():
+        return cfg.resolve()
+
+    candidates = [
+        DATA_DIR / cfg,
+        BASE_DIR / cfg,
+        (BASE_DIR / "scripts") / cfg,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+
+    raise FileNotFoundError(f"Config file not found: {config_path}")
+
+
+def _extract_runtime_config(cfg):
+    """Return runnable config payload from either config.json or project.json."""
+    if isinstance(cfg, dict) and isinstance(cfg.get("config"), dict):
+        return cfg["config"]
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _drop_flag_with_value(options, flag):
+    cleaned = []
+    i = 0
+    while i < len(options):
+        token = str(options[i])
+        if token == flag:
+            i += 2
+            continue
+        if token.startswith(flag + "="):
+            i += 1
+            continue
+        cleaned.append(token)
+        i += 1
+    return cleaned
+
+
+def _apply_max_usage_cap(runtime_cfg, percent):
+    """Apply CPU cap to a runtime config without mutating the original object."""
+    capped = copy.deepcopy(runtime_cfg)
+
+    max_cores = os.cpu_count() or 1
+    allowed_cores = max(1, int(max_cores * (float(percent) / 100.0)))
+
+    common = capped.setdefault("common", {})
+    current_jobs = common.get("jobs", 1)
+    try:
+        current_jobs = int(current_jobs)
+    except (TypeError, ValueError):
+        current_jobs = 1
+    common["jobs"] = max(1, min(current_jobs, allowed_cores))
+
+    app_cfg = capped.setdefault("app", {})
+    options = [str(x) for x in app_cfg.get("options", [])]
+    cpu_flags = ["--nprocs", "--nthreads", "--n_cpus", "--n-cpus"]
+    for flag in cpu_flags:
+        options = _drop_flag_with_value(options, flag)
+
+    options.extend(["--nprocs", str(allowed_cores)])
+    app_cfg["options"] = options
+
+    return capped, allowed_cores, max_cores
+
+
+def _get_total_memory_bytes():
+    """Best-effort total memory detection without external dependencies."""
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        phys_pages = os.sysconf("SC_PHYS_PAGES")
+        if page_size and phys_pages and page_size > 0 and phys_pages > 0:
+            return int(page_size) * int(phys_pages)
+    except (AttributeError, OSError, ValueError):
+        pass
+
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    parts = line.split()
+                    return int(parts[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+
+    return None
+
+
+def _compute_auto_nprocs_values(nprocs_min=2, nprocs_max=None, nprocs_step=1):
+    """Compute auto nprocs sweep list for the pilot estimator."""
+    detected_max = os.cpu_count() or 1
+    start = max(1, int(nprocs_min))
+    step = max(1, int(nprocs_step))
+    stop = detected_max if nprocs_max is None else int(nprocs_max)
+    stop = min(stop, detected_max)
+
+    if start > stop:
+        start = stop
+
+    values = list(range(start, stop + 1, step))
+    if values and values[-1] != stop:
+        values.append(stop)
+    if not values:
+        values = [max(1, stop)]
+
+    return values
+
+
+def _is_process_alive(proc):
+    if proc is None:
+        return False
+    try:
+        return proc.poll() is None
+    except Exception:
+        return False
+
+
+def _is_pilot_process_running(output_dir):
+    """Best-effort process detection for a pilot estimator by output dir."""
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,args="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        marker = str(output_dir)
+        for line in result.stdout.splitlines():
+            if "pilot_resource_estimator.py" in line and marker in line:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _pilot_progress_from_output_dir(output_dir, expected_total=None):
+    """Estimate pilot progress from generated per-step logs."""
+    completed = 0
+    if output_dir.exists():
+        for f in output_dir.glob("stdout_n*.log"):
+            try:
+                if f.stat().st_size > 0:
+                    completed += 1
+            except OSError:
+                continue
+
+    total = int(expected_total) if expected_total else None
+    percent = None
+    if total and total > 0:
+        percent = round(min(100.0, (completed / total) * 100.0), 1)
+
+    return completed, total, percent
 
 
 def _read_nifti_zooms(nifti_path):
@@ -552,7 +764,12 @@ def get_docker_tags():
     if not data or "repo" not in data:
         return jsonify({"error": "No repository provided"}), 400
 
-    repo = data["repo"]
+    repo = str(data["repo"] or "").strip()
+    if not repo:
+        return jsonify({"error": "No repository provided"}), 400
+    if " " in repo or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._\/-]*$", repo):
+        return jsonify({"error": "Repository format is invalid"}), 400
+
     print(f"[GUI] Fetching tags for repo: {repo}", flush=True)
 
     try:
@@ -602,13 +819,17 @@ APP_LAUNCH_ENV_VALUE = "1"
 RUN_JOBS = {}
 RUN_JOBS_LOCK = threading.Lock()
 
-# Simple cache for log polling to reduce file system calls
-_log_cache = {"timestamp": 0, "content": "", "filename": "none", "is_active": False}
+# Simple cache for log polling to reduce file system calls (keyed by project_id)
+_log_cache = {}
 _log_cache_ttl = 1.0  # Cache for 1 second
 
 # Track background Apptainer builds started from GUI utility tab
 APPTAINER_BUILDS = {}
 APPTAINER_BUILDS_LOCK = threading.Lock()
+
+# Track pilot resource estimator jobs
+PILOT_JOBS = {}
+PILOT_JOBS_LOCK = threading.Lock()
 
 
 def _get_active_tracked_run_jobs():
@@ -1117,6 +1338,16 @@ def _prepare_apptainer_build(data):
             400,
         )
 
+    if os.path.expanduser(output_dir) == os.path.expanduser(tmp_dir):
+        return None, (
+            jsonify(
+                {
+                    "error": "Output directory and temporary directory must be different."
+                }
+            ),
+            400,
+        )
+
     output_path = Path(os.path.expanduser(output_dir))
     tmp_path = Path(os.path.expanduser(tmp_dir))
     output_path.mkdir(parents=True, exist_ok=True)
@@ -1130,7 +1361,19 @@ def _prepare_apptainer_build(data):
     docker_repo = (data.get("docker_repo") or "").strip()
     docker_tag = (data.get("docker_tag") or "").strip()
     keep_temp = bool(data.get("keep_temp"))
-    timeout_seconds = int(data.get("timeout", 7200))
+    try:
+        timeout_seconds = int(data.get("timeout", 7200))
+    except (TypeError, ValueError):
+        timeout_seconds = 7200
+    timeout_seconds = max(60, min(timeout_seconds, 21600))
+
+    repo_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\/-]*$")
+    tag_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+    if docker_repo and not repo_pattern.match(docker_repo):
+        return None, (jsonify({"error": "Docker repository format is invalid."}), 400)
+    if docker_tag and not tag_pattern.match(docker_tag):
+        return None, (jsonify({"error": "Docker tag format is invalid."}), 400)
 
     cmd = []
     built_image = None
@@ -1139,13 +1382,20 @@ def _prepare_apptainer_build(data):
     cache_dir = None
 
     if dockerfile:
+        dockerfile_path = Path(os.path.expanduser(dockerfile))
+        if not dockerfile_path.exists() or not dockerfile_path.is_file():
+            return None, (
+                jsonify({"error": f"Dockerfile not found: {dockerfile_path}"}),
+                400,
+            )
+
         script_path = BASE_DIR / "scripts" / "build_apptainer.sh"
         if not script_path.exists():
             return None, (jsonify({"error": "Build script missing from project."}), 500)
         cmd = ["bash", str(script_path), "-o", str(output_path), "-t", str(tmp_path)]
         if keep_temp:
             cmd.append("--no-temp-del")
-        cmd.extend(["-d", dockerfile])
+        cmd.extend(["-d", str(dockerfile_path)])
         if docker_repo:
             cmd.extend(["--docker-repo", docker_repo])
         if docker_tag:
@@ -1282,41 +1532,36 @@ def _run_apptainer_build_async(build_id):
 def get_log():
     global _log_cache
     try:
-        # Get project_id from query params (optional)
-        project_id = request.args.get("project_id")
+        project_id = (request.args.get("project_id") or "").strip()
+
+        # Terminal output is project-scoped only.
+        if not project_id:
+            return jsonify({"content": "", "filename": "none", "is_active": False}), 200
+
+        cache_key = project_id
+        cache_entry = _log_cache.get(cache_key)
 
         # Check cache first
         current_time = time.time()
-        if current_time - _log_cache["timestamp"] < _log_cache_ttl:
+        if cache_entry and (current_time - cache_entry["timestamp"] < _log_cache_ttl):
             return jsonify(
                 {
-                    "content": _log_cache["content"],
-                    "filename": _log_cache["filename"],
-                    "is_active": _log_cache["is_active"],
+                    "content": cache_entry["content"],
+                    "filename": cache_entry["filename"],
+                    "is_active": cache_entry["is_active"],
                 }
             )
 
-        # Check if there are any active run_bids_apps.py processes
-        result = subprocess.run(
-            ["pgrep", "-f", "scripts/run_bids_apps.py"],
-            capture_output=True,
-            text=True,
-            timeout=1,
-        )
-        has_active_job = bool(result.stdout.strip())
+        tracked_jobs = _get_active_tracked_run_jobs()
+        has_active_job = any((job.get("project_id") or "") == project_id for job in tracked_jobs)
 
-        # If project_id is specified, look for logs in that project
-        if project_id:
-            project_dir = PROJECTS_DIR / project_id / "logs"
-            if project_dir.exists():
-                log_files = sorted(
-                    list(project_dir.glob("*.log")), key=os.path.getmtime, reverse=True
-                )
-            else:
-                log_files = []
+        project_dir = PROJECTS_DIR / project_id / "logs"
+        if project_dir.exists():
+            log_files = sorted(
+                list(project_dir.glob("*.log")), key=os.path.getmtime, reverse=True
+            )
         else:
-            # Fallback to old location (DATA_DIR) for backward compatibility
-            log_files = glob.glob(str(DATA_DIR / "nohup_bids_runner_*.log"))
+            log_files = []
 
         if not log_files:
             return jsonify({"content": "", "filename": "none", "is_active": False}), 200
@@ -1352,7 +1597,7 @@ def get_log():
             )
 
         # Update cache
-        _log_cache = {
+        _log_cache[cache_key] = {
             "timestamp": current_time,
             "content": content,
             "filename": (
@@ -1365,9 +1610,9 @@ def get_log():
 
         return jsonify(
             {
-                "filename": _log_cache["filename"],
-                "content": _log_cache["content"],
-                "is_active": _log_cache["is_active"],
+                "filename": _log_cache[cache_key]["filename"],
+                "content": _log_cache[cache_key]["content"],
+                "is_active": _log_cache[cache_key]["is_active"],
             }
         )
     except Exception as e:
@@ -1378,8 +1623,19 @@ def get_log():
 def get_projects():
     """Get list of recent projects (limit 5)."""
     try:
-        projects = ProjectManager.list_projects(limit=5)
-        return jsonify({"projects": projects}), 200
+        limit = 5
+        projects = ProjectManager.list_projects(limit=limit)
+        total_projects = ProjectManager.count_projects()
+        return (
+            jsonify(
+                {
+                    "projects": projects,
+                    "limit": limit,
+                    "total_projects": total_projects,
+                }
+            ),
+            200,
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1457,6 +1713,22 @@ def check_system():
     return jsonify(check_system_dependencies())
 
 
+@app.route("/system_resources", methods=["GET"])
+def system_resources():
+    """Return lightweight host resource info for GUI defaults."""
+    mem_bytes = _get_total_memory_bytes()
+    mem_gib = round(mem_bytes / (1024**3), 2) if mem_bytes is not None else None
+    return jsonify(
+        {
+            "cpu_count": os.cpu_count() or 1,
+            "memory_total_bytes": mem_bytes,
+            "memory_total_gib": mem_gib,
+            "gpu_available": shutil.which("nvidia-smi") is not None,
+            "slurm_available": shutil.which("sbatch") is not None,
+        }
+    )
+
+
 @app.route("/smtp_diagnostics", methods=["POST"])
 def smtp_diagnostics():
     """Inspect SMTP capabilities and optionally send a test email."""
@@ -1527,11 +1799,17 @@ def run_output_check():
     data = request.get_json(silent=True) or {}
     bids_dir = (data.get("bids_dir") or "").strip()
     derivatives_dir = (data.get("derivatives_dir") or "").strip()
+    verbose = bool(data.get("verbose"))
+    quiet = bool(data.get("quiet"))
+
     if not bids_dir or not derivatives_dir:
         return (
             jsonify({"error": "Both BIDS and derivatives folders must be provided."}),
             400,
         )
+
+    if verbose and quiet:
+        return jsonify({"error": "Verbose and quiet modes cannot both be enabled."}), 400
 
     bids_path = Path(os.path.expanduser(bids_dir))
     derivatives_path = Path(os.path.expanduser(derivatives_dir))
@@ -1552,6 +1830,8 @@ def run_output_check():
     script_path = BASE_DIR / "scripts" / "check_app_output.py"
     if not script_path.exists():
         script_path = BASE_DIR / "check_app_output.py"
+    if not script_path.exists():
+        return jsonify({"error": f"Checker script not found: {script_path}"}), 500
 
     cmd = [
         sys.executable,
@@ -1565,14 +1845,19 @@ def run_output_check():
     pipeline = (data.get("pipeline") or "").strip()
     if pipeline:
         cmd.extend(["-p", pipeline])
-    if data.get("verbose"):
+    if verbose:
         cmd.append("--verbose")
-    if data.get("quiet"):
+    if quiet:
         cmd.append("--quiet")
     if data.get("list_missing"):
         cmd.append("--list-missing-subjects")
 
-    timeout_seconds = int(data.get("timeout", 900))
+    try:
+        timeout_seconds = int(data.get("timeout", 900))
+    except (TypeError, ValueError):
+        timeout_seconds = 900
+    timeout_seconds = max(30, min(timeout_seconds, 7200))
+
     try:
         result = subprocess.run(
             cmd,
@@ -2277,6 +2562,10 @@ def load_project_file():
         with open(p, "r") as f:
             project_json = json.load(f)
 
+        validation_error = _validate_project_json_shape(project_json)
+        if validation_error:
+            return jsonify({"error": validation_error}), 400
+
         return jsonify(project_json), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2439,23 +2728,25 @@ def _map_container_path_to_host(container_path, mounts):
 def run_app():
     global GUI_SESSION_STARTED
     data = request.get_json(silent=True) or {}
-    config_path = data.get("config_path")
+    config_path_raw = data.get("config_path")
     project_id = data.get("project_id")  # NEW: project context
     runner_args = _normalize_runner_args(data.get("runner_args", []))
+    max_usage_enabled = bool(data.get("max_usage_enabled", False))
+    max_usage_percent = data.get("max_usage_percent", 100)
     notify_email = (data.get("notify_email") or "").strip()
-    if not config_path:
+    if not config_path_raw:
         return jsonify({"error": "No config path provided"}), 400
 
     try:
+        config_path = resolve_config_path(config_path_raw)
+
         # 1. Path Validation
         with open(config_path, "r") as f:
-            cfg = json.load(f)
+            cfg_raw = json.load(f)
 
-        # Handle project.json format — config is nested under "config" key
-        if "config" in cfg and isinstance(cfg["config"], dict) and "common" in cfg["config"]:
-            cfg = cfg["config"]
+        runtime_cfg = _extract_runtime_config(cfg_raw)
 
-        common = cfg.get("common", {})
+        common = runtime_cfg.get("common", {})
         if not notify_email:
             notify_email = str(common.get("notify_email", "")).strip()
 
@@ -2489,7 +2780,7 @@ def run_app():
             )
 
         # FreeSurfer license preflight for fMRIPrep
-        app_cfg = cfg.get("app", {})
+        app_cfg = runtime_cfg.get("app", {})
         options = app_cfg.get("options", [])
         mounts = app_cfg.get("mounts", [])
         container_name = str(common.get("container", "")).lower()
@@ -2582,6 +2873,42 @@ def run_app():
             work_dir.mkdir(parents=True, exist_ok=True)
         else:
             work_dir = DATA_DIR
+            work_dir.mkdir(parents=True, exist_ok=True)
+
+        runtime_config_path = config_path
+        runtime_note = ""
+
+        # Optional per-run CPU usage cap to reserve resources.
+        if max_usage_enabled:
+            try:
+                max_usage_percent = int(max_usage_percent)
+            except (TypeError, ValueError):
+                return jsonify({"error": "max_usage_percent must be an integer"}), 400
+
+            if max_usage_percent < 10 or max_usage_percent > 100:
+                return (
+                    jsonify({"error": "max_usage_percent must be between 10 and 100"}),
+                    400,
+                )
+
+            capped_cfg, allowed_cores, host_cores = _apply_max_usage_cap(
+                runtime_cfg, max_usage_percent
+            )
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            runtime_config_path = work_dir / f"runtime_config_capped_{timestamp}.json"
+            with open(runtime_config_path, "w", encoding="utf-8") as f:
+                json.dump(capped_cfg, f, indent=2)
+
+            runtime_note = (
+                f" Resource cap enabled: {max_usage_percent}% of {host_cores} cores "
+                f"-> using up to {allowed_cores} core(s)."
+            )
+        elif runtime_cfg is not cfg_raw:
+            # project.json wrapper case: write a plain runtime config for execution
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            runtime_config_path = work_dir / f"runtime_config_{timestamp}.json"
+            with open(runtime_config_path, "w", encoding="utf-8") as f:
+                json.dump(runtime_cfg, f, indent=2)
 
         # 2. Launch run_bids_apps.py in background
         if getattr(sys, "frozen", False):
@@ -2590,7 +2917,7 @@ def run_app():
             script_path = BASE_DIR / "scripts" / "run_bids_apps.py"
 
         # Build command - use ABSOLUTE paths to avoid working directory issues
-        abs_config_path = os.path.abspath(config_path)
+        abs_config_path = os.path.abspath(str(runtime_config_path))
 
         cmd = [
             PYTHON_EXE,
@@ -2669,6 +2996,7 @@ def run_app():
             {
                 "message": (
                     f"BIDS App Runner started in background. Command: {' '.join(cmd)}"
+                    + runtime_note
                     + (
                         f". Completion email will be sent to {notify_email}."
                         if notify_email
@@ -2682,12 +3010,237 @@ def run_app():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/run_pilot_estimator", methods=["POST"])
+def run_pilot_estimator():
+    """Launch pilot_resource_estimator.py in background from the GUI."""
+    req = request.get_json(silent=True) or {}
+    config_path_raw = req.get("config_path")
+    project_id = req.get("project_id")
+    subject = (req.get("subject") or "").strip()
+    nprocs_mode = (req.get("nprocs_mode") or "auto").strip().lower()
+    nprocs = str(req.get("nprocs") or "").strip()
+    force = bool(req.get("force", False))
+
+    if not config_path_raw:
+        return jsonify({"error": "config_path is required"}), 400
+
+    try:
+        config_path = resolve_config_path(config_path_raw)
+
+        if project_id:
+            work_dir = PROJECTS_DIR / project_id / "logs"
+            work_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            work_dir = DATA_DIR / "logs"
+            work_dir.mkdir(parents=True, exist_ok=True)
+
+        if getattr(sys, "frozen", False):
+            script_path = BUNDLE_DIR / "scripts" / "pilot_resource_estimator.py"
+        else:
+            script_path = BASE_DIR / "scripts" / "pilot_resource_estimator.py"
+
+        if not script_path.exists():
+            return jsonify({"error": f"Pilot estimator not found: {script_path}"}), 500
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        job_id = f"pilot_{timestamp}_{uuid.uuid4().hex[:8]}"
+        output_dir = work_dir / f"pilot_resource_estimator_{timestamp}"
+        log_file = work_dir / f"pilot_resource_estimator_{timestamp}.log"
+
+        expected_nprocs = []
+
+        cmd = [
+            PYTHON_EXE,
+            "-u",
+            str(script_path),
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+
+        if subject:
+            cmd.extend(["--subject", subject])
+
+        if nprocs_mode == "manual" and nprocs:
+            cmd.extend(["--nprocs", nprocs])
+            try:
+                expected_nprocs = sorted(
+                    set(int(x.strip()) for x in nprocs.split(",") if str(x).strip())
+                )
+            except ValueError:
+                expected_nprocs = []
+        else:
+            # Auto mode with optional bounds
+            nprocs_min = req.get("nprocs_min", 2)
+            nprocs_max = req.get("nprocs_max")
+            nprocs_step = req.get("nprocs_step", 1)
+
+            try:
+                nprocs_min = int(nprocs_min)
+                nprocs_step = int(nprocs_step)
+                cmd.extend(["--nprocs-min", str(nprocs_min)])
+                cmd.extend(["--nprocs-step", str(nprocs_step)])
+                if nprocs_max not in (None, "", "null"):
+                    cmd.extend(["--nprocs-max", str(int(nprocs_max))])
+
+                expected_nprocs = _compute_auto_nprocs_values(
+                    nprocs_min=nprocs_min,
+                    nprocs_max=(
+                        None
+                        if nprocs_max in (None, "", "null")
+                        else int(nprocs_max)
+                    ),
+                    nprocs_step=nprocs_step,
+                )
+            except (TypeError, ValueError):
+                return (
+                    jsonify({"error": "Invalid nprocs_min/nprocs_max/nprocs_step values"}),
+                    400,
+                )
+
+        expected_runs = len(expected_nprocs)
+
+        if force:
+            cmd.append("--force")
+
+        launch_env = os.environ.copy()
+        launch_env[APP_LAUNCH_ENV_KEY] = APP_LAUNCH_ENV_VALUE
+
+        with open(log_file, "w", encoding="utf-8") as logf:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(work_dir),
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                env=launch_env,
+            )
+
+        with PILOT_JOBS_LOCK:
+            PILOT_JOBS[job_id] = {
+                "job_id": job_id,
+                "pid": proc.pid,
+                "process": proc,
+                "started_at": datetime.now().isoformat(),
+                "command": [str(x) for x in cmd],
+                "log_file": str(log_file),
+                "output_dir": str(output_dir),
+                "report_file": str(output_dir / "pilot_resource_report.md"),
+                "results_file": str(output_dir / "pilot_results.json"),
+                "expected_runs": expected_runs,
+                "expected_nprocs": expected_nprocs,
+            }
+
+        return jsonify(
+            {
+                "message": "Pilot estimator started in background.",
+                "job_id": job_id,
+                "command": " ".join(cmd),
+                "log_file": str(log_file),
+                "output_dir": str(output_dir),
+                "report_file": str(output_dir / "pilot_resource_report.md"),
+                "results_file": str(output_dir / "pilot_results.json"),
+                "expected_runs": expected_runs,
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/pilot_estimator_status", methods=["POST"])
+def pilot_estimator_status():
+    """Return live status/progress for a pilot estimator run."""
+    req = request.get_json(silent=True) or {}
+    job_id = (req.get("job_id") or "").strip()
+
+    entry = None
+    if job_id:
+        with PILOT_JOBS_LOCK:
+            entry = PILOT_JOBS.get(job_id)
+
+    log_file = req.get("log_file")
+    output_dir = req.get("output_dir")
+    report_file = req.get("report_file")
+    results_file = req.get("results_file")
+    expected_runs = req.get("expected_runs")
+
+    if entry:
+        log_file = entry.get("log_file")
+        output_dir = entry.get("output_dir")
+        report_file = entry.get("report_file")
+        results_file = entry.get("results_file")
+        expected_runs = entry.get("expected_runs") or expected_runs
+
+    if not log_file and not output_dir:
+        return jsonify({"error": "job_id or log_file/output_dir required"}), 400
+
+    log_path = Path(str(log_file)).expanduser() if log_file else None
+    output_dir_path = Path(str(output_dir)).expanduser() if output_dir else None
+    report_path = Path(str(report_file)).expanduser() if report_file else None
+    results_path = Path(str(results_file)).expanduser() if results_file else None
+
+    running = False
+    exit_code = None
+    if entry:
+        proc = entry.get("process")
+        running = _is_process_alive(proc)
+        if not running and proc is not None:
+            try:
+                exit_code = proc.poll()
+            except Exception:
+                exit_code = None
+
+    if not running and output_dir_path is not None:
+        running = _is_pilot_process_running(output_dir_path)
+
+    report_exists = report_path.exists() if report_path else False
+    results_exists = results_path.exists() if results_path else False
+
+    completed, total, percent = (0, None, None)
+    if output_dir_path is not None:
+        completed, total, percent = _pilot_progress_from_output_dir(
+            output_dir_path, expected_total=expected_runs
+        )
+
+    status = "running"
+    if report_exists and results_exists:
+        status = "completed"
+        running = False
+    elif not running:
+        status = "failed" if exit_code not in (None, 0) else "idle"
+
+    tail = _read_log_tail(log_path) if log_path else ""
+
+    return jsonify(
+        {
+            "job_id": job_id or None,
+            "status": status,
+            "running": running,
+            "exit_code": exit_code,
+            "log_file": str(log_path) if log_path else None,
+            "output_dir": str(output_dir_path) if output_dir_path else None,
+            "report_file": str(report_path) if report_path else None,
+            "results_file": str(results_path) if results_path else None,
+            "report_exists": report_exists,
+            "results_exists": results_exists,
+            "progress": {
+                "completed": completed,
+                "total": total,
+                "percent": percent,
+            },
+            "log_tail": tail,
+        }
+    )
+
+
 @app.route("/kill_job", methods=["POST"])
 def kill_job():
     # Stop current run or all runs
     try:
         data = request.get_json(silent=True) or {}
         scope = str(data.get("scope", "current")).strip().lower()
+        project_id = str(data.get("project_id") or "").strip()
         if scope not in {"current", "all"}:
             return jsonify({"error": "Invalid scope. Use 'current' or 'all'."}), 400
 
@@ -2696,13 +3249,23 @@ def kill_job():
 
         if scope == "current":
             target = None
-            if tracked_jobs:
-                target = max(tracked_jobs, key=lambda state: state.get("started_at", 0))
+            candidate_jobs = tracked_jobs
+            if project_id:
+                candidate_jobs = [
+                    state
+                    for state in tracked_jobs
+                    if str(state.get("project_id") or "") == project_id
+                ]
+
+            if candidate_jobs:
+                target = max(
+                    candidate_jobs, key=lambda state: state.get("started_at", 0)
+                )
 
             if target is not None:
                 if _terminate_tracked_run(target):
                     killed += 1
-            else:
+            elif not project_id:
                 # Fallback for runs not tracked in current GUI memory.
                 candidate_pids = sorted(_find_app_related_pids(include_marked=True))
                 if candidate_pids:
@@ -2711,9 +3274,28 @@ def kill_job():
                         killed += 1
 
             if killed == 0:
+                if project_id:
+                    return (
+                        jsonify(
+                            {
+                                "message": f"No active tracked run found for project {project_id}."
+                            }
+                        ),
+                        200,
+                    )
                 return (
                     jsonify(
                         {"message": "No active BIDS App Runner process found to stop."}
+                    ),
+                    200,
+                )
+
+            if project_id:
+                return (
+                    jsonify(
+                        {
+                            "message": f"Stop signal sent to current run for project {project_id}."
+                        }
                     ),
                     200,
                 )

@@ -13,20 +13,34 @@
     <link href="{{ url_for('static', filename='css/main.css') }}" rel="stylesheet">
     <style>
         :root {
-            --primary-color: #2c3e50;
-            --accent-color: #3498db;
-            --bg-color: #f4f7f6;
-            --card-bg: #ffffff;
+            --studio-brand-primary: #1f2328;
+            --studio-brand-primary-hover: #0f1114;
+            --studio-brand-accent: #ffd200;
+            --studio-brand-accent-text: #1f2328;
+            --studio-icon-primary: #1f8b5c;
+            --studio-canvas: #f3f4f6;
+            --studio-surface: #ffffff;
+            --studio-surface-muted: #f8f9fa;
+            --studio-border: #dee2e6;
+            --studio-border-soft: #e9ecef;
+            --studio-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+            --studio-radius: 12px;
+
+            /* Backward-compatible aliases used by existing templates */
+            --primary-color: var(--studio-brand-primary);
+            --accent-color: var(--studio-icon-primary);
+            --bg-color: var(--studio-canvas);
+            --card-bg: var(--studio-surface);
         }
-        body { background-color: var(--bg-color); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding-bottom: 50px; }
-        .navbar { background-color: #fff; border-bottom: 3px solid var(--accent-color); padding: 10px 0; }
+        body { background-color: var(--bg-color); color: var(--studio-brand-primary); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding-bottom: 50px; }
+        .navbar { background-color: var(--studio-surface); border-bottom: 1px solid var(--studio-border); box-shadow: var(--studio-shadow); padding: 10px 0; }
         .brand-logo { max-width: 50px; height: auto; margin-right: 15px; }
         .brand-text .fw-bold { color: var(--primary-color); font-size: 1.25rem; }
-        .footer { background-color: #fff; border-top: 1px solid #eee; padding: 30px 0; margin-top: 50px; }
+        .footer { background-color: var(--studio-surface); border-top: 1px solid var(--studio-border); padding: 30px 0; margin-top: 50px; }
     </style>
     {% block styles %}{% endblock %}
 </head>
-<body>
+<body class="studio-theme">
     <!-- Navbar -->
     <nav class="navbar navbar-expand-lg navbar-light shadow-sm">
         <div class="container">

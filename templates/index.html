@@ -3,26 +3,72 @@
 {% block styles %}
     <style>
         :root {
-            --primary-color: #2c3e50;
-            --accent-color: #3498db;
-            --bg-color: #f4f7f6;
-            --card-bg: #ffffff;
+            --primary-color: var(--studio-brand-primary);
+            --accent-color: var(--studio-icon-primary);
+            --bg-color: var(--studio-canvas);
+            --card-bg: var(--studio-surface);
         }
-        .card { border: none; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); margin-bottom: 25px; overflow: hidden; }
-        .card-header { background-color: #fff; border-bottom: 1px solid #f0f0f0; font-weight: 700; color: var(--primary-color); padding: 15px 25px; }
+        .card { border: 1px solid var(--studio-border); border-radius: var(--studio-radius); box-shadow: var(--studio-shadow); margin-bottom: 25px; overflow: hidden; }
+        .card-header { background-color: var(--studio-surface-muted); border-bottom: 1px solid var(--studio-border-soft); font-weight: 700; color: var(--primary-color); padding: 15px 25px; }
         .section-header { border-bottom: 2px solid var(--accent-color); margin: 30px 0 15px 0; padding-bottom: 8px; color: var(--primary-color); font-weight: 700; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px; }
+
+        /* Runner main-section accordion (collapsed on load) */
+        .main-accordion-item {
+            border: 1px solid var(--studio-border);
+            border-radius: var(--studio-radius);
+            background: var(--studio-surface);
+            margin: 14px 0 18px;
+            overflow: hidden;
+            box-shadow: var(--studio-shadow);
+        }
+        .main-accordion-header.section-header {
+            margin: 0;
+            padding: 14px 18px;
+            border-bottom: 0;
+            background: var(--studio-surface-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
+        }
+        .main-accordion-header.section-header::after {
+            content: "\f107";
+            font-family: "Font Awesome 6 Free";
+            font-weight: 900;
+            color: #6c757d;
+            transition: transform 0.2s ease, color 0.2s ease;
+            margin-left: 12px;
+            flex-shrink: 0;
+        }
+        .main-accordion-item.is-open > .main-accordion-header.section-header {
+            color: var(--accent-color);
+            background: #eef8f2;
+            border-bottom: 1px solid var(--studio-border-soft);
+        }
+        .main-accordion-item.is-open > .main-accordion-header.section-header::after {
+            transform: rotate(180deg);
+            color: var(--accent-color);
+        }
+        .main-accordion-body {
+            display: none;
+            padding: 14px 0 6px;
+        }
+        .main-accordion-item.is-open > .main-accordion-body {
+            display: block;
+        }
         .btn { border-radius: 6px; font-weight: 600; padding: 10px 20px; transition: all 0.2s; }
-        .btn-primary { background-color: var(--accent-color); border: none; }
-        .btn-primary:hover { background-color: #2980b9; transform: translateY(-1px); }
-        .btn-accent { background-color: #8e44ad; color: white; border: none; }
-        .btn-accent:hover { background-color: #7d3c98; transform: translateY(-1px); color: white; }
+        .btn-primary { background-color: var(--studio-brand-primary); border-color: var(--studio-brand-primary); color: #fff; }
+        .btn-primary:hover { background-color: var(--studio-brand-primary-hover); border-color: var(--studio-brand-primary-hover); transform: translateY(-1px); }
+        .btn-accent { background-color: var(--studio-brand-accent); color: var(--studio-brand-accent-text); border: 1px solid var(--studio-brand-accent); }
+        .btn-accent:hover { background-color: #e0ba00; border-color: #e0ba00; transform: translateY(-1px); color: #111; }
         .form-label { font-weight: 600; color: #495057; font-size: 0.9rem; margin-bottom: 8px; }
-        .form-control, .form-select { border-radius: 6px; padding: 10px 12px; border: 1px solid #dee2e6; }
-        .form-control:focus, .form-select:focus { box-shadow: 0 0 0 0.25rem rgba(52, 152, 219, 0.15); border-color: var(--accent-color); }
+        .form-control, .form-select { border-radius: 10px; padding: 10px 12px; border: 1px solid var(--studio-border); }
+        .form-control:focus, .form-select:focus { box-shadow: 0 0 0 0.25rem rgba(31, 139, 92, 0.2); border-color: #66b58f; }
         
         /* Terminal Styling */
         .terminal-container { margin-top: 40px; }
-        .terminal-header { background: #333; color: #efefef; padding: 10px 20px; border-radius: 8px 8px 0 0; display: flex; justify-content: space-between; align-items: center; font-family: sans-serif; font-size: 0.9rem; }
+        .terminal-header { background: var(--studio-brand-primary); color: #f1f5f9; padding: 10px 20px; border-radius: 8px 8px 0 0; display: flex; justify-content: space-between; align-items: center; font-family: sans-serif; font-size: 0.9rem; }
         #terminal {
             background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 0 0 8px 8px; 
             height: 400px; overflow-y: auto; font-family: 'Consolas', 'Monaco', 'Courier New', monospace; 
@@ -30,13 +76,13 @@
             word-wrap: break-word; line-height: 1.5;
         }
         
-        .opt-section { border: 1px solid #f0f0f0; margin-bottom: 12px; border-radius: 8px; overflow: hidden; }
-        .opt-section-header { background: #fcfcfc; padding: 12px 20px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: 600; border-bottom: 1px solid #f0f0f0; transition: background 0.2s; }
+        .opt-section { border: 1px solid var(--studio-border); margin-bottom: 12px; border-radius: 8px; overflow: hidden; }
+        .opt-section-header { background: var(--studio-surface); padding: 12px 20px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: 600; border-bottom: 1px solid var(--studio-border-soft); transition: background 0.2s; }
         .opt-section-header:hover { background: #f8f9fa; }
         .opt-section-header i { transition: transform 0.3s ease; color: #adb5bd; }
         .opt-section-content { display: none; padding: 20px; background: #fff; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 15px; }
         .opt-section.active .opt-section-content { display: grid; }
-        .opt-section.active .opt-section-header { background: #eef7ff; color: var(--accent-color); border-bottom-color: var(--accent-color); }
+        .opt-section.active .opt-section-header { background: #eef8f2; color: var(--accent-color); border-bottom-color: var(--accent-color); }
         .opt-section.active .opt-section-header i { transform: rotate(180deg); color: var(--accent-color); }
         
         .footer-link { color: var(--accent-color); text-decoration: none; font-weight: 600; }
@@ -44,6 +90,27 @@
 
         .tab-panel { display: none; }
         .tab-button { border-radius: 30px; font-weight: 600; }
+        .tab-panel > .card {
+            border: 1px solid var(--studio-border);
+            border-radius: var(--studio-radius);
+            overflow: hidden;
+        }
+        .tab-card-accordion-header {
+            cursor: pointer;
+            user-select: none;
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+        .tab-card-accordion.is-open > .tab-card-accordion-header {
+            background: #eef8f2;
+            color: var(--accent-color);
+            border-bottom-color: var(--studio-border-soft);
+        }
+        .tab-card-accordion-body {
+            display: none;
+        }
+        .tab-card-accordion.is-open > .tab-card-accordion-body {
+            display: block;
+        }
         .utility-status { display: none; border-radius: 8px; padding: 12px 18px; min-height: 48px; font-weight: 600; }
         .utility-log { background: #0f172a; color: #f8fafc; border-radius: 10px; padding: 18px; border: 1px solid #1d2939; min-height: 180px; font-family: 'Consolas', 'Menlo', monospace; white-space: pre-wrap; overflow-y: auto; }
 
@@ -52,9 +119,9 @@
         .modal-header-dir { padding: 20px 30px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
         .modal-body-dir { flex-grow: 1; overflow-y: auto; padding: 20px 30px; }
         .dir-item { padding: 10px 15px; cursor: pointer; border-radius: 6px; display: flex; align-items: center; margin-bottom: 4px; transition: background 0.2s; font-family: monospace; }
-        .dir-item:hover { background: #eef7ff; color: var(--accent-color); }
+        .dir-item:hover { background: #eef8f2; color: var(--accent-color); }
         .dir-item i { margin-right: 12px; font-size: 1.1rem; }
-        .dir-item.selected { background: #dfefff; color: #1c5db6; border: 1px solid #b6d4ff; }
+        .dir-item.selected { background: #dff3e8; color: #176847; border: 1px solid #8ac5a7; }
         
         .report-item { transition: all 0.2s; border: 1px solid #eee; }
         .report-item:hover { transform: translateX(5px); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
@@ -67,6 +134,38 @@
             font-size: 0.85rem;
             border-width: 2px;
             transition: all 0.2s;
+        }
+        #system-status-pills {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+            max-width: 190px;
+        }
+        .status-pill-icon {
+            width: 30px;
+            height: 30px;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--studio-border);
+            background: #ffffff;
+            color: #6c757d;
+            font-size: 0.9rem;
+            line-height: 1;
+        }
+        .status-pill-icon.is-ok {
+            background: #e9f7ef;
+            border-color: #8ac5a7;
+            color: #1f8b5c;
+        }
+        .status-pill-icon.is-missing {
+            background: #fdeced;
+            border-color: #f5c2c7;
+            color: #b02a37;
+            opacity: 0.9;
         }
     </style>
 {% endblock %}
@@ -88,16 +187,15 @@
 {% endblock %}
 
 {% block navbar_right %}
-    <div id="system-status-pills" class="d-inline-block me-3">
+    <div id="system-status-pills" class="me-3" aria-label="System availability checks">
         <!-- System status badges will be injected here -->
     </div>
-    <a href="https://github.com/MRI-Lab-Graz/bids_apps_runner" target="_blank" class="btn btn-outline-secondary btn-sm me-2"><i class="fab fa-github me-1"></i> GitHub Repo</a>
 {% endblock %}
 
 {% block content %}
     <div class="container container-main">
         <!-- PROJECTS TAB -->
-        <div id="projectsTab" class="tab-panel" style="display:none;">
+        <div id="projectsTab" class="tab-panel" style="display:block;">
             <div class="card">
                 <div class="card-header">
                     Projects
@@ -105,7 +203,11 @@
                 <div class="card-body">
                     <div class="row mb-4">
                         <div class="col-md-6">
-                            <h5>Recent Projects</h5>
+                            <h5 class="mb-1">Recent Projects</h5>
+                            <div id="recentProjectsMeta" class="text-muted small mb-2">Loading recent projects...</div>
+                            <div id="loadedProjectSummary" class="alert alert-secondary py-2 px-3 small mb-3">
+                                No project loaded.
+                            </div>
                             <div id="recentProjectsList" class="list-group">
                                 <div class="list-group-item text-muted">Loading projects...</div>
                             </div>
@@ -121,7 +223,7 @@
                                     <button type="button" class="btn btn-outline-secondary" onclick="openFileBrowser('loadProjectPath', ['.json'], 'project.json')">...</button>
                                     <button type="button" class="btn btn-outline-primary" onclick="loadProjectFromPath()">Load</button>
                                 </div>
-                                <div class="text-muted small mt-1">Pick a project.json file to load a project not shown in the recent list.</div>
+                                <div class="text-muted small mt-1">Pick a valid project.json file (must include id, name, and config.common/config.app).</div>
                             </div>
                         </div>
                         <div class="col-md-6">
@@ -143,12 +245,23 @@
             </div>
         </div>
 
-        <div id="runnerTab" class="tab-panel" style="display:block;">
+        <div id="runnerTab" class="tab-panel" style="display:none;">
             <div class="card">
             <div class="card-header">
                 Configuration & Launch
             </div>
             <div class="card-body">
+                <div id="runnerProjectScopeNotice" class="alert alert-warning py-2 px-3 small mb-3">
+                    Runs and terminal output are project-scoped. Load a project in Projects before starting a run.
+                </div>
+                <div id="runnerOptionsLoadStatus" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;"></div>
+                <div id="runnerPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <strong>Launch Preflight</strong>
+                        <span id="runnerPreflightBadge" class="badge bg-secondary">Checking...</span>
+                    </div>
+                    <ul id="runnerPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
+                </div>
                 <form id="runnerForm">
                     <div class="section-header">1. Data Locations</div>
                     <div class="row">
@@ -598,7 +711,7 @@
                                         <input class="form-check-input" type="checkbox" id="pilot_force">
                                         <label class="form-check-label" for="pilot_force">Force rerun during pilot</label>
                                     </div>
-                                    <button class="btn btn-outline-primary btn-sm" type="button" onclick="runPilotEstimator()">
+                                    <button class="btn btn-outline-primary btn-sm" id="runPilotBtn" type="button" onclick="runPilotEstimator()">
                                         <i class="fas fa-chart-line me-1"></i>Run Pilot Estimator
                                     </button>
                                     <div id="pilotStatusPanel" class="mt-3" style="display:none;">
@@ -619,7 +732,7 @@
                     <div class="d-flex flex-wrap gap-2 justify-content-center">
                         <button class="btn btn-outline-primary" type="button" onclick="loadExistingConfig()"><i class="fas fa-folder-open me-2"></i>Load Config</button>
                         <button class="btn btn-outline-success" type="button" onclick="handleSaveAndRun(false)"><i class="fas fa-save me-2"></i>Save Only</button>
-                        <button class="btn btn-danger px-4" type="button" onclick="handleSaveAndRun(true)"><i class="fas fa-play-circle me-2"></i>Save & Start Runner</button>
+                        <button class="btn btn-danger px-4" id="saveStartBtn" type="button" onclick="handleSaveAndRun(true)"><i class="fas fa-play-circle me-2"></i>Save & Start Runner</button>
                         <button class="btn btn-warning" id="runApp" style="display: none;" type="button" onclick="executeNow()"><i class="fas fa-bolt me-2"></i>Run (Cached)</button>
                         <button class="btn btn-dark" id="killCurrentBtn" type="button" onclick="killApp('current')"><i class="fas fa-stop-circle me-2"></i>Stop Current Run</button>
                         <button class="btn btn-outline-dark" id="killAllBtn" type="button" onclick="killApp('all')"><i class="fas fa-ban me-2"></i>Stop All Runs</button>
@@ -677,6 +790,18 @@
                     </button>
                 </div>
                 <div class="card-body">
+                    <div id="hpcProjectScopeNotice" class="alert alert-warning py-2 px-3 small mb-3">
+                        HPC settings are project-scoped. Load a project in Projects before editing or saving HPC configuration.
+                    </div>
+
+                    <div id="hpcPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <strong>HPC Preflight</strong>
+                            <span id="hpcPreflightBadge" class="badge bg-secondary">Checking...</span>
+                        </div>
+                        <ul id="hpcPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
+                    </div>
+
                     <!-- Environment Status -->
                     <div id="hpcEnvStatus" class="alert alert-info" style="display:none;">
                         <div class="d-flex justify-content-between align-items-center">
@@ -689,6 +814,9 @@
                     <div id="hpcNoProjectAlert" class="alert alert-warning" style="display:none;">
                         <i class="fas fa-exclamation-triangle me-2"></i>
                         Load a project from the Projects tab to configure HPC settings.
+                        <button type="button" class="btn btn-sm btn-outline-primary ms-2" onclick="switchTab('projectsTab', document.getElementById('tabProjectsBtn'))">
+                            Go To Projects
+                        </button>
                     </div>
 
                     <!-- HPC Settings Editor (Advanced) -->
@@ -703,6 +831,9 @@
                             <div id="hpcAdvancedPanel" class="card-body" style="display:none;">
                                 <div class="alert alert-info alert-sm mb-3">
                                     <small><i class="fas fa-info-circle me-2"></i>Modify SLURM parameters only if you know what you're doing. These settings affect how your jobs run on the HPC cluster.</small>
+                                </div>
+                                <div class="alert alert-secondary alert-sm mb-3">
+                                    <small><i class="fas fa-terminal me-2"></i>Need custom SBATCH directives? Add keys prefixed with <code>sbatch_</code> directly in project.json <code>hpc</code> (example: <code>sbatch_gres: gpu:1</code>).</small>
                                 </div>
                         
                                 <div class="row mb-3">
@@ -765,7 +896,7 @@
                                 <div class="row mb-3">
                                     <div class="col-md-12">
                                         <div class="form-check form-switch">
-                                            <input class="form-check-input" type="checkbox" id="hpc_monitor_jobs" class="hpc-setting">
+                                            <input class="form-check-input hpc-setting" type="checkbox" id="hpc_monitor_jobs">
                                             <label class="form-check-label" for="hpc_monitor_jobs">
                                                 Monitor job completion
                                             </label>
@@ -775,16 +906,16 @@
                                 </div>
 
                                 <div class="d-flex gap-2 mb-4">
-                                    <button class="btn btn-primary" onclick="saveHPCSettings()">
+                                    <button class="btn btn-primary" id="hpcSaveBtn" onclick="saveHPCSettings()">
                                         <i class="fas fa-save me-2"></i>Save Settings to Project
                                     </button>
-                                    <button class="btn btn-outline-secondary" onclick="resetHPCSettings()">
+                                    <button class="btn btn-outline-secondary" id="hpcDiscardBtn" onclick="resetHPCSettings()">
                                         <i class="fas fa-undo me-2"></i>Discard Changes
                                     </button>
                                 </div>
 
                                 <div class="section-header">Preview</div>
-                                <button class="btn btn-outline-secondary mb-3" onclick="toggleHPCPreview()">
+                                <button class="btn btn-outline-secondary mb-3" id="hpcPreviewBtn" onclick="toggleHPCPreview()">
                                     <i class="fas fa-eye me-2"></i>Preview SLURM Script
                                 </button>
                                 
@@ -811,19 +942,31 @@
             <div class="card">
                 <div class="card-header">Check App Output</div>
                 <div class="card-body">
+                    <div id="checkProjectScopeNotice" class="alert alert-warning py-2 px-3 small mb-3">
+                        Check settings are saved per project. Load a project in Projects for persistent defaults.
+                    </div>
+
+                    <div id="checkPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <strong>Check Preflight</strong>
+                            <span id="checkPreflightBadge" class="badge bg-secondary">Checking...</span>
+                        </div>
+                        <ul id="checkPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
+                    </div>
+
                     <p class="text-muted mb-3">Validate derivative outputs before reprocessing. Run the CLI checker directly from the GUI.</p>
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">BIDS Dataset Folder</label>
                             <div class="input-group">
-                                <input type="text" class="form-control" id="validation_bids_folder" placeholder="/data/bids">
+                                <input type="text" class="form-control validation-setting" id="validation_bids_folder" placeholder="/data/bids">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('validation_bids_folder')">...</button>
                             </div>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Derivatives Folder</label>
                             <div class="input-group">
-                                <input type="text" class="form-control" id="validation_derivatives_folder" placeholder="/data/derivatives">
+                                <input type="text" class="form-control validation-setting" id="validation_derivatives_folder" placeholder="/data/derivatives">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('validation_derivatives_folder')">...</button>
                             </div>
                         </div>
@@ -832,7 +975,7 @@
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Pipeline / App (e.g. fmriprep)</label>
                             <div class="input-group">
-                                <select class="form-select" id="validation_pipeline">
+                                <select class="form-select validation-setting" id="validation_pipeline">
                                     <option value="">Auto-detected / All</option>
                                     <option value="fmriprep">fMRIPrep</option>
                                     <option value="qsiprep">QSIPrep</option>
@@ -841,27 +984,27 @@
                                     <option value="freesurfer">FreeSurfer</option>
                                     <option value="cat12">CAT12</option>
                                 </select>
-                                <button type="button" class="btn btn-outline-primary" title="Scan folders for pipelines" onclick="scanValidationPipelines()">Scan</button>
+                                <button type="button" class="btn btn-outline-primary" id="scanValidationBtn" title="Scan folders for pipelines" onclick="scanValidationPipelines()">Scan</button>
                             </div>
                         </div>
                         <div class="col-md-6 mb-3 d-flex align-items-center gap-3">
                             <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="validation_verbose">
+                                <input class="form-check-input validation-setting" type="checkbox" id="validation_verbose">
                                 <label class="form-check-label" for="validation_verbose">Verbose</label>
                             </div>
                             <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="validation_quiet">
+                                <input class="form-check-input validation-setting" type="checkbox" id="validation_quiet">
                                 <label class="form-check-label" for="validation_quiet">Quiet</label>
                             </div>
                             <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="validation_missing_only">
+                                <input class="form-check-input validation-setting" type="checkbox" id="validation_missing_only">
                                 <label class="form-check-label" for="validation_missing_only">List Missing Only</label>
                             </div>
                         </div>
                     </div>
                     <div class="d-flex flex-wrap gap-2 mb-3">
                         <button class="btn btn-primary" id="runValidationBtn" type="button" onclick="runOutputCheck()">Run Validation</button>
-                        <button class="btn btn-outline-secondary" type="button" onclick="clearValidationOutput()">Reset</button>
+                        <button class="btn btn-outline-secondary" id="resetValidationBtn" type="button" onclick="clearValidationOutput()">Reset</button>
                     </div>
                     <div id="validationStatusBox" class="utility-status"></div>
                     
@@ -884,18 +1027,30 @@
             <div class="card">
                 <div class="card-header">Build Apptainer Image</div>
                 <div class="card-body">
+                    <div id="buildProjectScopeNotice" class="alert alert-warning py-2 px-3 small mb-3">
+                        Build paths can be inherited from the active project, but image builds run independently of project execution.
+                    </div>
+
+                    <div id="buildPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <strong>Build Preflight</strong>
+                            <span id="buildPreflightBadge" class="badge bg-secondary">Checking...</span>
+                        </div>
+                        <ul id="buildPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
+                    </div>
+
                     <p class="text-muted mb-3">Convert Docker images or Dockerfiles into Apptainer containers without leaving the browser.</p>
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Docker Repository</label>
                             <div class="input-group">
-                                <input type="text" class="form-control" id="build_docker_repo" placeholder="nipreps/fmriprep">
-                                <button type="button" class="btn btn-outline-primary" onclick="fetchDockerTags()">Fetch Tags</button>
+                                <input type="text" class="form-control build-setting" id="build_docker_repo" placeholder="nipreps/fmriprep">
+                                <button type="button" class="btn btn-outline-primary" id="buildFetchTagsBtn" onclick="fetchDockerTags()">Fetch Tags</button>
                             </div>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Tag</label>
-                            <select class="form-select" id="build_docker_tag">
+                            <select class="form-select build-setting" id="build_docker_tag">
                                 <option value="latest">latest</option>
                             </select>
                         </div>
@@ -904,14 +1059,14 @@
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Output Directory</label>
                             <div class="input-group">
-                                <input type="text" class="form-control" id="build_output_dir" placeholder="/data/local/container">
+                                <input type="text" class="form-control build-setting" id="build_output_dir" placeholder="/data/local/container">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('build_output_dir')">...</button>
                             </div>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Temporary Directory</label>
                             <div class="input-group">
-                                <input type="text" class="form-control" id="build_tmp_dir" placeholder="/tmp/apptainer_build">
+                                <input type="text" class="form-control build-setting" id="build_tmp_dir" placeholder="/tmp/apptainer_build">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('build_tmp_dir')">...</button>
                             </div>
                         </div>
@@ -920,19 +1075,20 @@
                         <div class="col-md-8 mb-3">
                             <label class="form-label">Dockerfile (optional)</label>
                             <div class="input-group">
-                                <input type="text" class="form-control" id="build_dockerfile" placeholder="/path/to/Dockerfile">
+                                <input type="text" class="form-control build-setting" id="build_dockerfile" placeholder="/path/to/Dockerfile">
                                 <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('build_dockerfile')">...</button>
                             </div>
                         </div>
                         <div class="col-md-4 mb-3">
                             <div class="form-check form-switch mb-0">
-                                <input class="form-check-input" type="checkbox" id="build_keep_temp">
+                                <input class="form-check-input build-setting" type="checkbox" id="build_keep_temp">
                                 <label class="form-check-label" for="build_keep_temp">Preserve temp dir</label>
                             </div>
                         </div>
                     </div>
                     <div class="d-flex gap-2 mb-3">
                         <button class="btn btn-accent" id="buildApptainerBtn" type="button" onclick="startApptainerBuild()">Start Build</button>
+                        <button class="btn btn-outline-secondary" id="clearBuildOutputBtn" type="button" onclick="clearBuildOutput()">Clear Console</button>
                     </div>
                     <div id="buildStatusBox" class="utility-status"></div>
                     <pre id="buildOutput" class="utility-log mt-3"></pre>
@@ -1037,6 +1193,21 @@
         let hostCpuCount = 1;
         let pilotMonitorTimer = null;
         let pilotMonitorContext = null;
+        const RECENT_PROJECTS_LIMIT = 5;
+        let projectDirty = false;
+        let suppressProjectDirtyTracking = false;
+        let loadedProjectMeta = null;
+        let lastProjectSavedAt = '';
+        let lastProjectSavePath = '';
+        let projectLoadInProgress = false;
+        let activeProjectLoadToken = 0;
+        let optionsLoadPendingCount = 0;
+        let runnerPreflightUpdateScheduled = false;
+        let checkPreflightUpdateScheduled = false;
+        let validationRunInProgress = false;
+        let validationScanInProgress = false;
+        let buildPreflightUpdateScheduled = false;
+        let buildTagFetchInProgress = false;
 
         function isQsireconContainer() {
             const engine = document.getElementById('container_engine').value;
@@ -1119,6 +1290,364 @@
                 nameEl.textContent = 'No project loaded';
                 container.classList.add('is-empty');
             }
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function _formatDateTimeForDisplay(isoValue) {
+            if (!isoValue) return 'n/a';
+            const dt = new Date(isoValue);
+            if (Number.isNaN(dt.getTime())) return String(isoValue);
+            return dt.toLocaleString();
+        }
+
+        function updateLoadedProjectSummary() {
+            const summaryEl = document.getElementById('loadedProjectSummary');
+            if (!summaryEl) return;
+
+            if (!lastProjectId || !loadedProjectMeta) {
+                summaryEl.className = 'alert alert-secondary py-2 px-3 small mb-3';
+                summaryEl.innerHTML = 'No project loaded.';
+                updateRunnerProjectScopeNotice();
+                return;
+            }
+
+            const saveText = lastProjectSavedAt
+                ? _formatDateTimeForDisplay(lastProjectSavedAt)
+                : _formatDateTimeForDisplay(loadedProjectMeta.last_modified);
+            const savePath = lastProjectSavePath || `projects/${lastProjectId}/project.json`;
+            let statusBadge = '<span class="badge bg-success">Saved</span>';
+            let summaryClass = 'alert alert-info py-2 px-3 small mb-3';
+            let loadingLine = '';
+
+            if (projectLoadInProgress) {
+                statusBadge = '<span class="badge bg-secondary">Loading...</span>';
+                summaryClass = 'alert alert-secondary py-2 px-3 small mb-3';
+                loadingLine = '<div class="small text-muted mt-1">Applying project settings and restoring container options...</div>';
+            } else if (projectDirty) {
+                statusBadge = '<span class="badge bg-warning text-dark">Unsaved changes</span>';
+                summaryClass = 'alert alert-warning py-2 px-3 small mb-3';
+            }
+
+            summaryEl.className = summaryClass;
+            summaryEl.innerHTML = `
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <strong>Loaded: ${escapeHtml(loadedProjectMeta.name || loadedProjectMeta.id || lastProjectId)}</strong>
+                    ${statusBadge}
+                </div>
+                <div class="mt-1"><strong>ID:</strong> ${escapeHtml(lastProjectId)}</div>
+                <div><strong>Last saved:</strong> ${escapeHtml(saveText)}</div>
+                <div><strong>Target:</strong> ${escapeHtml(savePath)}</div>
+                ${loadingLine}
+            `;
+            updateRunnerProjectScopeNotice();
+        }
+
+        function updateRunnerProjectScopeNotice() {
+            const notice = document.getElementById('runnerProjectScopeNotice');
+            if (!notice) return;
+
+            if (!lastProjectId || !loadedProjectMeta) {
+                notice.className = 'alert alert-warning py-2 px-3 small mb-3';
+                notice.innerHTML = 'Runs and terminal output are project-scoped. Load a project in <strong>Projects</strong> before starting a run.';
+                return;
+            }
+
+            const projectName = loadedProjectMeta.name || loadedProjectMeta.id || lastProjectId;
+            notice.className = 'alert alert-info py-2 px-3 small mb-3';
+            notice.innerHTML = `Active run context: <strong>${escapeHtml(projectName)}</strong> (${escapeHtml(lastProjectId)}).`;
+        }
+
+        function ensureProjectLoadedForRun(actionName) {
+            if (lastProjectId) return true;
+            showStatus(`Load a project in Projects before ${actionName}.`, true);
+            return false;
+        }
+
+        function getConfiguredContainerValue() {
+            const engine = document.getElementById('container_engine').value;
+            if (engine === 'docker') {
+                const repo = (document.getElementById('container_docker_repo').value || '').trim();
+                const tag = (document.getElementById('container_docker_tag').value || '').trim();
+                if (!repo || !tag) return '';
+                return `${repo}:${tag}`;
+            }
+
+            const folder = (document.getElementById('container_folder').value || '').trim();
+            const image = (document.getElementById('container_select').value || '').trim();
+            if (!folder || !image) return '';
+            return `${folder}/${image}`;
+        }
+
+        function isFsLicenseRequiredForContainer(containerValue) {
+            const text = String(containerValue || '').toLowerCase();
+            return text.includes('fmriprep') || text.includes('qsiprep') || text.includes('qsirecon');
+        }
+
+        function hasFsLicenseArgInCustomArgs() {
+            const customArgs = (document.getElementById('custom_args').value || '').trim();
+            if (!customArgs) return false;
+            return /(?:^|\s)--fs-license-file(?:\s+|=)\S+/i.test(customArgs);
+        }
+
+        function evaluateRunnerPreflight() {
+            const projectLoaded = !!lastProjectId;
+            const bidsFolder = (document.getElementById('bids_folder').value || '').trim();
+            const outputFolder = (document.getElementById('output_folder').value || '').trim();
+            const containerValue = getConfiguredContainerValue();
+            const fsLicense = (document.getElementById('fs_license_file').value || '').trim();
+            const fsLicenseRequired = isFsLicenseRequiredForContainer(containerValue);
+            const fsLicenseSatisfied = !fsLicenseRequired || !!fsLicense || hasFsLicenseArgInCustomArgs();
+            const optionsIdle = optionsLoadPendingCount === 0;
+
+            const checks = [
+                {
+                    id: 'project',
+                    label: 'Project loaded',
+                    ok: projectLoaded,
+                    blocking: true,
+                },
+                {
+                    id: 'bids',
+                    label: 'BIDS dataset folder set',
+                    ok: !!bidsFolder,
+                    blocking: true,
+                },
+                {
+                    id: 'output',
+                    label: 'Output folder set',
+                    ok: !!outputFolder,
+                    blocking: true,
+                },
+                {
+                    id: 'container',
+                    label: 'Container configured',
+                    ok: !!containerValue,
+                    blocking: true,
+                },
+                {
+                    id: 'options',
+                    label: 'Container option load state',
+                    ok: optionsIdle,
+                    blocking: true,
+                    failNote: 'still loading',
+                    okNote: 'ready',
+                },
+                {
+                    id: 'fs_license',
+                    label: 'FreeSurfer license (for fMRIPrep/QSIPrep/QSIRecon)',
+                    ok: fsLicenseSatisfied,
+                    blocking: fsLicenseRequired,
+                    failNote: fsLicenseRequired ? 'required but missing' : 'optional',
+                    okNote: fsLicenseRequired ? 'provided' : 'not required',
+                },
+            ];
+
+            const blockingFailures = checks.filter((check) => check.blocking && !check.ok);
+            return {
+                checks,
+                ready: blockingFailures.length === 0,
+                blockingFailures,
+            };
+        }
+
+        function updateRunnerPreflightPanel() {
+            const panel = document.getElementById('runnerPreflightPanel');
+            const badge = document.getElementById('runnerPreflightBadge');
+            const list = document.getElementById('runnerPreflightList');
+            if (!panel || !badge || !list) return;
+
+            const state = evaluateRunnerPreflight();
+            list.innerHTML = '';
+
+            state.checks.forEach((check) => {
+                const li = document.createElement('li');
+                const icon = check.ok ? 'fa-check-circle text-success' : 'fa-exclamation-circle text-danger';
+                const note = check.ok ? check.okNote : check.failNote;
+                li.innerHTML = `<i class="fas ${icon} me-1"></i>${escapeHtml(check.label)}${note ? ` <span class="text-muted">(${escapeHtml(note)})</span>` : ''}`;
+                list.appendChild(li);
+            });
+
+            if (state.ready) {
+                panel.className = 'alert alert-success py-2 px-3 small mb-3';
+                badge.className = 'badge bg-success';
+                badge.textContent = 'Ready';
+            } else {
+                panel.className = 'alert alert-warning py-2 px-3 small mb-3';
+                badge.className = 'badge bg-warning text-dark';
+                badge.textContent = 'Needs Attention';
+            }
+
+            const saveStartBtn = document.getElementById('saveStartBtn');
+            if (saveStartBtn) {
+                saveStartBtn.disabled = !state.ready;
+                saveStartBtn.title = state.ready
+                    ? 'Save and start the runner for the active project.'
+                    : 'Fix preflight checks before starting the runner.';
+            }
+
+            const runPilotBtn = document.getElementById('runPilotBtn');
+            if (runPilotBtn) {
+                runPilotBtn.disabled = !state.ready;
+                runPilotBtn.title = state.ready
+                    ? 'Run pilot estimator for the active project.'
+                    : 'Fix preflight checks before running the pilot estimator.';
+            }
+
+            const runCachedBtn = document.getElementById('runApp');
+            if (runCachedBtn) {
+                runCachedBtn.disabled = !state.ready || projectDirty;
+                runCachedBtn.title = projectDirty
+                    ? 'Save project changes before using Run (Cached).'
+                    : (state.ready
+                        ? 'Run using the latest saved project config.'
+                        : 'Fix preflight checks before running cached config.');
+            }
+        }
+
+        function scheduleRunnerPreflightRefresh() {
+            if (runnerPreflightUpdateScheduled) return;
+            runnerPreflightUpdateScheduled = true;
+            requestAnimationFrame(() => {
+                runnerPreflightUpdateScheduled = false;
+                updateRunnerPreflightPanel();
+            });
+        }
+
+        function initializeRunnerPreflightTracking() {
+            const runnerForm = document.getElementById('runnerForm');
+            if (!runnerForm) return;
+
+            runnerForm.addEventListener('input', scheduleRunnerPreflightRefresh);
+            runnerForm.addEventListener('change', scheduleRunnerPreflightRefresh);
+            scheduleRunnerPreflightRefresh();
+        }
+
+        function setRunnerOptionsLoadStatus(message, isError = false, keepVisible = true) {
+            const el = document.getElementById('runnerOptionsLoadStatus');
+            if (!el) return;
+            if (!keepVisible) {
+                el.style.display = 'none';
+                el.textContent = '';
+                return;
+            }
+
+            el.style.display = 'block';
+            el.className = isError
+                ? 'alert alert-warning py-2 px-3 small mb-3'
+                : 'alert alert-secondary py-2 px-3 small mb-3';
+            el.innerHTML = message;
+        }
+
+        function beginRunnerOptionsLoad(message) {
+            optionsLoadPendingCount += 1;
+            setRunnerOptionsLoadStatus(`<i class="fas fa-spinner fa-spin me-1"></i>${escapeHtml(message || 'Loading container options...')}`);
+            scheduleRunnerPreflightRefresh();
+        }
+
+        function endRunnerOptionsLoad(message = '', isError = false) {
+            optionsLoadPendingCount = Math.max(0, optionsLoadPendingCount - 1);
+            if (optionsLoadPendingCount > 0) {
+                setRunnerOptionsLoadStatus('<i class="fas fa-spinner fa-spin me-1"></i>Loading container options...');
+                scheduleRunnerPreflightRefresh();
+                return;
+            }
+
+            if (message) {
+                setRunnerOptionsLoadStatus(
+                    `${isError ? '<i class="fas fa-exclamation-triangle me-1"></i>' : '<i class="fas fa-check-circle me-1"></i>'}${escapeHtml(message)}`,
+                    isError,
+                    true
+                );
+                setTimeout(() => {
+                    if (optionsLoadPendingCount === 0) setRunnerOptionsLoadStatus('', false, false);
+                }, 2500);
+            } else {
+                setRunnerOptionsLoadStatus('', false, false);
+            }
+
+            scheduleRunnerPreflightRefresh();
+        }
+
+        function ensureRunnerPreflightReady(actionName) {
+            const state = evaluateRunnerPreflight();
+            if (state.ready) return true;
+
+            const missing = state.blockingFailures.map((item) => item.label).join(', ');
+            showStatus(`Cannot ${actionName}. Fix preflight: ${missing}.`, true);
+            updateRunnerPreflightPanel();
+            return false;
+        }
+
+        function setProjectLoadInProgress(isLoading) {
+            projectLoadInProgress = !!isLoading;
+            updateLoadedProjectSummary();
+        }
+
+        function isStaleProjectLoad(loadToken) {
+            return Number.isInteger(loadToken) && loadToken !== activeProjectLoadToken;
+        }
+
+        function setProjectDirty(isDirty) {
+            projectDirty = !!isDirty;
+            const runCachedBtn = document.getElementById('runApp');
+            if (runCachedBtn) {
+                runCachedBtn.disabled = projectDirty;
+                runCachedBtn.title = projectDirty
+                    ? 'Save project changes before using Run (Cached).'
+                    : 'Run using the latest saved config for this project.';
+            }
+                    scheduleRunnerPreflightRefresh();
+            updateLoadedProjectSummary();
+        }
+
+        function hasUnsavedProjectChanges() {
+            return !!lastProjectId && projectDirty;
+        }
+
+        function confirmDiscardUnsavedChanges(actionLabel) {
+            if (!hasUnsavedProjectChanges()) return true;
+            const projectName = (loadedProjectMeta && loadedProjectMeta.name) || lastProjectId;
+            return confirm(
+                `You have unsaved changes in "${projectName}". Continue to ${actionLabel} and discard unsaved edits?`
+            );
+        }
+
+        function initializeProjectDirtyTracking() {
+            const trackedSelector = 'input, select, textarea';
+
+            const shouldTrackElement = (el) => {
+                if (!el || !el.matches || !el.matches(trackedSelector)) return false;
+                if (el.closest('#createProjectForm')) return false;
+                if (el.id === 'loadProjectPath' || el.id === 'newProjectName' || el.id === 'newProjectDesc') return false;
+                if (el.closest('#browserModal') || el.closest('#configModal')) return false;
+                if (el.closest('#runnerForm')) return true;
+                if (el.closest('#checkTab')) return true;
+                if (el.closest('#hpcTab')) return true;
+                return false;
+            };
+
+            const markDirty = (event) => {
+                if (!lastProjectId || suppressProjectDirtyTracking) return;
+                if (shouldTrackElement(event.target)) {
+                    setProjectDirty(true);
+                }
+            };
+
+            document.addEventListener('input', markDirty);
+            document.addEventListener('change', markDirty);
+            window.addEventListener('beforeunload', (event) => {
+                if (!hasUnsavedProjectChanges()) return;
+                event.preventDefault();
+                event.returnValue = '';
+            });
         }
 
         function toggleMaxUsageControls() {
@@ -1254,35 +1783,79 @@
                 const resp = await fetch('/get_projects');
                 const data = await resp.json();
                 const list = document.getElementById('recentProjectsList');
+                const meta = document.getElementById('recentProjectsMeta');
+
+                if (!resp.ok) {
+                    throw new Error(data.error || 'Failed to load recent projects');
+                }
                 
                 if (!data.projects || data.projects.length === 0) {
                     list.innerHTML = '<div class="list-group-item text-muted">No projects yet. Create one to get started!</div>';
+                    if (meta) meta.textContent = 'No projects found.';
                     return;
+                }
+
+                const totalProjects = Number.isInteger(data.total_projects)
+                    ? data.total_projects
+                    : data.projects.length;
+                const shownCount = data.projects.length;
+                const limit = Number.isInteger(data.limit) ? data.limit : RECENT_PROJECTS_LIMIT;
+                if (meta) {
+                    let metaText = `Showing ${shownCount} of ${totalProjects} projects (latest first).`;
+                    if (totalProjects > shownCount || shownCount >= limit) {
+                        metaText += ' Use "Load Project from File" to open older projects.';
+                    }
+                    meta.textContent = metaText;
                 }
                 
                 list.innerHTML = '';
                 data.projects.forEach(proj => {
-                    const item = document.createElement('button');
-                    item.className = 'list-group-item list-group-item-action text-start';
+                    const common = (proj.config && proj.config.common) ? proj.config.common : {};
+                    const app = (proj.config && proj.config.app) ? proj.config.app : {};
+                    const requiredMissing = [];
+                    if (!common.bids_folder) requiredMissing.push('BIDS folder');
+                    if (!common.output_folder) requiredMissing.push('Output folder');
+                    if (!common.container) requiredMissing.push('Container');
+                    if (!app.analysis_level) requiredMissing.push('Analysis level');
+
+                    const readinessHtml = requiredMissing.length === 0
+                        ? '<span class="badge bg-success">Ready to run</span>'
+                        : `<span class="badge bg-warning text-dark">Missing: ${escapeHtml(requiredMissing.join(', '))}</span>`;
+
+                    const item = document.createElement('div');
+                    item.className = 'list-group-item';
+                    if (proj.id === lastProjectId) item.classList.add('active');
                     item.innerHTML = `
-                        <div class="d-flex justify-content-between align-items-start">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
                             <div>
-                                <h6 class="mb-1">${proj.name}</h6>
-                                <small class="text-muted">${proj.description || 'No description'}</small>
-                                <br>
-                                <small class="text-muted">Modified: ${new Date(proj.last_modified).toLocaleDateString()}</small>
+                                <button type="button" class="btn btn-link p-0 text-decoration-none fw-semibold project-load-btn">${escapeHtml(proj.name || proj.id)}</button>
+                                <div class="small text-muted">${escapeHtml(proj.description || 'No description')}</div>
+                                <div class="small text-muted">Modified: ${escapeHtml(_formatDateTimeForDisplay(proj.last_modified))}</div>
+                                <div class="small mt-1">${readinessHtml}</div>
                             </div>
-                            <button type="button" class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteProject('${proj.id}')" title="Delete project">
+                            <button type="button" class="btn btn-sm btn-outline-danger project-delete-btn" title="Delete project permanently">
                                 <i class="fas fa-trash"></i>
                             </button>
                         </div>
                     `;
-                    item.onclick = () => loadProjectAndSwitch(proj.id);
+
+                    const loadBtn = item.querySelector('.project-load-btn');
+                    const deleteBtn = item.querySelector('.project-delete-btn');
+                    if (loadBtn) loadBtn.onclick = () => loadProjectAndSwitch(proj.id);
+                    if (deleteBtn) {
+                        deleteBtn.onclick = (event) => {
+                            event.stopPropagation();
+                            deleteProject(proj.id, proj.name || proj.id);
+                        };
+                    }
+
                     list.appendChild(item);
                 });
             } catch (e) {
                 console.error("Failed to load projects:", e);
                 document.getElementById('recentProjectsList').innerHTML = '<div class="alert alert-danger">Failed to load projects</div>';
+                const meta = document.getElementById('recentProjectsMeta');
+                if (meta) meta.textContent = 'Unable to fetch project list.';
             }
         }
 
@@ -1290,6 +1863,10 @@
             const projectPath = document.getElementById('loadProjectPath').value.trim();
             if (!projectPath) {
                 showStatus("Please select a project.json file", true);
+                return;
+            }
+
+            if (!confirmDiscardUnsavedChanges('load another project')) {
                 return;
             }
 
@@ -1306,7 +1883,13 @@
                     return;
                 }
 
+                if (!project.id || !project.name || !project.config) {
+                    showStatus('Loaded file is missing required project fields (id, name, config).', true);
+                    return;
+                }
+
                 await applyProjectData(project, project.id || null);
+                loadRecentProjects();
             } catch (e) {
                 showStatus("Failed to load project: " + e.message, true);
             }
@@ -1318,6 +1901,10 @@
             
             if (!name) {
                 showStatus("Project name is required", true);
+                return;
+            }
+
+            if (!confirmDiscardUnsavedChanges('create and load a new project')) {
                 return;
             }
             
@@ -1344,6 +1931,21 @@
         }
         
         async function loadProjectAndSwitch(projectId) {
+            if (!projectId) {
+                showStatus('Invalid project id', true);
+                return;
+            }
+
+            if (projectLoadInProgress) {
+                showStatus('A project is already loading. Please wait a moment.', true);
+                return;
+            }
+
+            const actionLabel = projectId === lastProjectId ? 'reload this project' : 'switch projects';
+            if (!confirmDiscardUnsavedChanges(actionLabel)) {
+                return;
+            }
+
             try {
                 const resp = await fetch(`/load_project/${projectId}`);
                 const project = await resp.json();
@@ -1472,82 +2074,137 @@
             const cfg = project.config || {};
             const common = cfg.common || {};
             const app = cfg.app || {};
+            const loadToken = ++activeProjectLoadToken;
 
             // Store project info early so navbar updates immediately
             lastProjectId = projectIdOverride || project.id || '';
             lastSavedPath = null;
             setNavbarProjectName(project.name || project.id || '');
             currentProjectConfig = cfg;
+            loadedProjectMeta = {
+                id: lastProjectId,
+                name: project.name || project.id || '',
+                description: project.description || '',
+                last_modified: project.last_modified || ''
+            };
+            lastProjectSavedAt = project.last_modified || '';
+            lastProjectSavePath = lastProjectId ? `projects/${lastProjectId}/project.json` : '';
+            setProjectDirty(false);
+            setProjectLoadInProgress(true);
+            initialLoad = true;
+            setTerminalProjectContextMessage(`[Loading logs for project: ${project.name || project.id || projectIdOverride || 'project'}]\n`);
             updateHpcConfigDetails(cfg);
 
-            // Fill form fields
-            document.getElementById('bids_folder').value = common.bids_folder || '';
-            document.getElementById('output_folder').value = common.output_folder || '';
-            document.getElementById('tmp_folder').value = common.tmp_folder || '';
-            document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
-            document.getElementById('fs_license_file').value = common.fs_license_file || '';
-            document.getElementById('notify_email').value = common.notify_email || '';
-            document.getElementById('jobs').value = common.jobs || 1;
-            document.getElementById('analysis_level').value = app.analysis_level || 'participant';
-            syncRunnerSubjectFilterWithAnalysisLevel();
-            document.getElementById('container_engine').value = common.container_engine || 'apptainer';
+            suppressProjectDirtyTracking = true;
+            try {
 
-            // Load saved Check Output settings when present
-            const validation = cfg.validation || {};
-            document.getElementById('validation_bids_folder').value = validation.bids_folder || common.bids_folder || '';
-            document.getElementById('validation_derivatives_folder').value = validation.derivatives_folder || common.output_folder || '';
-            document.getElementById('validation_pipeline').value = validation.pipeline || '';
-            document.getElementById('validation_verbose').checked = !!validation.verbose;
-            document.getElementById('validation_quiet').checked = !!validation.quiet;
-            document.getElementById('validation_missing_only').checked = !!validation.list_missing;
+                // Fill form fields
+                document.getElementById('bids_folder').value = common.bids_folder || '';
+                document.getElementById('output_folder').value = common.output_folder || '';
+                document.getElementById('tmp_folder').value = common.tmp_folder || '';
+                document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
+                document.getElementById('fs_license_file').value = common.fs_license_file || '';
+                document.getElementById('notify_email').value = common.notify_email || '';
+                document.getElementById('jobs').value = common.jobs || 1;
+                document.getElementById('analysis_level').value = app.analysis_level || 'participant';
+                syncRunnerSubjectFilterWithAnalysisLevel();
+                document.getElementById('container_engine').value = common.container_engine || 'apptainer';
 
-            // Load container path based on engine
-            const engine = common.container_engine || 'apptainer';
-            if (engine === 'docker') {
-                // Parse docker image (e.g., "nipreps/fmriprep:23.1.0")
-                const containerImage = common.container || '';
-                const parts = containerImage.split(':');
-                document.getElementById('container_docker_repo').value = parts[0] || '';
-                document.getElementById('container_docker_tag').value = parts[1] || 'latest';
-            } else {
-                // Parse apptainer path (e.g., "/path/to/container.sif")
-                const containerPath = common.container || '';
-                if (containerPath) {
-                    const folder = containerPath.substring(0, containerPath.lastIndexOf('/'));
-                    const filename = containerPath.substring(containerPath.lastIndexOf('/') + 1);
-                    document.getElementById('container_folder').value = folder;
+                // Load saved Check Output settings when present
+                const validation = cfg.validation || {};
+                document.getElementById('validation_bids_folder').value = validation.bids_folder || common.bids_folder || '';
+                document.getElementById('validation_derivatives_folder').value = validation.derivatives_folder || common.output_folder || '';
+                document.getElementById('validation_pipeline').value = validation.pipeline || '';
+                document.getElementById('validation_verbose').checked = !!validation.verbose;
+                document.getElementById('validation_quiet').checked = !!validation.quiet;
+                document.getElementById('validation_missing_only').checked = !!validation.list_missing;
+                scheduleCheckPreflightRefresh();
+                scheduleBuildPreflightRefresh();
 
-                    // Load container list first, then select the file
-                    if (folder) {
-                        await scanContainers(); // Wait for containers to load
-                        document.getElementById('container_select').value = filename; // Now select the file
-                        await checkAppVersion(); // Refresh alert for the saved container selection
+                // Load container path based on engine
+                const engine = common.container_engine || 'apptainer';
+                if (engine === 'docker') {
+                    // Parse docker image (e.g., "nipreps/fmriprep:23.1.0")
+                    const containerImage = common.container || '';
+                    const parts = containerImage.split(':');
+                    document.getElementById('container_docker_repo').value = parts[0] || '';
+                    document.getElementById('container_docker_tag').value = parts[1] || 'latest';
+                } else {
+                    // Parse apptainer path (e.g., "/path/to/container.sif")
+                    const containerPath = common.container || '';
+                    if (containerPath) {
+                        const folder = containerPath.substring(0, containerPath.lastIndexOf('/'));
+                        document.getElementById('container_folder').value = folder;
                     }
                 }
+
+                toggleEngineFields();
+
+                // Store container path and locked state
+                currentContainerPath = common.container || '';
+                containerLocked = common.container_locked || false;
+
+            } finally {
+                suppressProjectDirtyTracking = false;
+                setProjectLoadInProgress(false);
             }
 
-            toggleEngineFields();
-
-            // Store container path and locked state
-            currentContainerPath = common.container || '';
-            containerLocked = common.container_locked || false;
-
-            // Always auto-load app options on project load so saved flags are restored
-            const shouldLoadOptions = !!common.container;
-            if (shouldLoadOptions) {
-                try {
-                    await fetchAppOptions();
-                    applySavedAppConfig(cfg);
-                } catch (e) {
-                    console.warn('Failed to load app options:', e);
-                }
-            }
-
+            // Restore heavy container metadata/options in background to keep project switch responsive.
+            void restoreProjectLoadDetails(cfg, common, loadToken);
             showStatus(`Loaded project: ${project.name || project.id || 'project'}`);
         }
+
+        async function restoreProjectLoadDetails(cfg, common, loadToken) {
+            try {
+                if (isStaleProjectLoad(loadToken)) return;
+
+                const engine = common.container_engine || 'apptainer';
+                if (engine === 'apptainer') {
+                    const containerPath = common.container || '';
+                    if (containerPath) {
+                        const filename = containerPath.substring(containerPath.lastIndexOf('/') + 1);
+                        const scanned = await scanContainers(loadToken, { silent: true });
+                        if (!scanned || isStaleProjectLoad(loadToken)) return;
+                        const selectEl = document.getElementById('container_select');
+                        if (selectEl) {
+                            selectEl.value = filename;
+                        }
+                        await checkAppVersion(loadToken);
+                    }
+                }
+
+                if (isStaleProjectLoad(loadToken)) return;
+                const shouldLoadOptions = !!common.container;
+                if (shouldLoadOptions) {
+                    await fetchAppOptions(loadToken, { quietSuccess: true });
+                    if (isStaleProjectLoad(loadToken)) return;
+                    applySavedAppConfig(cfg);
+                }
+            } catch (e) {
+                console.warn('Background project restore failed:', e);
+            }
+        }
+
+        function setTerminalProjectContextMessage(message) {
+            const term = document.getElementById('terminal');
+            if (!term) return;
+            term.innerText = message;
+            const filenameEl = document.getElementById('logFilename');
+            if (filenameEl) filenameEl.innerText = 'none';
+        }
         
-        async function deleteProject(projectId) {
-            if (!confirm("Are you sure you want to delete this project and all its data?")) return;
+        async function deleteProject(projectId, projectName = '') {
+            if (!projectId) {
+                showStatus('Invalid project id', true);
+                return;
+            }
+
+            const displayName = projectName || projectId;
+            let prompt = `Delete project "${displayName}" permanently?\n\nThis removes:\n- project.json\n- project logs\n- run state/history\n\nThis action cannot be undone.`;
+            if (projectId === lastProjectId && hasUnsavedProjectChanges()) {
+                prompt = `You have unsaved changes in "${displayName}".\n\n` + prompt;
+            }
+            if (!confirm(prompt)) return;
             
             try {
                 const resp = await fetch(`/delete_project/${projectId}`, {method: 'DELETE'});
@@ -1558,7 +2215,16 @@
                     loadRecentProjects();
                     if (projectId === lastProjectId) {
                         lastProjectId = '';
+                        loadedProjectMeta = null;
+                        lastProjectSavedAt = '';
+                        lastProjectSavePath = '';
+                        lastSavedPath = '';
+                        currentProjectConfig = null;
+                        setProjectDirty(false);
                         setNavbarProjectName('');
+                        setTerminalProjectContextMessage('[Load a project to view project-specific logs.]\n');
+                        scheduleCheckPreflightRefresh();
+                        scheduleBuildPreflightRefresh();
                     }
                 } else {
                     showStatus(data.error, true);
@@ -1570,8 +2236,14 @@
 
         async function refreshLogs() {
             if (!document.getElementById('autoScroll').checked) return;
+
+            if (!lastProjectId) {
+                setTerminalProjectContextMessage('[Load a project to view project-specific logs.]\n');
+                return;
+            }
+
             try {
-                const resp = await fetch('/get_log' + (lastProjectId ? `?project_id=${lastProjectId}` : ''));
+                const resp = await fetch(`/get_log?project_id=${encodeURIComponent(lastProjectId)}`);
                 if (!resp.ok) return;
                 const data = await resp.json();
                 const term = document.getElementById('terminal');
@@ -1594,7 +2266,7 @@
                     
                     if (isAtBottom) term.scrollTop = term.scrollHeight;
                 } else {
-                    // No active content - show waiting message
+                    // No active content for this project
                     const filenameEl = document.getElementById('logFilename');
                     filenameEl.innerText = 'none';
                     const terminalHeader = document.querySelector('.terminal-header');
@@ -1602,7 +2274,7 @@
                     filenameEl.style.color = 'inherit';
                     
                     if (initialLoad) {
-                        term.innerText = '[System initialized. Waiting for task...]\n';
+                        term.innerText = '[Project logs are ready. Waiting for project task output...]\n';
                         initialLoad = false;
                     }
                 }
@@ -1614,15 +2286,18 @@
 
         function clearTerminal() {
             const term = document.getElementById('terminal');
-            term.innerText = '[Console cleared]\n';
+            term.innerText = lastProjectId
+                ? '[Console cleared for current project]\n'
+                : '[Load a project to view project-specific logs.]\n';
             document.getElementById('logFilename').innerText = 'none';
         }
 
-        async function checkAppVersion() {
+        async function checkAppVersion(loadToken = null) {
             const requestId = ++checkAppVersionRequestId;
             const f = document.getElementById('container_folder').value;
             const c = document.getElementById('container_select').value;
             if (!c) return;
+            if (isStaleProjectLoad(loadToken)) return;
             const alertEl = document.getElementById('versionAlert');
             alertEl.style.display = 'none';
 
@@ -1633,7 +2308,7 @@
                     body: JSON.stringify({ container: f + '/' + c })
                 });
                 const data = await resp.json();
-                if (requestId !== checkAppVersionRequestId) return;
+                if (requestId !== checkAppVersionRequestId || isStaleProjectLoad(loadToken)) return;
                 if (data.is_newer) {
                     alertEl.innerHTML = `<span style="color: #e67e22; font-weight: bold;"><i class="fas fa-exclamation-triangle me-1"></i> Update: <a href="${data.changelog_url}" target="_blank" style="color: #d35400;">${data.latest}</a> available</span>`;
                     alertEl.style.display = 'block';
@@ -1773,14 +2448,24 @@
 
         function selectCurrentDir() {
             if (currentTargetId) {
+                const targetEl = document.getElementById(currentTargetId);
+                if (!targetEl) {
+                    closeBrowser();
+                    return;
+                }
                 if (browserSelectFiles) {
                     if (!browserSelectedFile) {
                         showStatus("Please select a file", true);
                         return;
                     }
-                    document.getElementById(currentTargetId).value = browserSelectedFile;
+                    targetEl.value = browserSelectedFile;
                 } else {
-                    document.getElementById(currentTargetId).value = browserCurrentPath;
+                    targetEl.value = browserCurrentPath;
+                }
+
+                if (targetEl) {
+                    targetEl.dispatchEvent(new Event('input', { bubbles: true }));
+                    targetEl.dispatchEvent(new Event('change', { bubbles: true }));
                 }
             }
             closeBrowser();
@@ -1857,31 +2542,42 @@
                 dockerFields.style.display = 'none';
             }
             updateQsireconUI();
+            scheduleRunnerPreflightRefresh();
         }
 
-        async function scanContainers() {
+        async function scanContainers(loadToken = null, options = {}) {
+            const silent = !!options.silent;
             const f = document.getElementById('container_folder').value;
             if (!f) {
-                showStatus("Please specify the containers folder first.", true);
-                return;
+                if (!silent) showStatus("Please specify the containers folder first.", true);
+                scheduleRunnerPreflightRefresh();
+                return false;
             }
+            if (isStaleProjectLoad(loadToken)) return false;
             try {
                 const resp = await fetch('/list_containers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: f }) });
                 const data = await resp.json();
-                if (data.error) { showStatus(data.error, true); return; }
+                if (isStaleProjectLoad(loadToken)) return false;
+                if (data.error) { if (!silent) showStatus(data.error, true); return false; }
                 
                 const s = document.getElementById('container_select');
                 s.innerHTML = '';
                 if (data.containers && data.containers.length > 0) {
                     data.containers.forEach(c => s.add(new Option(c, c)));
-                    checkAppVersion();
+                    await checkAppVersion(loadToken);
                     document.getElementById('fetchHelpBtn').style.display = 'block';
+                    scheduleRunnerPreflightRefresh();
+                    return true;
                 } else {
-                    showStatus("No containers (.sif/.simg) found in that folder.", true);
+                    if (!silent) showStatus("No containers (.sif/.simg) found in that folder.", true);
+                    scheduleRunnerPreflightRefresh();
+                    return false;
                 }
             } catch (e) {
                 console.error("Scan error:", e);
-                showStatus("Failed to scan containers.", true);
+                if (!silent) showStatus("Failed to scan containers.", true);
+                scheduleRunnerPreflightRefresh();
+                return false;
             }
         }
 
@@ -1909,13 +2605,16 @@
                         tagSelect.add(new Option(tag, tag));
                     });
                     showStatus(`Fetched ${data.tags.length} tags for ${repo}`);
+                    scheduleRunnerPreflightRefresh();
                 } else if (data.error) {
                     showStatus(data.error, true);
                     tagSelect.innerHTML = '<option value="latest">latest (fallback)</option>';
+                    scheduleRunnerPreflightRefresh();
                 }
             } catch (e) {
                 showStatus("Failed to fetch Docker tags", true);
                 tagSelect.innerHTML = '<option value="latest">latest (fallback)</option>';
+                scheduleRunnerPreflightRefresh();
             }
         }
 
@@ -1972,7 +2671,9 @@
             }
         }
 
-        async function fetchAppOptions() {
+        async function fetchAppOptions(loadToken = null, options = {}) {
+            const quietSuccess = !!options.quietSuccess;
+            if (isStaleProjectLoad(loadToken)) return;
             const engine = document.getElementById('container_engine').value;
             let container;
             if (engine === 'docker') {
@@ -2022,15 +2723,24 @@
             const containerEl = document.getElementById('optionsContainer');
             document.getElementById('dynamicOptionsSection').style.display = 'block';
             containerEl.innerHTML = '<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div><div class="mt-2">Analyzing container...</div></div>';
+            beginRunnerOptionsLoad(`Loading options from ${container}`);
             
             try {
-                if (engine === 'apptainer') checkAppVersion();
+                if (isStaleProjectLoad(loadToken)) {
+                    endRunnerOptionsLoad('');
+                    return;
+                }
+                if (engine === 'apptainer') checkAppVersion(loadToken);
                 const resp = await fetch('/get_app_help', { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json' }, 
                     body: JSON.stringify({ container: container, container_engine: engine }) 
                 });
                 const data = await resp.json();
+                if (isStaleProjectLoad(loadToken)) {
+                    endRunnerOptionsLoad('');
+                    return;
+                }
                 
                 if (data.error) {
                     if (data.need_pull) {
@@ -2046,6 +2756,7 @@
                     } else {
                         containerEl.innerHTML = `<div class="alert alert-warning m-4">Error fetching help: ${data.error}</div>`;
                     }
+                    endRunnerOptionsLoad(data.error || 'Failed to load options.', true);
                     return;
                 }
 
@@ -2136,6 +2847,11 @@
                         const zooms = (detectedOutputResolutionInfo.voxel_sizes_mm || []).join(' x ');
                         showStatus(`Auto-filled --output-resolution from native DWI voxel size (${zooms} mm → ${detectedOutputResolution} mm).`);
                     }
+                    if (!quietSuccess) {
+                        endRunnerOptionsLoad('Container options are ready.');
+                    } else {
+                        endRunnerOptionsLoad('Container options restored from project.');
+                    }
                 } else {
                     let msg = '<div class="text-center p-4">No specific options detected for this container.</div>';
                     if (data.raw_help) {
@@ -2143,13 +2859,24 @@
                                <pre style="display:none; text-align:left; font-size:0.7rem; background:#f8f9fa; padding:15px; margin-top:10px; border:1px solid #eee; border-radius:5px; max-height:300px; overflow:auto;">${data.raw_help}</pre></div>`;
                     }
                     containerEl.innerHTML = msg;
+                    endRunnerOptionsLoad('No specific options detected for this container.');
                 }
             } catch (e) {
                 containerEl.innerHTML = `<div class="alert alert-danger m-4">Connection error. Could not retrieve container help.</div>`;
+                endRunnerOptionsLoad('Could not retrieve container options.', true);
+            } finally {
+                scheduleRunnerPreflightRefresh();
             }
         }
 
         async function handleSaveAndRun(shouldRun) {
+            if (shouldRun && !ensureProjectLoadedForRun('starting the runner')) {
+                return;
+            }
+            if (shouldRun && !ensureRunnerPreflightReady('start the runner')) {
+                return;
+            }
+
             const opts = [];
             const missingRequired = [];
 
@@ -2359,6 +3086,14 @@
                 const resData = await resp.json();
                 if (resData.message) {
                     lastSavedPath = resData.path;
+                    if (lastProjectId) {
+                        lastProjectSavedAt = new Date().toISOString();
+                        lastProjectSavePath = resData.path || `projects/${lastProjectId}/project.json`;
+                        if (loadedProjectMeta && loadedProjectMeta.id === lastProjectId) {
+                            loadedProjectMeta.last_modified = lastProjectSavedAt;
+                        }
+                        setProjectDirty(false);
+                    }
                     showStatus(resData.message);
                     if (shouldRun) executeNow();
                     else document.getElementById('runApp').style.display = 'inline-block';
@@ -2388,6 +3123,18 @@
         }
 
         async function executeNow() {
+            if (!ensureProjectLoadedForRun('running from cached config')) {
+                return;
+            }
+            if (!ensureRunnerPreflightReady('run from cached config')) {
+                return;
+            }
+
+            if (hasUnsavedProjectChanges()) {
+                showStatus('Unsaved changes detected. Save project changes before running cached config.', true);
+                return;
+            }
+
             if (!lastSavedPath) {
                 showStatus("No config file ready. Please save first.", true);
                 return;
@@ -2441,6 +3188,18 @@
         }
 
         async function runPilotEstimator() {
+            if (!ensureProjectLoadedForRun('running the pilot estimator')) {
+                return;
+            }
+            if (!ensureRunnerPreflightReady('run the pilot estimator')) {
+                return;
+            }
+
+            if (hasUnsavedProjectChanges()) {
+                showStatus('Unsaved changes detected. Save project changes before running the pilot estimator.', true);
+                return;
+            }
+
             if (!lastSavedPath) {
                 showStatus('Save the config first (Save Only or Save & Start Runner), then run the pilot estimator.', true);
                 return;
@@ -2511,16 +3270,24 @@
 
         async function killApp(scope = 'current') {
             const isAll = scope === 'all';
+            if (!isAll && !ensureProjectLoadedForRun('stopping the current run')) {
+                return;
+            }
+
             const confirmMsg = isAll
-                ? "Are you sure you want to terminate ALL active runner processes?"
+                ? "Stop ALL active runner processes across all projects in this GUI session? This includes runs you may have started from other project contexts."
                 : "Are you sure you want to terminate the CURRENT active run?";
             if (!confirm(confirmMsg)) return;
 
             try {
+                const payload = { scope };
+                if (!isAll && lastProjectId) {
+                    payload.project_id = lastProjectId;
+                }
                 const resp = await fetch('/kill_job', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ scope })
+                    body: JSON.stringify(payload)
                 });
                 const data = await resp.json();
                 showStatus(data.message || data.error, !!data.error);
@@ -2616,6 +3383,8 @@
                 document.getElementById('validation_verbose').checked = !!validation.verbose;
                 document.getElementById('validation_quiet').checked = !!validation.quiet;
                 document.getElementById('validation_missing_only').checked = !!validation.list_missing;
+                scheduleCheckPreflightRefresh();
+                scheduleBuildPreflightRefresh();
                 
                 lastSavedPath = `/data/local/software/bids_apps_runner/configs/${filename}`;
                 document.getElementById('runApp').style.display = 'inline-block';
@@ -2675,11 +3444,31 @@
             }
         }
 
+        function _openFirstTopLevelCard(panelId) {
+            const panel = document.getElementById(panelId);
+            if (!panel) return;
+
+            const cards = Array.from(panel.querySelectorAll(':scope > .tab-card-accordion'));
+            if (!cards.length) return;
+
+            cards.forEach((card, idx) => {
+                const header = card.querySelector(':scope > .tab-card-accordion-header');
+                if (idx === 0) {
+                    card.classList.add('is-open');
+                    if (header) header.setAttribute('aria-expanded', 'true');
+                } else {
+                    card.classList.remove('is-open');
+                    if (header) header.setAttribute('aria-expanded', 'false');
+                }
+            });
+        }
+
         function switchTab(tabId, button) {
             document.querySelectorAll('.tab-panel').forEach(panel => panel.style.display = 'none');
             const panel = document.getElementById(tabId);
             if (panel) {
                 panel.style.display = 'block';
+                _openFirstTopLevelCard(tabId);
                 
                 // Load projects when switching to projects tab
                 if (tabId === 'projectsTab') {
@@ -2693,6 +3482,7 @@
                     if (!document.getElementById('validation_derivatives_folder').value && document.getElementById('output_folder').value) {
                         document.getElementById('validation_derivatives_folder').value = document.getElementById('output_folder').value;
                     }
+                    scheduleCheckPreflightRefresh();
                 } else if (tabId === 'buildTab') {
                     if (!document.getElementById('build_output_dir').value && document.getElementById('container_folder').value) {
                         document.getElementById('build_output_dir').value = document.getElementById('container_folder').value;
@@ -2700,6 +3490,7 @@
                     if (!document.getElementById('build_tmp_dir').value && document.getElementById('tmp_folder').value) {
                         document.getElementById('build_tmp_dir').value = document.getElementById('tmp_folder').value;
                     }
+                    scheduleBuildPreflightRefresh();
                 }
             }
             document.querySelectorAll('.tab-button').forEach(btn => {
@@ -2727,18 +3518,200 @@
             element.style.border = `1px solid ${isError ? '#f5c2c7' : '#b6d4fe'}`;
         }
 
-        async function runOutputCheck() {
-            const statusEl = document.getElementById('validationStatusBox');
-            const logEl = document.getElementById('validationOutput');
-            const btn = document.getElementById('runValidationBtn');
-            const bids = document.getElementById('validation_bids_folder').value.trim();
-            const deriv = document.getElementById('validation_derivatives_folder').value.trim();
-            if (!bids || !deriv) {
-                _setUtilityStatus(statusEl, 'Provide both the BIDS dataset and derivatives folders.', true);
+        function updateCheckProjectScopeNotice() {
+            const notice = document.getElementById('checkProjectScopeNotice');
+            if (!notice) return;
+
+            if (!lastProjectId || !loadedProjectMeta) {
+                notice.className = 'alert alert-warning py-2 px-3 small mb-3';
+                notice.innerHTML = 'Check settings are saved per project. Load a project in <strong>Projects</strong> for persistent defaults.';
                 return;
             }
-            btn.disabled = true;
-            btn.innerText = 'Running...';
+
+            const projectName = loadedProjectMeta.name || loadedProjectMeta.id || lastProjectId;
+            notice.className = 'alert alert-info py-2 px-3 small mb-3';
+            notice.innerHTML = `Active check context: <strong>${escapeHtml(projectName)}</strong> (${escapeHtml(lastProjectId)}).`;
+        }
+
+        function getValidationSettingsFromForm(options = {}) {
+            const silent = !!options.silent;
+            const bids = (document.getElementById('validation_bids_folder').value || '').trim();
+            const derivatives = (document.getElementById('validation_derivatives_folder').value || '').trim();
+            const verbose = document.getElementById('validation_verbose').checked;
+            const quiet = document.getElementById('validation_quiet').checked;
+
+            if (!bids || !derivatives) {
+                if (!silent) {
+                    _setUtilityStatus(document.getElementById('validationStatusBox'), 'Provide both the BIDS dataset and derivatives folders.', true);
+                }
+                return null;
+            }
+
+            if (verbose && quiet) {
+                if (!silent) {
+                    _setUtilityStatus(document.getElementById('validationStatusBox'), 'Verbose and Quiet cannot both be enabled.', true);
+                }
+                return null;
+            }
+
+            return {
+                bids_folder: bids,
+                derivatives_folder: derivatives,
+                pipeline: (document.getElementById('validation_pipeline').value || '').trim(),
+                verbose: verbose,
+                quiet: quiet,
+                list_missing: document.getElementById('validation_missing_only').checked,
+            };
+        }
+
+        function evaluateCheckPreflight() {
+            const bids = (document.getElementById('validation_bids_folder').value || '').trim();
+            const derivatives = (document.getElementById('validation_derivatives_folder').value || '').trim();
+            const verbose = document.getElementById('validation_verbose').checked;
+            const quiet = document.getElementById('validation_quiet').checked;
+            const pipeline = (document.getElementById('validation_pipeline').value || '').trim();
+            const settings = getValidationSettingsFromForm({ silent: true });
+
+            const checks = [
+                { label: 'Project loaded (for persistent defaults)', ok: !!lastProjectId, blocking: false },
+                { label: 'BIDS dataset folder set', ok: !!bids, blocking: true },
+                { label: 'Derivatives folder set', ok: !!derivatives, blocking: true },
+                { label: 'Verbose and Quiet are not both enabled', ok: !(verbose && quiet), blocking: true },
+                { label: 'Pipeline selection', ok: true, blocking: false, failNote: pipeline ? '' : 'auto-detected/all pipelines' },
+                { label: 'Form serialization ready', ok: !!settings, blocking: true },
+            ];
+
+            const blockingFailures = checks.filter((c) => c.blocking && !c.ok);
+            return {
+                checks,
+                ready: blockingFailures.length === 0,
+                blockingFailures,
+                pathsReady: !!bids && !!derivatives,
+            };
+        }
+
+        function updateCheckPreflightPanel() {
+            const panel = document.getElementById('checkPreflightPanel');
+            const badge = document.getElementById('checkPreflightBadge');
+            const list = document.getElementById('checkPreflightList');
+            if (!panel || !badge || !list) return;
+
+            const state = evaluateCheckPreflight();
+            list.innerHTML = '';
+
+            state.checks.forEach((check) => {
+                const li = document.createElement('li');
+                const icon = check.ok ? 'fa-check-circle text-success' : 'fa-exclamation-circle text-danger';
+                const note = check.ok ? '' : check.failNote;
+                li.innerHTML = `<i class="fas ${icon} me-1"></i>${escapeHtml(check.label)}${note ? ` <span class="text-muted">(${escapeHtml(note)})</span>` : ''}`;
+                list.appendChild(li);
+            });
+
+            if (state.ready) {
+                panel.className = 'alert alert-success py-2 px-3 small mb-3';
+                badge.className = 'badge bg-success';
+                badge.textContent = 'Ready';
+            } else {
+                panel.className = 'alert alert-warning py-2 px-3 small mb-3';
+                badge.className = 'badge bg-warning text-dark';
+                badge.textContent = 'Needs Attention';
+            }
+
+            const runBtn = document.getElementById('runValidationBtn');
+            if (runBtn) {
+                runBtn.disabled = !state.ready || validationRunInProgress;
+                runBtn.title = state.ready
+                    ? 'Run output validation with current settings.'
+                    : 'Fix check preflight issues before running validation.';
+            }
+
+            const scanBtn = document.getElementById('scanValidationBtn');
+            if (scanBtn) {
+                scanBtn.disabled = !state.pathsReady || validationScanInProgress;
+                scanBtn.title = state.pathsReady
+                    ? 'Scan folders for available pipelines.'
+                    : 'Set BIDS and derivatives folders before scanning pipelines.';
+            }
+        }
+
+        function scheduleCheckPreflightRefresh() {
+            if (checkPreflightUpdateScheduled) return;
+            checkPreflightUpdateScheduled = true;
+            requestAnimationFrame(() => {
+                checkPreflightUpdateScheduled = false;
+                updateCheckProjectScopeNotice();
+                updateCheckPreflightPanel();
+            });
+        }
+
+        function initializeCheckPreflightTracking() {
+            document.querySelectorAll('.validation-setting').forEach((el) => {
+                el.addEventListener('input', scheduleCheckPreflightRefresh);
+                el.addEventListener('change', scheduleCheckPreflightRefresh);
+            });
+
+            const verbose = document.getElementById('validation_verbose');
+            const quiet = document.getElementById('validation_quiet');
+            if (verbose && quiet) {
+                verbose.addEventListener('change', () => {
+                    if (verbose.checked) quiet.checked = false;
+                    scheduleCheckPreflightRefresh();
+                });
+                quiet.addEventListener('change', () => {
+                    if (quiet.checked) verbose.checked = false;
+                    scheduleCheckPreflightRefresh();
+                });
+            }
+
+            scheduleCheckPreflightRefresh();
+        }
+
+        function setValidationRunButtonBusy(isBusy) {
+            validationRunInProgress = !!isBusy;
+            const btn = document.getElementById('runValidationBtn');
+            if (!btn) return;
+            if (isBusy) {
+                btn.dataset.originalText = btn.innerHTML;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Running...';
+            } else if (btn.dataset.originalText) {
+                btn.innerHTML = btn.dataset.originalText;
+            }
+            scheduleCheckPreflightRefresh();
+        }
+
+        function setValidationScanButtonBusy(isBusy) {
+            validationScanInProgress = !!isBusy;
+            const btn = document.getElementById('scanValidationBtn');
+            if (!btn) return;
+            if (isBusy) {
+                btn.dataset.originalText = btn.innerHTML;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Scanning...';
+            } else if (btn.dataset.originalText) {
+                btn.innerHTML = btn.dataset.originalText;
+            }
+            scheduleCheckPreflightRefresh();
+        }
+
+        async function runOutputCheck() {
+            if (validationRunInProgress) return;
+
+            const statusEl = document.getElementById('validationStatusBox');
+            const logEl = document.getElementById('validationOutput');
+            const settings = getValidationSettingsFromForm();
+            if (!settings) {
+                scheduleCheckPreflightRefresh();
+                return;
+            }
+
+            const preflight = evaluateCheckPreflight();
+            if (!preflight.ready) {
+                const missing = preflight.blockingFailures.map((item) => item.label).join(', ');
+                _setUtilityStatus(statusEl, `Cannot run validation. Fix preflight: ${missing}.`, true);
+                scheduleCheckPreflightRefresh();
+                return;
+            }
+
+            setValidationRunButtonBusy(true);
             _setUtilityStatus(statusEl, 'Running validation...', false);
             const resDiv = document.getElementById('validationDetailsResults');
             if (resDiv) resDiv.innerHTML = '';
@@ -2747,12 +3720,12 @@
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        bids_dir: bids,
-                        derivatives_dir: deriv,
-                        pipeline: document.getElementById('validation_pipeline').value,
-                        verbose: document.getElementById('validation_verbose').checked,
-                        quiet: document.getElementById('validation_quiet').checked,
-                        list_missing: document.getElementById('validation_missing_only').checked
+                        bids_dir: settings.bids_folder,
+                        derivatives_dir: settings.derivatives_folder,
+                        pipeline: settings.pipeline,
+                        verbose: settings.verbose,
+                        quiet: settings.quiet,
+                        list_missing: settings.list_missing
                     })
                 });
                 const data = await resp.json();
@@ -3074,19 +4047,29 @@
             } catch (err) {
                 _setUtilityStatus(statusEl, 'Validation request failed: ' + err.message, true);
             } finally {
-                btn.disabled = false;
-                btn.innerText = 'Run Validation';
+                setValidationRunButtonBusy(false);
+                scheduleCheckPreflightRefresh();
             }
         }
 
         function clearValidationOutput() {
             document.getElementById('validationOutput').innerText = '';
             document.getElementById('validation_verbose').checked = false;
+            document.getElementById('validation_quiet').checked = false;
+            document.getElementById('validation_missing_only').checked = false;
             _setUtilityStatus(document.getElementById('validationStatusBox'), '');
             const resDiv = document.getElementById('validationDetailsResults');
             if (resDiv) resDiv.innerHTML = '';
             document.getElementById('validationLogHeader').style.display = 'none';
             document.getElementById('validationOutput').style.display = 'block';
+            const viewReportsBtn = document.getElementById('viewReportsBtn');
+            if (viewReportsBtn) viewReportsBtn.style.display = 'none';
+            const useMissingBtn = document.getElementById('useMissingBtn');
+            if (useMissingBtn) {
+                useMissingBtn.style.display = 'none';
+                useMissingBtn.dataset.subjects = '';
+            }
+            scheduleCheckPreflightRefresh();
         }
 
         function toggleValidationLog() {
@@ -3286,48 +4269,289 @@
         }
 
         async function scanValidationPipelines() {
-            const bids = document.getElementById('validation_bids_folder').value.trim();
-            const deriv = document.getElementById('validation_derivatives_folder').value.trim();
+            if (validationScanInProgress) return;
+
+            const bids = (document.getElementById('validation_bids_folder').value || '').trim();
+            const deriv = (document.getElementById('validation_derivatives_folder').value || '').trim();
             if (!bids || !deriv) {
                 _setUtilityStatus(document.getElementById('validationStatusBox'), 'Set BIDS and Derivatives folders first.', true);
+                scheduleCheckPreflightRefresh();
                 return;
             }
+
+            setValidationScanButtonBusy(true);
             try {
                 const resp = await fetch('/detect_validation_pipelines', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ bids_dir: bids, derivatives_dir: deriv })
                 });
+
                 const data = await resp.json();
+                if (!resp.ok) {
+                    _setUtilityStatus(document.getElementById('validationStatusBox'), data.error || 'Pipeline scan failed.', true);
+                    return;
+                }
+
                 if (data.pipelines) {
                     const sel = document.getElementById('validation_pipeline');
+                    const previous = (sel.value || '').trim();
                     sel.innerHTML = '<option value="">All detected pipelines</option>';
                     data.pipelines.forEach(p => {
                         const opt = new Option(p.charAt(0).toUpperCase() + p.slice(1), p);
                         sel.add(opt);
                     });
+
+                    if (previous && data.pipelines.includes(previous)) {
+                        sel.value = previous;
+                    }
                     _setUtilityStatus(document.getElementById('validationStatusBox'), `Found ${data.pipelines.length} pipelines.`);
                 } else if (data.error) {
                     _setUtilityStatus(document.getElementById('validationStatusBox'), data.error, true);
                 }
             } catch (e) {
-                console.error("Pipeline scan error:", e);
+                _setUtilityStatus(document.getElementById('validationStatusBox'), 'Pipeline scan failed: ' + e.message, true);
+            } finally {
+                setValidationScanButtonBusy(false);
+                scheduleCheckPreflightRefresh();
             }
         }
 
+        function updateBuildProjectScopeNotice() {
+            const notice = document.getElementById('buildProjectScopeNotice');
+            if (!notice) return;
+
+            if (!lastProjectId || !loadedProjectMeta) {
+                notice.className = 'alert alert-warning py-2 px-3 small mb-3';
+                notice.innerHTML = 'Build paths can be inherited from project defaults, but image builds run independently of project execution.';
+                return;
+            }
+
+            const projectName = loadedProjectMeta.name || loadedProjectMeta.id || lastProjectId;
+            notice.className = 'alert alert-info py-2 px-3 small mb-3';
+            notice.innerHTML = `Active build context: <strong>${escapeHtml(projectName)}</strong> (${escapeHtml(lastProjectId)}).`;
+        }
+
+        function _isValidDockerRepo(repo) {
+            const value = String(repo || '').trim();
+            if (!value) return false;
+            if (value.includes(' ')) return false;
+            return /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(value);
+        }
+
+        function _isValidDockerTag(tag) {
+            const value = String(tag || '').trim();
+            if (!value) return false;
+            if (value.includes(' ')) return false;
+            return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
+        }
+
+        function getBuildSettingsFromForm(options = {}) {
+            const silent = !!options.silent;
+            const outputDir = (document.getElementById('build_output_dir').value || '').trim();
+            const tmpDir = (document.getElementById('build_tmp_dir').value || '').trim();
+            const dockerRepo = (document.getElementById('build_docker_repo').value || '').trim();
+            const dockerTag = (document.getElementById('build_docker_tag').value || '').trim();
+            const dockerfile = (document.getElementById('build_dockerfile').value || '').trim();
+            const keepTemp = document.getElementById('build_keep_temp').checked;
+
+            if (!outputDir || !tmpDir) {
+                if (!silent) _setUtilityStatus(document.getElementById('buildStatusBox'), 'Output and temporary directories are required.', true);
+                return null;
+            }
+
+            if (outputDir === tmpDir) {
+                if (!silent) _setUtilityStatus(document.getElementById('buildStatusBox'), 'Output and temporary directories must be different.', true);
+                return null;
+            }
+
+            if (!dockerfile) {
+                if (!dockerRepo || !dockerTag) {
+                    if (!silent) _setUtilityStatus(document.getElementById('buildStatusBox'), 'Provide Docker repo and tag, or a Dockerfile path.', true);
+                    return null;
+                }
+                if (!_isValidDockerRepo(dockerRepo)) {
+                    if (!silent) _setUtilityStatus(document.getElementById('buildStatusBox'), 'Docker repository format looks invalid.', true);
+                    return null;
+                }
+                if (!_isValidDockerTag(dockerTag)) {
+                    if (!silent) _setUtilityStatus(document.getElementById('buildStatusBox'), 'Docker tag format looks invalid.', true);
+                    return null;
+                }
+            }
+
+            return {
+                output_dir: outputDir,
+                tmp_dir: tmpDir,
+                docker_repo: dockerRepo,
+                docker_tag: dockerTag,
+                dockerfile: dockerfile,
+                keep_temp: keepTemp,
+                async: true,
+            };
+        }
+
+        function evaluateBuildPreflight() {
+            const outputDir = (document.getElementById('build_output_dir').value || '').trim();
+            const tmpDir = (document.getElementById('build_tmp_dir').value || '').trim();
+            const dockerRepo = (document.getElementById('build_docker_repo').value || '').trim();
+            const dockerTag = (document.getElementById('build_docker_tag').value || '').trim();
+            const dockerfile = (document.getElementById('build_dockerfile').value || '').trim();
+            const hasSource = !!dockerfile || (!!dockerRepo && !!dockerTag);
+            const settings = getBuildSettingsFromForm({ silent: true });
+
+            const checks = [
+                { label: 'Project loaded (optional context)', ok: !!lastProjectId, blocking: false },
+                { label: 'Output directory set', ok: !!outputDir, blocking: true },
+                { label: 'Temporary directory set', ok: !!tmpDir, blocking: true },
+                { label: 'Output and temporary directories differ', ok: !outputDir || !tmpDir || outputDir !== tmpDir, blocking: true },
+                { label: 'Build source selected (Dockerfile or repo/tag)', ok: hasSource, blocking: true },
+                { label: 'Docker repository format valid', ok: dockerfile || !dockerRepo || _isValidDockerRepo(dockerRepo), blocking: true },
+                { label: 'Docker tag format valid', ok: dockerfile || !dockerTag || _isValidDockerTag(dockerTag), blocking: true },
+                { label: 'Build idle', ok: !apptainerBuildRunning, blocking: false, failNote: apptainerBuildRunning ? 'build is running; button cancels active build' : '' },
+                { label: 'Form serialization ready', ok: !!settings, blocking: true },
+            ];
+
+            const blockingFailures = checks.filter((c) => c.blocking && !c.ok);
+            return {
+                checks,
+                ready: blockingFailures.length === 0,
+                blockingFailures,
+                canFetchTags: !!dockerRepo && _isValidDockerRepo(dockerRepo),
+            };
+        }
+
+        function updateBuildPreflightPanel() {
+            const panel = document.getElementById('buildPreflightPanel');
+            const badge = document.getElementById('buildPreflightBadge');
+            const list = document.getElementById('buildPreflightList');
+            if (!panel || !badge || !list) return;
+
+            const state = evaluateBuildPreflight();
+            list.innerHTML = '';
+
+            state.checks.forEach((check) => {
+                const li = document.createElement('li');
+                const icon = check.ok ? 'fa-check-circle text-success' : 'fa-exclamation-circle text-danger';
+                const note = check.ok ? '' : check.failNote;
+                li.innerHTML = `<i class="fas ${icon} me-1"></i>${escapeHtml(check.label)}${note ? ` <span class="text-muted">(${escapeHtml(note)})</span>` : ''}`;
+                list.appendChild(li);
+            });
+
+            if (state.ready) {
+                panel.className = 'alert alert-success py-2 px-3 small mb-3';
+                badge.className = 'badge bg-success';
+                badge.textContent = apptainerBuildRunning ? 'Running' : 'Ready';
+            } else {
+                panel.className = 'alert alert-warning py-2 px-3 small mb-3';
+                badge.className = 'badge bg-warning text-dark';
+                badge.textContent = 'Needs Attention';
+            }
+
+            const buildBtn = document.getElementById('buildApptainerBtn');
+            if (buildBtn) {
+                if (apptainerBuildRunning) {
+                    buildBtn.disabled = false;
+                    buildBtn.title = 'Cancel the active build.';
+                } else {
+                    buildBtn.disabled = !state.ready;
+                    buildBtn.title = state.ready
+                        ? 'Start Apptainer build with current settings.'
+                        : 'Fix build preflight checks before starting.';
+                }
+            }
+
+            const fetchBtn = document.getElementById('buildFetchTagsBtn');
+            if (fetchBtn) {
+                fetchBtn.disabled = buildTagFetchInProgress || !state.canFetchTags || apptainerBuildRunning;
+                fetchBtn.title = apptainerBuildRunning
+                    ? 'Stop/cancel current build before fetching tags.'
+                    : (state.canFetchTags
+                        ? 'Fetch tags from Docker Hub.'
+                        : 'Enter a valid Docker repository first.');
+            }
+
+            const clearBtn = document.getElementById('clearBuildOutputBtn');
+            if (clearBtn) {
+                clearBtn.disabled = apptainerBuildRunning;
+                clearBtn.title = apptainerBuildRunning
+                    ? 'Cannot clear logs while a build is running.'
+                    : 'Clear build status and console output.';
+            }
+        }
+
+        function scheduleBuildPreflightRefresh() {
+            if (buildPreflightUpdateScheduled) return;
+            buildPreflightUpdateScheduled = true;
+            requestAnimationFrame(() => {
+                buildPreflightUpdateScheduled = false;
+                updateBuildProjectScopeNotice();
+                updateBuildPreflightPanel();
+            });
+        }
+
+        function initializeBuildPreflightTracking() {
+            document.querySelectorAll('.build-setting').forEach((el) => {
+                el.addEventListener('input', scheduleBuildPreflightRefresh);
+                el.addEventListener('change', scheduleBuildPreflightRefresh);
+            });
+            scheduleBuildPreflightRefresh();
+        }
+
+        function clearBuildOutput() {
+            if (apptainerBuildRunning) {
+                _setUtilityStatus(document.getElementById('buildStatusBox'), 'Cannot clear console while build is running.', true);
+                return;
+            }
+            _setUtilityStatus(document.getElementById('buildStatusBox'), '');
+            const logEl = document.getElementById('buildOutput');
+            if (logEl) logEl.innerText = '';
+            scheduleBuildPreflightRefresh();
+        }
+
+        function setBuildFetchTagsButtonBusy(isBusy) {
+            buildTagFetchInProgress = !!isBusy;
+            const btn = document.getElementById('buildFetchTagsBtn');
+            if (!btn) return;
+            if (isBusy) {
+                btn.dataset.originalText = btn.innerHTML;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Fetching...';
+            } else if (btn.dataset.originalText) {
+                btn.innerHTML = btn.dataset.originalText;
+            }
+            scheduleBuildPreflightRefresh();
+        }
+
         async function fetchDockerTags() {
+            if (buildTagFetchInProgress) return;
+
             const repo = document.getElementById('build_docker_repo').value.trim();
             const tagSelect = document.getElementById('build_docker_tag');
             const statusEl = document.getElementById('buildStatusBox');
+            const preflight = evaluateBuildPreflight();
+
+            if (apptainerBuildRunning) {
+                _setUtilityStatus(statusEl, 'Cannot fetch tags while build is running.', true);
+                scheduleBuildPreflightRefresh();
+                return;
+            }
             
             if (!repo) {
                 _setUtilityStatus(statusEl, 'Please enter a Docker repository first.', true);
+                scheduleBuildPreflightRefresh();
+                return;
+            }
+
+            if (!preflight.canFetchTags) {
+                _setUtilityStatus(statusEl, 'Docker repository format looks invalid.', true);
+                scheduleBuildPreflightRefresh();
                 return;
             }
 
             _setUtilityStatus(statusEl, `Fetching tags for ${repo}...`, false);
             tagSelect.disabled = true;
             tagSelect.innerHTML = '<option>Loading...</option>';
+            setBuildFetchTagsButtonBusy(true);
 
             try {
                 const resp = await fetch('/get_docker_tags', {
@@ -3372,6 +4596,8 @@
                 tagSelect.innerHTML = '<option value="latest">latest</option>';
             } finally {
                 tagSelect.disabled = false;
+                setBuildFetchTagsButtonBusy(false);
+                scheduleBuildPreflightRefresh();
             }
         }
 
@@ -3381,8 +4607,15 @@
 
         function _setApptainerBuildButtonState(btn, isRunning) {
             if (!btn) return;
-            btn.disabled = false;
-            btn.innerText = isRunning ? 'Cancel Build' : 'Start Build';
+            btn.classList.remove('btn-accent', 'btn-outline-danger');
+            if (isRunning) {
+                btn.classList.add('btn-outline-danger');
+                btn.innerText = 'Cancel Build';
+            } else {
+                btn.classList.add('btn-accent');
+                btn.innerText = 'Start Build';
+            }
+            scheduleBuildPreflightRefresh();
         }
 
         function _stopApptainerBuildPolling() {
@@ -3407,6 +4640,7 @@
                     apptainerBuildRunning = false;
                     apptainerCurrentBuildId = null;
                     _setApptainerBuildButtonState(btn, false);
+                    scheduleBuildPreflightRefresh();
                     return;
                 }
 
@@ -3419,6 +4653,7 @@
 
                 if (data.status === 'running') {
                     _setUtilityStatus(statusEl, 'Build running... you can cancel any time.', false);
+                    scheduleBuildPreflightRefresh();
                     return;
                 }
 
@@ -3435,12 +4670,14 @@
                 } else {
                     _setUtilityStatus(statusEl, data.error || 'Build failed.', true);
                 }
+                scheduleBuildPreflightRefresh();
             } catch (err) {
                 _setUtilityStatus(statusEl, 'Build status polling failed: ' + err.message, true);
                 _stopApptainerBuildPolling();
                 apptainerBuildRunning = false;
                 apptainerCurrentBuildId = null;
                 _setApptainerBuildButtonState(btn, false);
+                scheduleBuildPreflightRefresh();
             }
         }
 
@@ -3451,17 +4688,24 @@
                 _setUtilityStatus(statusEl, 'No active build to cancel.', true);
                 _setApptainerBuildButtonState(btn, false);
                 apptainerBuildRunning = false;
+                scheduleBuildPreflightRefresh();
                 return;
             }
             try {
                 _setUtilityStatus(statusEl, 'Cancelling build...', false);
-                await fetch('/build_apptainer_cancel', {
+                const resp = await fetch('/build_apptainer_cancel', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ build_id: apptainerCurrentBuildId })
                 });
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    _setUtilityStatus(statusEl, data.error || 'Cancel request failed.', true);
+                }
             } catch (err) {
                 _setUtilityStatus(statusEl, 'Cancel request failed: ' + err.message, true);
+            } finally {
+                scheduleBuildPreflightRefresh();
             }
         }
 
@@ -3475,27 +4719,25 @@
                 return;
             }
 
-            const payload = {
-                output_dir: document.getElementById('build_output_dir').value.trim(),
-                tmp_dir: document.getElementById('build_tmp_dir').value.trim(),
-                docker_repo: document.getElementById('build_docker_repo').value.trim(),
-                docker_tag: document.getElementById('build_docker_tag').value.trim(),
-                dockerfile: document.getElementById('build_dockerfile').value.trim(),
-                keep_temp: document.getElementById('build_keep_temp').checked,
-                async: true
-            };
-            if (!payload.output_dir || !payload.tmp_dir) {
-                _setUtilityStatus(statusEl, 'Output and temporary directories are required.', true);
+            const payload = getBuildSettingsFromForm();
+            if (!payload) {
+                scheduleBuildPreflightRefresh();
                 return;
             }
-            if (!payload.dockerfile && (!payload.docker_repo || !payload.docker_tag)) {
-                _setUtilityStatus(statusEl, 'Provide a Docker repo/tag or a Dockerfile path.', true);
+
+            const preflight = evaluateBuildPreflight();
+            if (!preflight.ready) {
+                const missing = preflight.blockingFailures.map((item) => item.label).join(', ');
+                _setUtilityStatus(statusEl, `Cannot start build. Fix preflight: ${missing}.`, true);
+                scheduleBuildPreflightRefresh();
                 return;
             }
+
             apptainerBuildRunning = true;
             _setApptainerBuildButtonState(btn, true);
             _setUtilityStatus(statusEl, 'Starting Apptainer build...', false);
             logEl.innerText = '';
+            scheduleBuildPreflightRefresh();
 
             try {
                 const resp = await fetch('/build_apptainer', {
@@ -3508,6 +4750,7 @@
                     apptainerBuildRunning = false;
                     _setApptainerBuildButtonState(btn, false);
                     _setUtilityStatus(statusEl, data.error || 'Build failed.', true);
+                    scheduleBuildPreflightRefresh();
                     return;
                 }
                 apptainerCurrentBuildId = data.build_id;
@@ -3515,10 +4758,12 @@
                 await _pollApptainerBuildStatus();
                 _stopApptainerBuildPolling();
                 apptainerBuildPollTimer = setInterval(_pollApptainerBuildStatus, 1500);
+                scheduleBuildPreflightRefresh();
             } catch (err) {
                 apptainerBuildRunning = false;
                 _setApptainerBuildButtonState(btn, false);
                 _setUtilityStatus(statusEl, 'Build request failed: ' + err.message, true);
+                scheduleBuildPreflightRefresh();
             }
         }
 
@@ -3552,15 +4797,16 @@
                     }
                     
                     const badge = document.createElement('span');
-                    badge.className = `badge ${available ? 'bg-success' : 'bg-danger'} ms-1`;
-                    badge.style.opacity = available ? '1' : '0.6';
-                    badge.innerHTML = `<i class="${tool.icon} me-1"></i> ${label}${extraStatus}`;
+                    badge.className = `status-pill-icon ${available ? 'is-ok' : 'is-missing'}`;
+                    badge.innerHTML = `<i class="${tool.icon}" aria-hidden="true"></i>`;
                     
                     let title = available ? `${label} is available` : `${label} is NOT found in PATH`;
                     if (tool.key === 'docker' && data.docker && !data.docker_running) {
                         title = "Docker is installed but the daemon is NOT RUNNING.";
                     }
                     badge.title = title;
+                    badge.setAttribute('role', 'img');
+                    badge.setAttribute('aria-label', `${label}${extraStatus}: ${available ? 'available' : 'not available'}`);
                     container.appendChild(badge);
                 });
             } catch (err) {
@@ -3568,15 +4814,171 @@
             }
         }
 
+        function initializeRunnerMainAccordion() {
+            const runnerForm = document.getElementById('runnerForm');
+            if (!runnerForm) return;
+
+            const headers = Array.from(runnerForm.children).filter((node) =>
+                node.nodeType === 1 && node.classList.contains('section-header')
+            );
+            if (!headers.length) return;
+
+            headers.forEach((header) => {
+                const section = document.createElement('section');
+                section.className = 'main-accordion-item';
+
+                const body = document.createElement('div');
+                body.className = 'main-accordion-body';
+
+                header.classList.add('main-accordion-header');
+                header.setAttribute('role', 'button');
+                header.setAttribute('tabindex', '0');
+                header.setAttribute('aria-expanded', 'false');
+
+                runnerForm.insertBefore(section, header);
+                section.appendChild(header);
+                section.appendChild(body);
+
+                let cursor = section.nextSibling;
+                while (cursor) {
+                    const next = cursor.nextSibling;
+                    if (
+                        cursor.nodeType === 1 &&
+                        cursor.classList &&
+                        cursor.classList.contains('section-header')
+                    ) {
+                        break;
+                    }
+                    body.appendChild(cursor);
+                    cursor = next;
+                }
+            });
+
+            const items = Array.from(runnerForm.querySelectorAll('.main-accordion-item'));
+
+            function closeItem(item) {
+                item.classList.remove('is-open');
+                const header = item.querySelector('.main-accordion-header');
+                if (header) header.setAttribute('aria-expanded', 'false');
+            }
+
+            function openItem(item) {
+                items.forEach((other) => {
+                    if (other !== item) closeItem(other);
+                });
+                item.classList.add('is-open');
+                const header = item.querySelector('.main-accordion-header');
+                if (header) header.setAttribute('aria-expanded', 'true');
+            }
+
+            items.forEach((item) => {
+                const header = item.querySelector('.main-accordion-header');
+                if (!header) return;
+
+                header.addEventListener('click', (event) => {
+                    if (event.target.closest('a, button, input, select, textarea, label')) {
+                        return;
+                    }
+                    if (item.classList.contains('is-open')) {
+                        closeItem(item);
+                    } else {
+                        openItem(item);
+                    }
+                });
+
+                header.addEventListener('keydown', (event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    if (item.classList.contains('is-open')) {
+                        closeItem(item);
+                    } else {
+                        openItem(item);
+                    }
+                });
+
+                // Keep all sections collapsed on initial load.
+                closeItem(item);
+            });
+        }
+
+        function initializeTabCardAccordions() {
+            const panelIds = ['projectsTab', 'runnerTab', 'hpcTab', 'checkTab', 'buildTab'];
+
+            panelIds.forEach((panelId) => {
+                const panel = document.getElementById(panelId);
+                if (!panel) return;
+
+                const cards = Array.from(panel.children).filter(
+                    (child) => child.nodeType === 1 && child.classList.contains('card')
+                );
+                if (!cards.length) return;
+
+                function closeCard(card) {
+                    card.classList.remove('is-open');
+                    const header = card.querySelector(':scope > .tab-card-accordion-header');
+                    if (header) header.setAttribute('aria-expanded', 'false');
+                }
+
+                function openCard(card) {
+                    cards.forEach((other) => {
+                        if (other !== card) closeCard(other);
+                    });
+                    card.classList.add('is-open');
+                    const header = card.querySelector(':scope > .tab-card-accordion-header');
+                    if (header) header.setAttribute('aria-expanded', 'true');
+                }
+
+                cards.forEach((card) => {
+                    const header = card.querySelector(':scope > .card-header');
+                    const body = card.querySelector(':scope > .card-body');
+                    if (!header || !body) return;
+
+                    card.classList.add('tab-card-accordion');
+                    header.classList.add('tab-card-accordion-header');
+                    body.classList.add('tab-card-accordion-body');
+                    header.setAttribute('role', 'button');
+                    header.setAttribute('tabindex', '0');
+                    header.setAttribute('aria-expanded', 'false');
+
+                    header.addEventListener('click', (event) => {
+                        if (event.target.closest('button, a, input, select, textarea, label')) {
+                            return;
+                        }
+                        if (card.classList.contains('is-open')) {
+                            closeCard(card);
+                        } else {
+                            openCard(card);
+                        }
+                    });
+
+                    header.addEventListener('keydown', (event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        if (card.classList.contains('is-open')) {
+                            closeCard(card);
+                        } else {
+                            openCard(card);
+                        }
+                    });
+
+                    // Keep all top-level tab cards collapsed on initial load.
+                    closeCard(card);
+                });
+            });
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
-            switchTab('runnerTab', document.getElementById('tabRunnerBtn'));
+            initializeTabCardAccordions();
+            switchTab('projectsTab', document.getElementById('tabProjectsBtn'));
             toggleEngineFields();
             checkSystemStatus();
             fetchSystemResources();
             setNavbarProjectName('');
+            setTerminalProjectContextMessage('[Load a project to view project-specific logs.]\n');
             toggleMaxUsageControls();
             togglePilotSweepMode();
             syncRunnerSubjectFilterWithAnalysisLevel();
+            initializeProjectDirtyTracking();
 
             const analysisLevelEl = document.getElementById('analysis_level');
             if (analysisLevelEl) {
@@ -3591,8 +4993,15 @@
                     if (tagSelect.options.length > 1 || (tagSelect.options.length === 1 && tagSelect.options[0].value !== 'latest')) {
                         tagSelect.innerHTML = '<option value="latest">latest</option>';
                     }
+                    scheduleBuildPreflightRefresh();
                 });
             }
+
+            initializeRunnerMainAccordion();
+            initializeRunnerPreflightTracking();
+            initializeCheckPreflightTracking();
+            initializeBuildPreflightTracking();
+            initializeHpcPreflightTracking();
         });
 
         // ============================================================================
@@ -3603,6 +5012,221 @@
         let hpcCurrentJobId = null;
         let hpcTrackedJobs = [];
         let currentProjectConfig = null;
+        let hpcPreflightUpdateScheduled = false;
+        let hpcSaveInProgress = false;
+
+        function updateHpcProjectScopeNotice() {
+            const notice = document.getElementById('hpcProjectScopeNotice');
+            if (!notice) return;
+
+            if (!lastProjectId || !loadedProjectMeta) {
+                notice.className = 'alert alert-warning py-2 px-3 small mb-3';
+                notice.innerHTML = 'HPC settings are project-scoped. Load a project in <strong>Projects</strong> before editing or saving HPC configuration.';
+                return;
+            }
+
+            const projectName = loadedProjectMeta.name || loadedProjectMeta.id || lastProjectId;
+            notice.className = 'alert alert-info py-2 px-3 small mb-3';
+            notice.innerHTML = `Active HPC context: <strong>${escapeHtml(projectName)}</strong> (${escapeHtml(lastProjectId)}).`;
+        }
+
+        function _parseHpcEnvironmentInput(envText) {
+            const trimmed = (envText || '').trim();
+            if (!trimmed) {
+                return { ok: true, environment: {} };
+            }
+
+            let parsed;
+            try {
+                parsed = JSON.parse(trimmed);
+            } catch (e) {
+                return { ok: false, error: `Environment JSON is invalid: ${e.message}` };
+            }
+
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return { ok: false, error: 'Environment must be a JSON object (key/value map).' };
+            }
+
+            const normalized = {};
+            for (const [key, value] of Object.entries(parsed)) {
+                if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+                    return { ok: false, error: `Invalid environment variable name: ${key}` };
+                }
+                normalized[key] = String(value);
+            }
+
+            return { ok: true, environment: normalized };
+        }
+
+        function _validateHpcTimeFormat(value) {
+            const timeValue = String(value || '').trim();
+            return /^(\d+-)?\d{1,2}:\d{2}:\d{2}$/.test(timeValue);
+        }
+
+        function _validateHpcMemFormat(value) {
+            const memValue = String(value || '').trim();
+            return /^\d+(?:\.\d+)?(?:[KMGTP]i?B?|[KMGTP])?$/.test(memValue);
+        }
+
+        function _stableSortObject(value) {
+            if (Array.isArray(value)) {
+                return value.map((item) => _stableSortObject(item));
+            }
+            if (value && typeof value === 'object') {
+                const out = {};
+                Object.keys(value).sort().forEach((key) => {
+                    out[key] = _stableSortObject(value[key]);
+                });
+                return out;
+            }
+            return value;
+        }
+
+        function _normalizeHpcSettingsForCompare(hpc) {
+            const src = hpc || {};
+            return {
+                partition: String(src.partition || '').trim(),
+                time: String(src.time || '').trim(),
+                mem: String(src.mem || '').trim(),
+                cpus: parseInt(src.cpus, 10) || 1,
+                job_name: String(src.job_name || '').trim(),
+                output_pattern: String(src.output_pattern || '').trim(),
+                error_pattern: String(src.error_pattern || '').trim(),
+                modules: Array.isArray(src.modules)
+                    ? src.modules.map((m) => String(m).trim()).filter(Boolean)
+                    : [],
+                environment: (src.environment && typeof src.environment === 'object' && !Array.isArray(src.environment))
+                    ? Object.fromEntries(Object.entries(src.environment).map(([k, v]) => [String(k), String(v)]))
+                    : {},
+                monitor_jobs: src.monitor_jobs !== false,
+            };
+        }
+
+        function _isHpcDirty() {
+            if (!lastProjectId || !currentProjectConfig) return false;
+            const formSettings = getHpcSettingsFromForm({ silent: true });
+            if (!formSettings) return true;
+
+            const baseline = _normalizeHpcSettingsForCompare((currentProjectConfig && currentProjectConfig.hpc) || {});
+            const current = _normalizeHpcSettingsForCompare(formSettings);
+            return JSON.stringify(_stableSortObject(baseline)) !== JSON.stringify(_stableSortObject(current));
+        }
+
+        function evaluateHpcPreflight() {
+            const projectLoaded = !!lastProjectId;
+            const hpcSettings = getHpcSettingsFromForm({ silent: true });
+            const partition = (document.getElementById('hpc_partition').value || '').trim();
+            const time = (document.getElementById('hpc_time').value || '').trim();
+            const mem = (document.getElementById('hpc_mem').value || '').trim();
+            const cpusRaw = (document.getElementById('hpc_cpus').value || '').trim();
+            const cpus = parseInt(cpusRaw, 10);
+            const envResult = _parseHpcEnvironmentInput(document.getElementById('hpc_environment').value || '');
+            const dirty = _isHpcDirty();
+
+            const checks = [
+                { label: 'Project loaded', ok: projectLoaded, blocking: true },
+                { label: 'Partition set', ok: !!partition, blocking: true },
+                { label: 'Time format valid (HH:MM:SS or D-HH:MM:SS)', ok: !!time && _validateHpcTimeFormat(time), blocking: true },
+                { label: 'Memory format valid (e.g., 32G)', ok: !!mem && _validateHpcMemFormat(mem), blocking: true },
+                { label: 'CPU count valid (>= 1)', ok: Number.isInteger(cpus) && cpus >= 1, blocking: true },
+                { label: 'Environment JSON valid', ok: envResult.ok, blocking: true, failNote: envResult.ok ? '' : envResult.error },
+                { label: 'Unsaved HPC edits', ok: !dirty, blocking: false, failNote: dirty ? 'changes pending save' : 'none' },
+                { label: 'Form serialization ready', ok: !!hpcSettings, blocking: true },
+            ];
+
+            const blockingFailures = checks.filter((c) => c.blocking && !c.ok);
+            return {
+                checks,
+                ready: blockingFailures.length === 0,
+                dirty,
+                blockingFailures,
+            };
+        }
+
+        function updateHpcPreflightPanel() {
+            const panel = document.getElementById('hpcPreflightPanel');
+            const badge = document.getElementById('hpcPreflightBadge');
+            const list = document.getElementById('hpcPreflightList');
+            if (!panel || !badge || !list) return;
+
+            const state = evaluateHpcPreflight();
+            list.innerHTML = '';
+
+            state.checks.forEach((check) => {
+                const li = document.createElement('li');
+                const icon = check.ok ? 'fa-check-circle text-success' : 'fa-exclamation-circle text-danger';
+                const note = check.ok ? '' : check.failNote;
+                li.innerHTML = `<i class="fas ${icon} me-1"></i>${escapeHtml(check.label)}${note ? ` <span class="text-muted">(${escapeHtml(note)})</span>` : ''}`;
+                list.appendChild(li);
+            });
+
+            if (state.ready) {
+                panel.className = 'alert alert-success py-2 px-3 small mb-3';
+                badge.className = 'badge bg-success';
+                badge.textContent = state.dirty ? 'Ready (Unsaved)' : 'Ready';
+            } else {
+                panel.className = 'alert alert-warning py-2 px-3 small mb-3';
+                badge.className = 'badge bg-warning text-dark';
+                badge.textContent = 'Needs Attention';
+            }
+
+            const saveBtn = document.getElementById('hpcSaveBtn');
+            if (saveBtn) {
+                saveBtn.disabled = !state.ready || !lastProjectId || hpcSaveInProgress || !state.dirty;
+                saveBtn.title = !lastProjectId
+                    ? 'Load a project first.'
+                    : (!state.ready
+                        ? 'Fix HPC preflight checks before saving.'
+                        : (state.dirty ? 'Save HPC settings to the active project.' : 'No HPC changes to save.'));
+            }
+
+            const discardBtn = document.getElementById('hpcDiscardBtn');
+            if (discardBtn) {
+                discardBtn.disabled = !lastProjectId || !state.dirty;
+                discardBtn.title = !lastProjectId
+                    ? 'Load a project first.'
+                    : (state.dirty ? 'Discard unsaved HPC edits.' : 'No unsaved HPC edits.');
+            }
+
+            const previewBtn = document.getElementById('hpcPreviewBtn');
+            if (previewBtn) {
+                previewBtn.disabled = !state.ready;
+                previewBtn.title = state.ready
+                    ? 'Preview generated SLURM script.'
+                    : 'Fix HPC preflight checks before previewing script.';
+            }
+        }
+
+        function scheduleHpcPreflightRefresh() {
+            if (hpcPreflightUpdateScheduled) return;
+            hpcPreflightUpdateScheduled = true;
+            requestAnimationFrame(() => {
+                hpcPreflightUpdateScheduled = false;
+                updateHpcProjectScopeNotice();
+                updateHpcPreflightPanel();
+            });
+        }
+
+        function initializeHpcPreflightTracking() {
+            document.querySelectorAll('.hpc-setting, #hpc_monitor_jobs').forEach((el) => {
+                el.addEventListener('input', scheduleHpcPreflightRefresh);
+                el.addEventListener('change', scheduleHpcPreflightRefresh);
+            });
+            scheduleHpcPreflightRefresh();
+        }
+
+        function setHpcSaveButtonBusy(isBusy) {
+            hpcSaveInProgress = !!isBusy;
+            const btn = document.getElementById('hpcSaveBtn');
+            if (!btn) return;
+            if (isBusy) {
+                btn.dataset.originalText = btn.innerHTML;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Saving...';
+            } else if (btn.dataset.originalText) {
+                btn.innerHTML = btn.dataset.originalText;
+            }
+            scheduleHpcPreflightRefresh();
+        }
 
         async function checkHPCEnvironment() {
             const statusEl = document.getElementById('hpcEnvStatus');
@@ -3611,6 +5235,10 @@
             try {
                 const resp = await fetch('/check_hpc_environment');
                 const data = await resp.json();
+                if (!resp.ok) {
+                    logHPC('Error checking environment: ' + (data.error || 'request failed'), true);
+                    return;
+                }
                 
                 statusEl.style.display = 'block';
                 badgesEl.innerHTML = '';
@@ -3634,6 +5262,7 @@
                 });
                 
                 logHPC('Environment check complete');
+                scheduleHpcPreflightRefresh();
             } catch (e) {
                 logHPC('Error checking environment: ' + e.message, true);
             }
@@ -3659,62 +5288,87 @@
             if (!editorEl || !noProjectEl) return;
 
             // Show editor if project is loaded, even if hpc section is empty
-            if (lastProjectId && config) {
+            if (lastProjectId) {
                 editorEl.style.display = 'block';
                 noProjectEl.style.display = 'none';
-                const hpc = (config && config.hpc) || {};
+                const effectiveConfig = config || currentProjectConfig || {};
+                const hpc = effectiveConfig.hpc || {};
                 loadHpcSettingsToForm(hpc);
             } else {
                 editorEl.style.display = 'none';
                 noProjectEl.style.display = 'block';
             }
+
+            scheduleHpcPreflightRefresh();
         }
 
         function loadHpcSettingsToForm(hpc) {
             document.getElementById('hpc_partition').value = hpc.partition || '';
             document.getElementById('hpc_time').value = hpc.time || '';
             document.getElementById('hpc_mem').value = hpc.mem || '';
-            document.getElementById('hpc_cpus').value = hpc.cpus || '';
+            document.getElementById('hpc_cpus').value = hpc.cpus || 1;
             document.getElementById('hpc_job_name').value = hpc.job_name || '';
             document.getElementById('hpc_output_pattern').value = hpc.output_pattern || '';
             document.getElementById('hpc_error_pattern').value = hpc.error_pattern || '';
             document.getElementById('hpc_modules').value = (hpc.modules || []).join('\n');
             document.getElementById('hpc_environment').value = JSON.stringify(hpc.environment || {}, null, 2);
             document.getElementById('hpc_monitor_jobs').checked = hpc.monitor_jobs !== false;
+            scheduleHpcPreflightRefresh();
         }
 
-        function getHpcSettingsFromForm() {
+        function getHpcSettingsFromForm(options = {}) {
+            const silent = !!options.silent;
             const modules = document.getElementById('hpc_modules').value
                 .split('\n')
                 .map(m => m.trim())
                 .filter(m => m);
-            
-            let environment = {};
-            try {
-                const envText = document.getElementById('hpc_environment').value.trim();
-                if (envText) {
-                    environment = JSON.parse(envText);
-                }
-            } catch (e) {
-                logHPC('Invalid JSON in environment variables: ' + e.message, true);
+
+            const partition = (document.getElementById('hpc_partition').value || '').trim();
+            const timeVal = (document.getElementById('hpc_time').value || '').trim();
+            const memVal = (document.getElementById('hpc_mem').value || '').trim();
+            const cpusRaw = (document.getElementById('hpc_cpus').value || '').trim();
+            const cpus = parseInt(cpusRaw, 10);
+
+            const envResult = _parseHpcEnvironmentInput(document.getElementById('hpc_environment').value || '');
+            if (!envResult.ok) {
+                if (!silent) logHPC(envResult.error, true);
+                return null;
+            }
+
+            if (!partition) {
+                if (!silent) logHPC('Partition is required.', true);
+                return null;
+            }
+            if (!timeVal || !_validateHpcTimeFormat(timeVal)) {
+                if (!silent) logHPC('Time must be HH:MM:SS or D-HH:MM:SS.', true);
+                return null;
+            }
+            if (!memVal || !_validateHpcMemFormat(memVal)) {
+                if (!silent) logHPC('Memory format is invalid. Example: 32G.', true);
+                return null;
+            }
+            if (!Number.isInteger(cpus) || cpus < 1) {
+                if (!silent) logHPC('CPUs must be an integer >= 1.', true);
                 return null;
             }
 
             return {
-                partition: document.getElementById('hpc_partition').value,
-                time: document.getElementById('hpc_time').value,
-                mem: document.getElementById('hpc_mem').value,
-                cpus: parseInt(document.getElementById('hpc_cpus').value) || 1,
-                job_name: document.getElementById('hpc_job_name').value,
-                output_pattern: document.getElementById('hpc_output_pattern').value,
-                error_pattern: document.getElementById('hpc_error_pattern').value,
+                partition: partition,
+                time: timeVal,
+                mem: memVal,
+                cpus: cpus,
+                job_name: (document.getElementById('hpc_job_name').value || '').trim(),
+                output_pattern: (document.getElementById('hpc_output_pattern').value || '').trim(),
+                error_pattern: (document.getElementById('hpc_error_pattern').value || '').trim(),
                 modules: modules,
-                environment: environment,
+                environment: envResult.environment,
                 monitor_jobs: document.getElementById('hpc_monitor_jobs').checked
             };
         }
 
         async function saveHPCSettings() {
+            if (hpcSaveInProgress) return;
+
             const hpcSettings = getHpcSettingsFromForm();
             if (!hpcSettings) return;
 
@@ -3723,22 +5377,41 @@
                 return;
             }
 
+            const preflight = evaluateHpcPreflight();
+            if (!preflight.ready) {
+                const missing = preflight.blockingFailures.map((item) => item.label).join(', ');
+                logHPC('Cannot save HPC settings. Fix preflight: ' + missing, true);
+                scheduleHpcPreflightRefresh();
+                return;
+            }
+
             logHPC('Saving HPC settings...');
+            setHpcSaveButtonBusy(true);
 
             try {
+                const baseConfig = currentProjectConfig || {};
                 const resp = await fetch(`/save_project/${lastProjectId}`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         config: {
-                            ...currentProjectConfig,
+                            ...baseConfig,
                             hpc: hpcSettings
                         }
                     })
                 });
 
                 if (resp.ok) {
+                    if (!currentProjectConfig || typeof currentProjectConfig !== 'object') {
+                        currentProjectConfig = {};
+                    }
                     currentProjectConfig.hpc = hpcSettings;
+                    lastProjectSavedAt = new Date().toISOString();
+                    lastProjectSavePath = `projects/${lastProjectId}/project.json`;
+                    if (loadedProjectMeta && loadedProjectMeta.id === lastProjectId) {
+                        loadedProjectMeta.last_modified = lastProjectSavedAt;
+                    }
+                    setProjectDirty(false);
                     logHPC('HPC settings saved successfully');
                     showStatus('HPC settings saved to project');
                 } else {
@@ -3747,16 +5420,26 @@
                 }
             } catch (e) {
                 logHPC('Error saving settings: ' + e.message, true);
+            } finally {
+                setHpcSaveButtonBusy(false);
+                scheduleHpcPreflightRefresh();
             }
         }
 
         function resetHPCSettings() {
-            if (!currentProjectConfig || !currentProjectConfig.hpc) {
+            if (!lastProjectId) {
+                logHPC('No project loaded', true);
+                return;
+            }
+
+            if (!currentProjectConfig) {
                 logHPC('No HPC settings to reset', true);
                 return;
             }
-            loadHpcSettingsToForm(currentProjectConfig.hpc);
+
+            loadHpcSettingsToForm((currentProjectConfig && currentProjectConfig.hpc) || {});
             logHPC('Settings reset to last saved state');
+            scheduleHpcPreflightRefresh();
         }
 
         function toggleHPCPreview() {
@@ -3764,6 +5447,19 @@
             if (!preview) return;
 
             if (preview.style.display === 'none') {
+                if (!lastProjectId) {
+                    logHPC('Load a project before previewing HPC script.', true);
+                    return;
+                }
+
+                const preflight = evaluateHpcPreflight();
+                if (!preflight.ready) {
+                    const missing = preflight.blockingFailures.map((item) => item.label).join(', ');
+                    logHPC('Cannot preview script. Fix preflight: ' + missing, true);
+                    scheduleHpcPreflightRefresh();
+                    return;
+                }
+
                 const hpcSettings = getHpcSettingsFromForm();
                 if (!hpcSettings) return;
                 
@@ -3774,6 +5470,8 @@
             } else {
                 preview.style.display = 'none';
             }
+
+            scheduleHpcPreflightRefresh();
         }
 
         function generateSLURMScriptPreview(hpc, container) {
