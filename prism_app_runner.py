@@ -35,6 +35,7 @@ import shutil
 import tempfile
 import webbrowser
 import threading
+from typing import Any
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 from waitress import serve
@@ -48,11 +49,7 @@ from check_app_output import BIDSOutputValidator
 
 # Try to import HPC DataLad runner
 try:
-    from hpc_datalad_runner import (
-        DataLadHPCScriptGenerator,
-        validate_datalad_config,
-        validate_hpc_config,
-    )
+    import hpc_datalad_runner  # noqa: F401
 
     HPC_DATALAD_AVAILABLE = True
 except ImportError:
@@ -135,6 +132,170 @@ DATA_DIR = _get_data_dir()
 LOG_DIR = DATA_DIR / "logs"
 PROJECTS_DIR = DATA_DIR / "projects"
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+GLOBAL_SETTINGS_DIR = DATA_DIR / "configs"
+GLOBAL_SETTINGS_PATH = GLOBAL_SETTINGS_DIR / "global_settings.json"
+
+
+def _current_machine_id():
+    """Return a stable machine identifier for per-host settings overrides."""
+    system_name = (platform.system() or "unknown").strip().lower()
+    host_name = (platform.node() or "unknown").strip().lower()
+    machine_id = f"{system_name}:{host_name}"
+    return re.sub(r"\s+", "_", machine_id)
+
+
+def _default_machine_settings():
+    system_name = (platform.system() or "").strip().lower()
+    preferred_engine = "apptainer"
+    if system_name in {"darwin", "windows"}:
+        preferred_engine = "docker"
+
+    return {
+        "preferred_container_engine": preferred_engine,
+        "allow_apptainer": True,
+        "allow_docker": True,
+        "default_apptainer_folder": "",
+        "default_apptainer_container": "",
+        "default_tmp_folder": "",
+        "default_docker_repo": "nipreps/fmriprep",
+        "default_docker_tag": "latest",
+        "default_jobs": 1,
+    }
+
+
+def _default_global_settings_doc():
+    return {
+        "version": 1,
+        "default": _default_machine_settings(),
+        "machines": {},
+    }
+
+
+def _sanitize_machine_settings(raw):
+    """Normalize user-provided machine settings and drop unsupported keys."""
+    if not isinstance(raw, dict):
+        return {}
+
+    cleaned = {}
+
+    preferred = str(raw.get("preferred_container_engine", "")).strip().lower()
+    if preferred in {"auto", "apptainer", "docker"}:
+        cleaned["preferred_container_engine"] = preferred
+
+    for key in ("allow_apptainer", "allow_docker"):
+        if key in raw:
+            cleaned[key] = bool(raw.get(key))
+
+    for key in (
+        "default_apptainer_folder",
+        "default_apptainer_container",
+        "default_tmp_folder",
+        "default_docker_repo",
+        "default_docker_tag",
+    ):
+        if key in raw:
+            cleaned[key] = str(raw.get(key) or "").strip()
+
+    if "default_jobs" in raw:
+        try:
+            jobs = int(raw.get("default_jobs"))
+        except (TypeError, ValueError):
+            jobs = 1
+        cleaned["default_jobs"] = max(1, min(jobs, 256))
+
+    return cleaned
+
+
+def _read_global_settings_doc():
+    """Load global settings file and coerce to known schema."""
+    doc = _default_global_settings_doc()
+    if not GLOBAL_SETTINGS_PATH.exists():
+        return doc
+
+    try:
+        with open(GLOBAL_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception as exc:
+        print(f"[GUI] Failed to read global settings {GLOBAL_SETTINGS_PATH}: {exc}")
+        return doc
+
+    if not isinstance(raw, dict):
+        return doc
+
+    default_raw = raw.get("default")
+    if isinstance(default_raw, dict):
+        doc["default"].update(_sanitize_machine_settings(default_raw))
+
+    machines_raw = raw.get("machines")
+    if isinstance(machines_raw, dict):
+        cleaned_machines = {}
+        for machine_id, value in machines_raw.items():
+            if not isinstance(machine_id, str) or not machine_id.strip():
+                continue
+            cleaned = _sanitize_machine_settings(value)
+            if cleaned:
+                cleaned_machines[machine_id.strip().lower()] = cleaned
+        doc["machines"] = cleaned_machines
+
+    return doc
+
+
+def _write_global_settings_doc(doc):
+    GLOBAL_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(GLOBAL_SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2)
+
+
+def _resolve_container_engine(
+    preferred_engine,
+    allow_apptainer=True,
+    allow_docker=True,
+    dependencies=None,
+):
+    """Resolve effective container engine for this host from preferences + availability."""
+    deps = dependencies or check_system_dependencies()
+    apptainer_available = bool(deps.get("apptainer") or deps.get("singularity"))
+    docker_available = bool(deps.get("docker"))
+
+    preferred = str(preferred_engine or "auto").strip().lower()
+    if preferred not in {"auto", "apptainer", "docker"}:
+        preferred = "auto"
+
+    ordered = ["apptainer", "docker"] if preferred == "auto" else [preferred]
+    if preferred != "auto":
+        ordered.extend([e for e in ("apptainer", "docker") if e != preferred])
+
+    for engine in ordered:
+        if engine == "apptainer" and allow_apptainer and apptainer_available:
+            return "apptainer"
+        if engine == "docker" and allow_docker and docker_available:
+            return "docker"
+
+    # If nothing is available, retain a deterministic fallback by policy.
+    if allow_apptainer:
+        return "apptainer"
+    if allow_docker:
+        return "docker"
+    return "apptainer"
+
+
+def _get_effective_machine_settings(machine_id=None, dependencies=None):
+    machine_key = (machine_id or _current_machine_id()).strip().lower()
+    defaults = _default_machine_settings()
+    doc = _read_global_settings_doc()
+
+    effective = copy.deepcopy(defaults)
+    effective.update(_sanitize_machine_settings(doc.get("default", {})))
+    machine_overrides = doc.get("machines", {}).get(machine_key, {})
+    effective.update(_sanitize_machine_settings(machine_overrides))
+
+    effective["resolved_container_engine"] = _resolve_container_engine(
+        effective.get("preferred_container_engine", "auto"),
+        allow_apptainer=bool(effective.get("allow_apptainer", True)),
+        allow_docker=bool(effective.get("allow_docker", True)),
+        dependencies=dependencies,
+    )
+    return effective
 
 
 class ProjectManager:
@@ -160,6 +321,27 @@ class ProjectManager:
         project_dir.mkdir(parents=True, exist_ok=True)
         (project_dir / "logs").mkdir(exist_ok=True)
 
+        machine_defaults = _get_effective_machine_settings()
+        default_jobs = machine_defaults.get("default_jobs", 1)
+        try:
+            default_jobs = max(1, int(default_jobs))
+        except (TypeError, ValueError):
+            default_jobs = 1
+
+        default_engine = machine_defaults.get("resolved_container_engine", "apptainer")
+        default_container = ""
+        if default_engine == "docker":
+            docker_repo = str(machine_defaults.get("default_docker_repo") or "").strip()
+            docker_tag = str(machine_defaults.get("default_docker_tag") or "latest").strip() or "latest"
+            if docker_repo:
+                default_container = f"{docker_repo}:{docker_tag}"
+        else:
+            default_container = str(
+                machine_defaults.get("default_apptainer_container") or ""
+            ).strip()
+
+        default_tmp_folder = str(machine_defaults.get("default_tmp_folder") or "").strip()
+
         project_json = {
             "id": project_id,
             "name": name,
@@ -171,12 +353,12 @@ class ProjectManager:
                 "common": {
                     "bids_folder": "",
                     "output_folder": "",
-                    "tmp_folder": "",
+                    "tmp_folder": default_tmp_folder,
                     "templateflow_dir": "",
                     "notify_email": "",
-                    "container_engine": "apptainer",
-                    "container": "",
-                    "jobs": 1,
+                    "container_engine": default_engine,
+                    "container": default_container,
+                    "jobs": default_jobs,
                 },
                 "app": {"analysis_level": "participant", "options": [], "mounts": []},
             },
@@ -305,9 +487,8 @@ def _validate_project_json_shape(project_json):
     required_top_level = ["id", "name", "config"]
     missing_top_level = [k for k in required_top_level if k not in project_json]
     if missing_top_level:
-        return (
-            "Invalid project.json: missing top-level key(s): "
-            + ", ".join(missing_top_level)
+        return "Invalid project.json: missing top-level key(s): " + ", ".join(
+            missing_top_level
         )
 
     project_id = project_json.get("id")
@@ -380,11 +561,13 @@ SILENT_ENDPOINTS = {
     "/pilot_estimator_status",
 }
 
+
 @app.before_request
 def log_request_info():
     if request.path not in SILENT_ENDPOINTS:
         print(
-            f"[GUI] {request.method} {request.path} from {request.remote_addr}", flush=True
+            f"[GUI] {request.method} {request.path} from {request.remote_addr}",
+            flush=True,
         )
 
 
@@ -816,15 +999,15 @@ APP_LAUNCH_ENV_KEY = "BIDS_APPS_RUNNER_LAUNCHED_BY_GUI"
 APP_LAUNCH_ENV_VALUE = "1"
 
 # Track runner processes launched from this GUI session
-RUN_JOBS = {}
+RUN_JOBS: dict[str, dict[str, Any]] = {}
 RUN_JOBS_LOCK = threading.Lock()
 
 # Simple cache for log polling to reduce file system calls (keyed by project_id)
-_log_cache = {}
+_log_cache: dict[str, Any] = {}
 _log_cache_ttl = 1.0  # Cache for 1 second
 
 # Track background Apptainer builds started from GUI utility tab
-APPTAINER_BUILDS = {}
+APPTAINER_BUILDS: dict[str, dict[str, Any]] = {}
 APPTAINER_BUILDS_LOCK = threading.Lock()
 
 # Track pilot resource estimator jobs
@@ -1341,9 +1524,7 @@ def _prepare_apptainer_build(data):
     if os.path.expanduser(output_dir) == os.path.expanduser(tmp_dir):
         return None, (
             jsonify(
-                {
-                    "error": "Output directory and temporary directory must be different."
-                }
+                {"error": "Output directory and temporary directory must be different."}
             ),
             400,
         )
@@ -1530,7 +1711,6 @@ def _run_apptainer_build_async(build_id):
 
 @app.route("/get_log", methods=["GET"])
 def get_log():
-    global _log_cache
     try:
         project_id = (request.args.get("project_id") or "").strip()
 
@@ -1553,7 +1733,9 @@ def get_log():
             )
 
         tracked_jobs = _get_active_tracked_run_jobs()
-        has_active_job = any((job.get("project_id") or "") == project_id for job in tracked_jobs)
+        has_active_job = any(
+            (job.get("project_id") or "") == project_id for job in tracked_jobs
+        )
 
         project_dir = PROJECTS_DIR / project_id / "logs"
         if project_dir.exists():
@@ -1710,7 +1892,98 @@ def health():
 @app.route("/check_system", methods=["GET"])
 def check_system():
     """Endpoint to check system dependencies."""
-    return jsonify(check_system_dependencies())
+    deps = check_system_dependencies()
+    deps["os"] = (platform.system() or "unknown").strip().lower()
+    return jsonify(deps)
+
+
+@app.route("/run_status", methods=["GET"])
+def run_status():
+    """Return active runner status for lightweight navbar polling."""
+    tracked_jobs = _get_active_tracked_run_jobs()
+    jobs = []
+    project_counts = {}
+    project_names = {}
+
+    for state in tracked_jobs:
+        project_id = str(state.get("project_id") or "").strip() or None
+        project_name = None
+        if project_id:
+            project_counts[project_id] = project_counts.get(project_id, 0) + 1
+            if project_id not in project_names:
+                try:
+                    project = ProjectManager.load_project(project_id)
+                    if project:
+                        project_names[project_id] = (
+                            str(project.get("name") or "").strip() or project_id
+                        )
+                    else:
+                        project_names[project_id] = project_id
+                except Exception:
+                    project_names[project_id] = project_id
+            project_name = project_names.get(project_id, project_id)
+
+        started_at = state.get("started_at")
+        started_iso = None
+        if isinstance(started_at, (int, float)):
+            started_iso = datetime.fromtimestamp(started_at).isoformat(timespec="seconds")
+
+        jobs.append(
+            {
+                "run_id": state.get("id"),
+                "project_id": project_id,
+                "project_name": project_name,
+                "pid": state.get("pid"),
+                "started_at": started_iso,
+                "source": "tracked",
+            }
+        )
+
+    active_projects = [
+        {
+            "id": project_id,
+            "name": project_names.get(project_id, project_id),
+            "count": count,
+        }
+        for project_id, count in sorted(project_counts.items())
+    ]
+
+    tracked_pids = {
+        int(state.get("pid"))
+        for state in tracked_jobs
+        if isinstance(state.get("pid"), int)
+    }
+
+    detected_pids = sorted(_find_app_related_pids(include_marked=True))
+    fallback_pids = [pid for pid in detected_pids if pid not in tracked_pids]
+    for pid in fallback_pids:
+        jobs.append(
+            {
+                "run_id": None,
+                "project_id": None,
+                "project_name": None,
+                "pid": pid,
+                "started_at": None,
+                "source": "detected",
+            }
+        )
+
+    unscoped_count = 0
+    for job in jobs:
+        if not job.get("project_id"):
+            unscoped_count += 1
+
+    running = len(jobs) > 0
+    return jsonify(
+        {
+            "running": running,
+            "count": len(jobs),
+            "active_projects": active_projects,
+            "jobs": jobs,
+            "detected_pid_count": len(fallback_pids),
+            "unscoped_count": unscoped_count,
+        }
+    )
 
 
 @app.route("/system_resources", methods=["GET"])
@@ -1726,6 +1999,73 @@ def system_resources():
             "gpu_available": shutil.which("nvidia-smi") is not None,
             "slurm_available": shutil.which("sbatch") is not None,
         }
+    )
+
+
+@app.route("/global_settings", methods=["GET"])
+def get_global_settings():
+    """Return effective global settings for the current machine."""
+    machine_id = _current_machine_id()
+    settings_file_exists = GLOBAL_SETTINGS_PATH.exists()
+    deps = check_system_dependencies()
+    doc = _read_global_settings_doc()
+    effective = _get_effective_machine_settings(machine_id=machine_id, dependencies=deps)
+    return (
+        jsonify(
+            {
+                "machine_id": machine_id,
+                "os": platform.system(),
+                "autodetected": not settings_file_exists,
+                "effective": effective,
+                "default": doc.get("default", {}),
+                "machine_override": doc.get("machines", {}).get(machine_id, {}),
+                "system": deps,
+                "path": str(GLOBAL_SETTINGS_PATH),
+            }
+        ),
+        200,
+    )
+
+
+@app.route("/global_settings", methods=["POST"])
+def save_global_settings():
+    """Save global settings either for default policy or current machine."""
+    data = request.get_json(silent=True) or {}
+    scope = str(data.get("scope") or "machine").strip().lower()
+    settings = data.get("settings")
+
+    if not isinstance(settings, dict):
+        return jsonify({"error": "settings must be a JSON object"}), 400
+
+    cleaned = _sanitize_machine_settings(settings)
+    machine_id = _current_machine_id()
+
+    doc = _read_global_settings_doc()
+    if scope == "default":
+        doc["default"].update(cleaned)
+    elif scope == "machine":
+        doc.setdefault("machines", {})
+        doc["machines"][machine_id] = cleaned
+    else:
+        return jsonify({"error": "scope must be 'machine' or 'default'"}), 400
+
+    try:
+        _write_global_settings_doc(doc)
+    except Exception as exc:
+        return jsonify({"error": f"Failed to save global settings: {exc}"}), 500
+
+    deps = check_system_dependencies()
+    effective = _get_effective_machine_settings(machine_id=machine_id, dependencies=deps)
+    return (
+        jsonify(
+            {
+                "message": "Global settings saved successfully",
+                "machine_id": machine_id,
+                "effective": effective,
+                "path": str(GLOBAL_SETTINGS_PATH),
+            }
+        ),
+        200,
     )
 
 
@@ -1809,7 +2149,10 @@ def run_output_check():
         )
 
     if verbose and quiet:
-        return jsonify({"error": "Verbose and quiet modes cannot both be enabled."}), 400
+        return (
+            jsonify({"error": "Verbose and quiet modes cannot both be enabled."}),
+            400,
+        )
 
     bids_path = Path(os.path.expanduser(bids_dir))
     derivatives_path = Path(os.path.expanduser(derivatives_dir))
@@ -1881,7 +2224,7 @@ def run_output_check():
             if start != -1 and end != -1:
                 json_str = result.stdout[start : end + 1]
                 parsed = json.loads(json_str)
-        except:
+        except (json.JSONDecodeError, TypeError, AttributeError):
             parsed = None
 
     return jsonify(
@@ -2299,7 +2642,7 @@ def get_app_help():
                     # Often the first line contains the flag and maybe the metavar
                     # Everything from the second line onwards is description
                     # OR if there's only one line, the description might be after many spaces
-                    description = " ".join([l.strip() for l in block_lines[1:]])
+                    description = " ".join([line.strip() for line in block_lines[1:]])
                 elif "  " in block:
                     # Handle single line case: --flag METAVAR  description
                     parts_of_line = re.split(r"\s{2,}", block.strip())
@@ -2484,7 +2827,7 @@ def get_templateflow_templates():
                                 resolutions.add(match.group(1))
                         if len(resolutions) > 20:
                             break
-                except:
+                except OSError:
                     pass
 
                 templates.append(
@@ -2785,7 +3128,11 @@ def run_app():
         mounts = app_cfg.get("mounts", [])
         container_name = str(common.get("container", "")).lower()
 
-        if "fmriprep" in container_name or "qsiprep" in container_name or "qsirecon" in container_name:
+        if (
+            "fmriprep" in container_name
+            or "qsiprep" in container_name
+            or "qsirecon" in container_name
+        ):
             fs_license_path = common.get("fs_license_file")
             fs_license_arg = _extract_fs_license_path(options)
 
@@ -3087,15 +3434,15 @@ def run_pilot_estimator():
                 expected_nprocs = _compute_auto_nprocs_values(
                     nprocs_min=nprocs_min,
                     nprocs_max=(
-                        None
-                        if nprocs_max in (None, "", "null")
-                        else int(nprocs_max)
+                        None if nprocs_max in (None, "", "null") else int(nprocs_max)
                     ),
                     nprocs_step=nprocs_step,
                 )
             except (TypeError, ValueError):
                 return (
-                    jsonify({"error": "Invalid nprocs_min/nprocs_max/nprocs_step values"}),
+                    jsonify(
+                        {"error": "Invalid nprocs_min/nprocs_max/nprocs_step values"}
+                    ),
                     400,
                 )
 
@@ -3505,7 +3852,7 @@ def cancel_hpc_job():
 
     try:
         cmd = ["scancel", job_id]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
 
         return jsonify({"message": f"Job {job_id} cancelled", "job_id": job_id})
 

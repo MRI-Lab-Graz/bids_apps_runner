@@ -50,6 +50,7 @@ def _ensure_mriqc_no_sub_option(container_ref, options):
     logging.info("MRIQC detected: auto-appending --no-sub to disable metrics upload")
     return opts
 
+
 # ============================================================================
 # SLURM Job Management Functions
 # ============================================================================
@@ -213,7 +214,9 @@ apptainer run \\"""
     /bids /output {app.get("analysis_level", "participant")} \\"""
 
         # Add app options
-        app_options = _ensure_mriqc_no_sub_option(common.get("container", ""), app.get("options", []))
+        app_options = _ensure_mriqc_no_sub_option(
+            common.get("container", ""), app.get("options", [])
+        )
         for option in app_options:
             script_content += f"\n    {option} \\"
 
@@ -428,7 +431,7 @@ def execute_hpc(config: Dict[str, Any], args: Namespace) -> bool:
     logging.info("=" * 60)
 
     common = config.get("common", {})
-    app = config.get("app", {})
+    config.get("app", {})
     hpc = config.get("hpc", {})
     datalad_config = config.get("datalad", {})
 

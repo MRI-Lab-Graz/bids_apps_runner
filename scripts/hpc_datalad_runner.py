@@ -256,7 +256,7 @@ fi
 
     def _container_run(self) -> str:
         """Generate datalad containers-run section."""
-        container_image = self.container.get("image")
+        self.container.get("image")
         container_name = self.container.get("name", "bids_app")
         outputs = self.container.get("outputs", [])
         inputs = self.container.get("inputs", [])

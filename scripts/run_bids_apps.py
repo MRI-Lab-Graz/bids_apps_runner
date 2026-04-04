@@ -24,7 +24,7 @@ scripts_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, scripts_dir)
 
 # Import and run prism_runner with the same arguments
-from prism_runner import main
+from prism_runner import main  # noqa: E402
 
 if __name__ == "__main__":
     sys.exit(main())

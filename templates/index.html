@@ -143,6 +143,38 @@
             gap: 6px;
             max-width: 190px;
         }
+        #navbar-run-status {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--studio-border);
+            background: #f8f9fa;
+            color: #495057;
+            font-size: 0.8rem;
+            font-weight: 700;
+            line-height: 1;
+            gap: 6px;
+            min-height: 28px;
+        }
+        #navbar-run-status i {
+            font-size: 0.75rem;
+        }
+        #navbar-run-status.status-running {
+            background: #e9f7ef;
+            border-color: #8ac5a7;
+            color: #1f8b5c;
+        }
+        #navbar-run-status.status-idle {
+            background: #f2f4f6;
+            border-color: #d0d7de;
+            color: #6c757d;
+        }
+        #navbar-run-status.status-error {
+            background: #fdeced;
+            border-color: #f5c2c7;
+            color: #b02a37;
+        }
         .status-pill-icon {
             width: 30px;
             height: 30px;
@@ -167,6 +199,17 @@
             color: #b02a37;
             opacity: 0.9;
         }
+        .status-pill-icon.is-warning {
+            background: #fff6e5;
+            border-color: #f2cf8b;
+            color: #8c5a00;
+        }
+        .status-pill-icon.is-na {
+            background: #f2f4f6;
+            border-color: #d0d7de;
+            color: #7a8593;
+            opacity: 0.85;
+        }
     </style>
 {% endblock %}
 
@@ -187,6 +230,10 @@
 {% endblock %}
 
 {% block navbar_right %}
+    <div id="navbar-run-status" class="me-2 status-idle" aria-live="polite" title="No pipeline is running right now.">
+        <i class="fas fa-circle"></i>
+        <span id="navbarRunStatusText">Idle</span>
+    </div>
     <div id="system-status-pills" class="me-3" aria-label="System availability checks">
         <!-- System status badges will be injected here -->
     </div>
@@ -241,6 +288,108 @@
                             </form>
                         </div>
                     </div>
+
+                    <div class="border-top pt-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h5 class="mb-0">Machine Settings</h5>
+                            <button type="button" id="machineSettingsToggleBtn" class="btn btn-sm btn-outline-secondary" onclick="toggleMachineSettingsBlock()">
+                                Show
+                            </button>
+                        </div>
+                        <div id="machineSettingsBody" style="display:none;">
+                        <div class="text-muted small mb-3">
+                            Save cross-platform defaults for this machine. New projects will use these defaults automatically.
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Current Machine ID</label>
+                                <input type="text" id="machine_settings_machine_id" class="form-control" readonly>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Effective Engine on This Host</label>
+                                <input type="text" id="machine_settings_resolved_engine" class="form-control" readonly>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Preferred Container Engine</label>
+                                <select id="machine_settings_preferred_engine" class="form-select">
+                                    <option value="auto">Auto (best available)</option>
+                                    <option value="apptainer">Apptainer / Singularity</option>
+                                    <option value="docker">Docker</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4 mb-3 d-flex align-items-end">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="machine_settings_allow_apptainer" checked>
+                                    <label class="form-check-label" for="machine_settings_allow_apptainer">Allow Apptainer / Singularity</label>
+                                </div>
+                            </div>
+                            <div class="col-md-4 mb-3 d-flex align-items-end">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="machine_settings_allow_docker" checked>
+                                    <label class="form-check-label" for="machine_settings_allow_docker">Allow Docker</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Default Apptainer Images Folder</label>
+                                <div class="input-group">
+                                    <input type="text" id="machine_settings_apptainer_folder" class="form-control" placeholder="/path/to/containers">
+                                    <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('machine_settings_apptainer_folder')">...</button>
+                                </div>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Default Apptainer Container Image</label>
+                                <div class="input-group">
+                                    <input type="text" id="machine_settings_apptainer_container" class="form-control" placeholder="/path/to/image.sif">
+                                    <button type="button" class="btn btn-outline-secondary" onclick="openFileBrowser('machine_settings_apptainer_container', ['.sif', '.simg'])">...</button>
+                                </div>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Default Jobs</label>
+                                <input type="number" id="machine_settings_default_jobs" class="form-control" min="1" value="1">
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Default Temp/Work Folder</label>
+                                <div class="input-group">
+                                    <input type="text" id="machine_settings_default_tmp_folder" class="form-control" placeholder="/path/to/temp">
+                                    <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('machine_settings_default_tmp_folder')">...</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Default Docker Repository</label>
+                                <input type="text" id="machine_settings_docker_repo" class="form-control" placeholder="nipreps/fmriprep">
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Default Docker Tag</label>
+                                <input type="text" id="machine_settings_docker_tag" class="form-control" value="latest">
+                            </div>
+                        </div>
+
+                        <div class="d-flex flex-wrap gap-2">
+                            <button type="button" class="btn btn-primary" onclick="saveMachineSettings()">
+                                <i class="fas fa-save me-1"></i>Save for This Machine
+                            </button>
+                            <button type="button" class="btn btn-outline-primary" onclick="applyMachineSettingsToRunnerForm()">
+                                <i class="fas fa-magic me-1"></i>Apply to Runner Form
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="loadGlobalSettings()">
+                                <i class="fas fa-sync-alt me-1"></i>Reload
+                            </button>
+                        </div>
+                        <div id="machine_settings_status" class="small text-muted mt-2"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -254,6 +403,7 @@
                 <div id="runnerProjectScopeNotice" class="alert alert-warning py-2 px-3 small mb-3">
                     Runs and terminal output are project-scoped. Load a project in Projects before starting a run.
                 </div>
+                <div id="runnerActiveRunsNotice" class="alert py-2 px-3 small mb-3" style="display:none;"></div>
                 <div id="runnerOptionsLoadStatus" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;"></div>
                 <div id="runnerPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
                     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -1034,12 +1184,30 @@
                     <div id="buildPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
                         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                             <strong>Build Preflight</strong>
-                            <span id="buildPreflightBadge" class="badge bg-secondary">Checking...</span>
+                            <div class="d-flex align-items-center gap-2">
+                                <span id="buildPreflightBadge" class="badge bg-secondary">Checking...</span>
+                                <button type="button" id="buildPreflightToggleBtn" class="btn btn-sm btn-outline-secondary" onclick="toggleBuildPreflightDetails()">Show Details</button>
+                            </div>
                         </div>
-                        <ul id="buildPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
+                        <div id="buildPreflightSummary" class="small text-muted mt-2">Checking build readiness...</div>
+                        <ul id="buildPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem; display:none;"></ul>
                     </div>
 
                     <p class="text-muted mb-3">Convert Docker images or Dockerfiles into Apptainer containers without leaving the browser.</p>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Top Candidate Preset</label>
+                            <select class="form-select" id="build_top_candidate" onchange="applyBuildTopCandidate()">
+                                <option value="">Custom / no preset</option>
+                                <option value="nipreps/fmriprep">fMRIPrep</option>
+                                <option value="pennlinc/qsiprep">QSIPrep</option>
+                                <option value="pennlinc/qsirecon">QSIRecon</option>
+                                <option value="nipreps/mriqc">MRIQC</option>
+                                <option value="freesurfer/freesurfer">FreeSurfer</option>
+                                <option value="deepmi/fastsurfer">FastSurfer</option>
+                            </select>
+                        </div>
+                    </div>
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Docker Repository</label>
@@ -1208,6 +1376,8 @@
         let validationScanInProgress = false;
         let buildPreflightUpdateScheduled = false;
         let buildTagFetchInProgress = false;
+        let globalMachineSettings = null;
+        let latestRunStatus = null;
 
         function isQsireconContainer() {
             const engine = document.getElementById('container_engine').value;
@@ -1363,6 +1533,301 @@
             const projectName = loadedProjectMeta.name || loadedProjectMeta.id || lastProjectId;
             notice.className = 'alert alert-info py-2 px-3 small mb-3';
             notice.innerHTML = `Active run context: <strong>${escapeHtml(projectName)}</strong> (${escapeHtml(lastProjectId)}).`;
+            updateRunnerActiveRunsNotice();
+        }
+
+        function updateRunnerActiveRunsNotice(statusData = null) {
+            const notice = document.getElementById('runnerActiveRunsNotice');
+            if (!notice) return;
+
+            if (statusData) {
+                latestRunStatus = statusData;
+            }
+
+            const data = latestRunStatus;
+            if (!data || !data.running) {
+                notice.style.display = 'none';
+                notice.innerHTML = '';
+                return;
+            }
+
+            const activeProjects = Array.isArray(data.active_projects) ? data.active_projects : [];
+            const unscopedCount = parseInt(data.unscoped_count || 0, 10) || 0;
+            const loadedId = (lastProjectId || '').trim();
+
+            const currentProjectRuns = loadedId
+                ? activeProjects.find((project) => project.id === loadedId)
+                : null;
+            const otherProjectRuns = loadedId
+                ? activeProjects.filter((project) => project.id !== loadedId)
+                : activeProjects;
+
+            const formatProjectRuns = (project) => {
+                const count = parseInt(project.count || 0, 10) || 1;
+                const countSuffix = count > 1 ? ` x${count}` : '';
+                return `${project.name || project.id} (${project.id})${countSuffix}`;
+            };
+
+            const otherParts = otherProjectRuns.map(formatProjectRuns);
+            if (unscopedCount > 0) {
+                otherParts.push(`unscoped run(s) x${unscopedCount}`);
+            }
+
+            if (loadedId && currentProjectRuns) {
+                const ownCount = parseInt(currentProjectRuns.count || 0, 10) || 1;
+                const ownLabel = ownCount > 1 ? `${ownCount} run(s)` : '1 run';
+                if (otherParts.length > 0) {
+                    notice.className = 'alert alert-warning py-2 px-3 small mb-3';
+                    notice.innerHTML = `Loaded project is running (${ownLabel}). Also active: <strong>${escapeHtml(otherParts.join('; '))}</strong>.`;
+                    notice.style.display = 'block';
+                } else {
+                    notice.className = 'alert alert-info py-2 px-3 small mb-3';
+                    notice.innerHTML = `Loaded project is running (${ownLabel}).`;
+                    notice.style.display = 'block';
+                }
+                return;
+            }
+
+            if (loadedId && !currentProjectRuns && otherParts.length > 0) {
+                notice.className = 'alert alert-warning py-2 px-3 small mb-3';
+                notice.innerHTML = `Loaded project is currently idle. Other active run(s): <strong>${escapeHtml(otherParts.join('; '))}</strong>.`;
+                notice.style.display = 'block';
+                return;
+            }
+
+            const genericParts = otherParts.length > 0
+                ? otherParts
+                : activeProjects.map(formatProjectRuns);
+            notice.className = 'alert alert-info py-2 px-3 small mb-3';
+            notice.innerHTML = `Active runs detected: <strong>${escapeHtml(genericParts.join('; '))}</strong>.`;
+            notice.style.display = 'block';
+        }
+
+        function updateMachineSettingsStatus(message, isError = false) {
+            const statusEl = document.getElementById('machine_settings_status');
+            if (!statusEl) return;
+            statusEl.className = isError ? 'small text-danger mt-2' : 'small text-muted mt-2';
+            statusEl.textContent = message || '';
+        }
+
+        function toggleMachineSettingsBlock(forceState = null) {
+            const body = document.getElementById('machineSettingsBody');
+            const btn = document.getElementById('machineSettingsToggleBtn');
+            if (!body || !btn) return;
+
+            const shouldShow = typeof forceState === 'boolean'
+                ? forceState
+                : body.style.display === 'none';
+
+            body.style.display = shouldShow ? 'block' : 'none';
+            btn.textContent = shouldShow ? 'Hide' : 'Show';
+        }
+
+        function populateMachineSettingsForm(data) {
+            globalMachineSettings = data;
+            const effective = (data && data.effective) || {};
+
+            const machineEl = document.getElementById('machine_settings_machine_id');
+            if (machineEl) machineEl.value = data.machine_id || '';
+
+            const resolvedEngine = effective.resolved_container_engine || effective.preferred_container_engine || 'apptainer';
+            const resolvedEl = document.getElementById('machine_settings_resolved_engine');
+            if (resolvedEl) resolvedEl.value = resolvedEngine;
+
+            document.getElementById('machine_settings_preferred_engine').value = effective.preferred_container_engine || 'auto';
+            document.getElementById('machine_settings_allow_apptainer').checked = effective.allow_apptainer !== false;
+            document.getElementById('machine_settings_allow_docker').checked = effective.allow_docker !== false;
+            document.getElementById('machine_settings_apptainer_folder').value = effective.default_apptainer_folder || '';
+            document.getElementById('machine_settings_apptainer_container').value = effective.default_apptainer_container || '';
+            document.getElementById('machine_settings_default_tmp_folder').value = effective.default_tmp_folder || '';
+            document.getElementById('machine_settings_docker_repo').value = effective.default_docker_repo || '';
+            document.getElementById('machine_settings_docker_tag').value = effective.default_docker_tag || 'latest';
+            document.getElementById('machine_settings_default_jobs').value = effective.default_jobs || 1;
+
+            const path = data.path || 'configs/global_settings.json';
+            const osName = data.os || 'Unknown OS';
+            if (data.autodetected) {
+                updateMachineSettingsStatus(`Auto-detected defaults for ${osName}. Save once to persist in ${path}.`);
+            } else {
+                updateMachineSettingsStatus(`Settings file: ${path}`);
+            }
+        }
+
+        async function loadGlobalSettings() {
+            try {
+                const resp = await fetch('/global_settings');
+                const data = await resp.json();
+                if (!resp.ok) {
+                    updateMachineSettingsStatus(data.error || 'Failed to load machine settings.', true);
+                    return false;
+                }
+
+                populateMachineSettingsForm(data);
+                applyMachineSettingsToRunnerForm({ silent: true, fillOnlyEmpty: true });
+                return true;
+            } catch (e) {
+                updateMachineSettingsStatus(`Failed to load machine settings: ${e.message}`, true);
+                return false;
+            }
+        }
+
+        function getMachineSettingsPayloadFromForm() {
+            return {
+                preferred_container_engine: document.getElementById('machine_settings_preferred_engine').value,
+                allow_apptainer: document.getElementById('machine_settings_allow_apptainer').checked,
+                allow_docker: document.getElementById('machine_settings_allow_docker').checked,
+                default_apptainer_folder: (document.getElementById('machine_settings_apptainer_folder').value || '').trim(),
+                default_apptainer_container: (document.getElementById('machine_settings_apptainer_container').value || '').trim(),
+                default_tmp_folder: (document.getElementById('machine_settings_default_tmp_folder').value || '').trim(),
+                default_docker_repo: (document.getElementById('machine_settings_docker_repo').value || '').trim(),
+                default_docker_tag: (document.getElementById('machine_settings_docker_tag').value || 'latest').trim() || 'latest',
+                default_jobs: parseInt(document.getElementById('machine_settings_default_jobs').value, 10) || 1,
+            };
+        }
+
+        async function saveMachineSettings() {
+            const settings = getMachineSettingsPayloadFromForm();
+            try {
+                const resp = await fetch('/global_settings', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ scope: 'machine', settings })
+                });
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    updateMachineSettingsStatus(data.error || 'Failed to save machine settings.', true);
+                    showStatus(data.error || 'Failed to save machine settings.', true);
+                    return;
+                }
+
+                const refreshed = await loadGlobalSettings();
+                if (refreshed) {
+                    showStatus('Machine settings saved successfully.');
+                    applyMachineSettingsToRunnerForm({ silent: true, fillOnlyEmpty: true });
+                }
+            } catch (e) {
+                const msg = `Failed to save machine settings: ${e.message}`;
+                updateMachineSettingsStatus(msg, true);
+                showStatus(msg, true);
+            }
+        }
+
+        function applyMachineSettingsToRunnerForm(options = {}) {
+            const silent = !!options.silent;
+            const fillOnlyEmpty = !!options.fillOnlyEmpty;
+            const effective = globalMachineSettings && globalMachineSettings.effective;
+            if (!effective) {
+                if (!silent) showStatus('Load machine settings first.', true);
+                return false;
+            }
+
+            const resolvedEngine = effective.resolved_container_engine || effective.preferred_container_engine || 'apptainer';
+
+            const engineEl = document.getElementById('container_engine');
+            const jobsEl = document.getElementById('jobs');
+            const tmpFolderEl = document.getElementById('tmp_folder');
+            const apptainerFolderEl = document.getElementById('container_folder');
+            const apptainerSelectEl = document.getElementById('container_select');
+            const fetchHelpBtnEl = document.getElementById('fetchHelpBtn');
+            const dockerRepoEl = document.getElementById('container_docker_repo');
+            const dockerTagEl = document.getElementById('container_docker_tag');
+            const buildOutputDirEl = document.getElementById('build_output_dir');
+            const buildTmpDirEl = document.getElementById('build_tmp_dir');
+            const buildDockerRepoEl = document.getElementById('build_docker_repo');
+            const buildDockerTagEl = document.getElementById('build_docker_tag');
+
+            const defaultApptainerContainer = (effective.default_apptainer_container || '').trim();
+            let defaultApptainerFolder = (effective.default_apptainer_folder || '').trim();
+            let defaultApptainerImage = '';
+            if (defaultApptainerContainer && defaultApptainerContainer.includes('/')) {
+                const lastSlash = defaultApptainerContainer.lastIndexOf('/');
+                if (!defaultApptainerFolder) {
+                    defaultApptainerFolder = defaultApptainerContainer.slice(0, lastSlash);
+                }
+                defaultApptainerImage = defaultApptainerContainer.slice(lastSlash + 1);
+            }
+
+            const defaultTmpFolder = (effective.default_tmp_folder || '').trim();
+
+            if (!fillOnlyEmpty || !(jobsEl.value || '').trim()) {
+                jobsEl.value = String(effective.default_jobs || 1);
+            }
+
+            if (!fillOnlyEmpty || !(tmpFolderEl.value || '').trim()) {
+                tmpFolderEl.value = defaultTmpFolder;
+            }
+
+            const hasConfiguredContainer = !!getConfiguredContainerValue();
+            if (!fillOnlyEmpty || (!lastProjectId && !hasConfiguredContainer)) {
+                engineEl.value = resolvedEngine;
+            }
+
+            if (resolvedEngine === 'apptainer') {
+                if (!fillOnlyEmpty || !(apptainerFolderEl.value || '').trim()) {
+                    apptainerFolderEl.value = defaultApptainerFolder;
+                }
+
+                if (defaultApptainerImage && (!fillOnlyEmpty || !hasConfiguredContainer)) {
+                    const hasOption = Array.from(apptainerSelectEl.options).some((opt) => opt.value === defaultApptainerImage);
+                    if (!hasOption) {
+                        apptainerSelectEl.add(new Option(defaultApptainerImage, defaultApptainerImage));
+                    }
+                    apptainerSelectEl.value = defaultApptainerImage;
+                    if (fetchHelpBtnEl) fetchHelpBtnEl.style.display = 'block';
+                }
+            } else if (resolvedEngine === 'docker') {
+                if (!fillOnlyEmpty || !(dockerRepoEl.value || '').trim()) {
+                    dockerRepoEl.value = effective.default_docker_repo || '';
+                }
+                if (!fillOnlyEmpty || !(dockerTagEl.value || '').trim()) {
+                    const defaultTag = effective.default_docker_tag || 'latest';
+                    const hasTagOption = Array.from(dockerTagEl.options).some((opt) => opt.value === defaultTag);
+                    if (!hasTagOption) {
+                        dockerTagEl.add(new Option(defaultTag, defaultTag));
+                    }
+                    dockerTagEl.value = defaultTag;
+                }
+            }
+
+            if (buildOutputDirEl) {
+                const buildDefaultOutput = defaultApptainerFolder;
+                if (!fillOnlyEmpty || !(buildOutputDirEl.value || '').trim()) {
+                    buildOutputDirEl.value = buildDefaultOutput;
+                }
+            }
+
+            if (buildTmpDirEl) {
+                if (!fillOnlyEmpty || !(buildTmpDirEl.value || '').trim()) {
+                    buildTmpDirEl.value = defaultTmpFolder;
+                }
+            }
+
+            if (buildDockerRepoEl) {
+                if (!fillOnlyEmpty || !(buildDockerRepoEl.value || '').trim()) {
+                    buildDockerRepoEl.value = effective.default_docker_repo || '';
+                }
+            }
+
+            if (buildDockerTagEl) {
+                const defaultTag = effective.default_docker_tag || 'latest';
+                if (!fillOnlyEmpty || !(buildDockerTagEl.value || '').trim()) {
+                    const hasTagOption = Array.from(buildDockerTagEl.options).some((opt) => opt.value === defaultTag);
+                    if (!hasTagOption) {
+                        buildDockerTagEl.add(new Option(defaultTag, defaultTag));
+                    }
+                    buildDockerTagEl.value = defaultTag;
+                }
+            }
+
+            toggleEngineFields();
+            scheduleRunnerPreflightRefresh();
+            scheduleBuildPreflightRefresh();
+
+            if (!silent) {
+                showStatus(`Applied machine defaults (engine: ${resolvedEngine}).`);
+            }
+            return true;
         }
 
         function ensureProjectLoadedForRun(actionName) {
@@ -1437,6 +1902,7 @@
                     label: 'Container option load state',
                     ok: optionsIdle,
                     blocking: true,
+                    pending: !optionsIdle,
                     failNote: 'still loading',
                     okNote: 'ready',
                 },
@@ -1469,7 +1935,9 @@
 
             state.checks.forEach((check) => {
                 const li = document.createElement('li');
-                const icon = check.ok ? 'fa-check-circle text-success' : 'fa-exclamation-circle text-danger';
+                const icon = check.ok
+                    ? 'fa-check-circle text-success'
+                    : (check.pending ? 'fa-hourglass-half text-warning' : 'fa-exclamation-circle text-danger');
                 const note = check.ok ? check.okNote : check.failNote;
                 li.innerHTML = `<i class="fas ${icon} me-1"></i>${escapeHtml(check.label)}${note ? ` <span class="text-muted">(${escapeHtml(note)})</span>` : ''}`;
                 list.appendChild(li);
@@ -2139,6 +2607,7 @@
                 }
 
                 toggleEngineFields();
+                applyMachineSettingsToRunnerForm({ silent: true, fillOnlyEmpty: true });
 
                 // Store container path and locked state
                 currentContainerPath = common.container || '';
@@ -3179,6 +3648,7 @@
                 if (data.message) {
                     showStatus(data.message);
                     initialLoad = false;
+                    updateNavbarRunStatus();
                 } else {
                     showStatus(data.error + (data.details ? ": " + data.details : ""), true);
                 }
@@ -4421,11 +4891,53 @@
             };
         }
 
+        function toggleBuildPreflightDetails(forceState = null) {
+            const list = document.getElementById('buildPreflightList');
+            const btn = document.getElementById('buildPreflightToggleBtn');
+            if (!list || !btn) return;
+
+            const shouldShow = typeof forceState === 'boolean'
+                ? forceState
+                : list.style.display === 'none';
+
+            list.style.display = shouldShow ? 'block' : 'none';
+            btn.textContent = shouldShow ? 'Hide Details' : 'Show Details';
+        }
+
+        async function applyBuildTopCandidate() {
+            const presetEl = document.getElementById('build_top_candidate');
+            const repoEl = document.getElementById('build_docker_repo');
+            const tagEl = document.getElementById('build_docker_tag');
+            const statusEl = document.getElementById('buildStatusBox');
+            if (!presetEl || !repoEl || !tagEl) return;
+
+            const repo = (presetEl.value || '').trim();
+            if (!repo) {
+                _setUtilityStatus(statusEl, 'Preset cleared. You can enter a custom repository.', false);
+                scheduleBuildPreflightRefresh();
+                return;
+            }
+
+            repoEl.value = repo;
+            const hasLatest = Array.from(tagEl.options).some((opt) => opt.value === 'latest');
+            if (!hasLatest) {
+                tagEl.add(new Option('latest', 'latest'));
+            }
+            tagEl.value = 'latest';
+            _setUtilityStatus(statusEl, `Preset selected: ${repo}. Fetching tags...`, false);
+            scheduleBuildPreflightRefresh();
+
+            if (!apptainerBuildRunning && _isValidDockerRepo(repo)) {
+                await fetchDockerTags();
+            }
+        }
+
         function updateBuildPreflightPanel() {
             const panel = document.getElementById('buildPreflightPanel');
             const badge = document.getElementById('buildPreflightBadge');
             const list = document.getElementById('buildPreflightList');
-            if (!panel || !badge || !list) return;
+            const summary = document.getElementById('buildPreflightSummary');
+            if (!panel || !badge || !list || !summary) return;
 
             const state = evaluateBuildPreflight();
             list.innerHTML = '';
@@ -4442,10 +4954,15 @@
                 panel.className = 'alert alert-success py-2 px-3 small mb-3';
                 badge.className = 'badge bg-success';
                 badge.textContent = apptainerBuildRunning ? 'Running' : 'Ready';
+                summary.textContent = apptainerBuildRunning
+                    ? 'Build is running. You can monitor logs below.'
+                    : 'All required checks passed. You can start the build.';
             } else {
                 panel.className = 'alert alert-warning py-2 px-3 small mb-3';
                 badge.className = 'badge bg-warning text-dark';
                 badge.textContent = 'Needs Attention';
+                const blockingCount = state.blockingFailures.length;
+                summary.textContent = `${blockingCount} required check${blockingCount === 1 ? '' : 's'} need attention.`;
             }
 
             const buildBtn = document.getElementById('buildApptainerBtn');
@@ -4496,6 +5013,16 @@
                 el.addEventListener('change', scheduleBuildPreflightRefresh);
             });
             scheduleBuildPreflightRefresh();
+        }
+
+        function syncBuildTopCandidateFromRepo() {
+            const presetEl = document.getElementById('build_top_candidate');
+            const repoEl = document.getElementById('build_docker_repo');
+            if (!presetEl || !repoEl) return;
+
+            const repo = (repoEl.value || '').trim();
+            const hasPreset = Array.from(presetEl.options).some((opt) => opt.value === repo);
+            presetEl.value = hasPreset ? repo : '';
         }
 
         function clearBuildOutput() {
@@ -4775,8 +5302,19 @@
                 const resp = await fetch('/check_system');
                 if (!resp.ok) return;
                 const data = await resp.json();
+                const osName = String(data.os || 'unknown').toLowerCase();
+                const osDisplay = osName === 'darwin'
+                    ? 'macOS'
+                    : (osName === 'linux' ? 'Linux' : (osName === 'windows' ? 'Windows' : 'this OS'));
                 
                 container.innerHTML = '';
+
+                const isToolApplicableOnOs = (key) => {
+                    if (key === 'apptainer' || key === 'singularity' || key === 'slurm') {
+                        return osName === 'linux';
+                    }
+                    return true;
+                };
                 
                 const tools = [
                     { key: 'docker', icon: 'fab fa-docker', label: 'Docker' },
@@ -4787,30 +5325,106 @@
                 ];
                 
                 tools.forEach(tool => {
+                    const applicable = isToolApplicableOnOs(tool.key);
                     let available = data[tool.key];
                     let label = tool.label;
                     let extraStatus = "";
-                    
-                    if (tool.key === 'docker' && available && !data.docker_running) {
-                        available = false; // Treat as unavailable if not running
-                        extraStatus = " (Not Running)";
+                    let badgeClass = 'is-missing';
+                    let title = `${label} is NOT found in PATH`;
+                    let ariaStatus = 'not available';
+
+                    // Treat Apptainer and Singularity as equivalent runtimes for UX clarity.
+                    if (tool.key === 'apptainer' || tool.key === 'singularity') {
+                        available = Boolean(data.apptainer || data.singularity);
+                    }
+
+                    if (!applicable) {
+                        badgeClass = 'is-na';
+                        title = `${label} is not expected on ${osDisplay}`;
+                        ariaStatus = `not applicable on ${osDisplay}`;
+                    } else if (tool.key === 'docker' && available && !data.docker_running) {
+                        badgeClass = 'is-warning';
+                        extraStatus = ' (Not Running)';
+                        title = 'Docker is installed but the daemon is NOT RUNNING.';
+                        ariaStatus = 'installed but not running';
+                    } else if (available) {
+                        badgeClass = 'is-ok';
+                        title = `${label} is available`;
+                        ariaStatus = 'available';
                     }
                     
                     const badge = document.createElement('span');
-                    badge.className = `status-pill-icon ${available ? 'is-ok' : 'is-missing'}`;
+                    badge.className = `status-pill-icon ${badgeClass}`;
                     badge.innerHTML = `<i class="${tool.icon}" aria-hidden="true"></i>`;
-                    
-                    let title = available ? `${label} is available` : `${label} is NOT found in PATH`;
-                    if (tool.key === 'docker' && data.docker && !data.docker_running) {
-                        title = "Docker is installed but the daemon is NOT RUNNING.";
-                    }
+
                     badge.title = title;
                     badge.setAttribute('role', 'img');
-                    badge.setAttribute('aria-label', `${label}${extraStatus}: ${available ? 'available' : 'not available'}`);
+                    badge.setAttribute('aria-label', `${label}${extraStatus}: ${ariaStatus}`);
                     container.appendChild(badge);
                 });
             } catch (err) {
                 console.error("System check failed:", err);
+            }
+        }
+
+        async function updateNavbarRunStatus() {
+            const badge = document.getElementById('navbar-run-status');
+            const textEl = document.getElementById('navbarRunStatusText');
+            if (!badge || !textEl) return;
+
+            try {
+                const resp = await fetch('/run_status');
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'status unavailable');
+
+                const running = !!data.running;
+                const count = parseInt(data.count || 0, 10) || 0;
+                const activeProjects = Array.isArray(data.active_projects) ? data.active_projects : [];
+                const unscopedCount = parseInt(data.unscoped_count || 0, 10) || 0;
+
+                const loadedId = (lastProjectId || '').trim();
+                const orderedProjects = [...activeProjects];
+                if (loadedId) {
+                    orderedProjects.sort((a, b) => {
+                        if (a.id === loadedId && b.id !== loadedId) return -1;
+                        if (b.id === loadedId && a.id !== loadedId) return 1;
+                        return String(a.name || a.id).localeCompare(String(b.name || b.id));
+                    });
+                }
+
+                const projectLines = orderedProjects.map((project) => {
+                    const countVal = parseInt(project.count || 0, 10) || 1;
+                    const countSuffix = countVal > 1 ? ` x${countVal}` : '';
+                    return `- ${project.name || project.id} (${project.id})${countSuffix}`;
+                });
+                if (unscopedCount > 0) {
+                    projectLines.push(`- Unscoped run(s) x${unscopedCount}`);
+                }
+
+                badge.classList.remove('status-idle', 'status-running', 'status-error');
+                if (running) {
+                    badge.classList.add('status-running');
+                    textEl.textContent = count > 1 ? `Running (${count})` : 'Running';
+
+                    const scopeText = projectLines.length > 0
+                        ? `Running projects:\n${projectLines.join('\n')}`
+                        : 'Active run with no project scope';
+                    badge.title = scopeText;
+                    badge.setAttribute('aria-label', textEl.textContent + '. ' + scopeText);
+                } else {
+                    badge.classList.add('status-idle');
+                    textEl.textContent = 'Idle';
+                    badge.title = 'No pipeline is running right now.';
+                    badge.setAttribute('aria-label', 'Idle. No pipeline is running right now.');
+                }
+                updateRunnerActiveRunsNotice(data);
+            } catch (err) {
+                badge.classList.remove('status-idle', 'status-running');
+                badge.classList.add('status-error');
+                textEl.textContent = 'Status ?';
+                badge.title = `Failed to fetch run status: ${err.message || err}`;
+                badge.setAttribute('aria-label', 'Run status unavailable.');
+                updateRunnerActiveRunsNotice();
             }
         }
 
@@ -4972,6 +5586,8 @@
             switchTab('projectsTab', document.getElementById('tabProjectsBtn'));
             toggleEngineFields();
             checkSystemStatus();
+            updateNavbarRunStatus();
+            loadGlobalSettings();
             fetchSystemResources();
             setNavbarProjectName('');
             setTerminalProjectContextMessage('[Load a project to view project-specific logs.]\n');
@@ -4989,6 +5605,7 @@
             const buildRepoInput = document.getElementById('build_docker_repo');
             if (buildRepoInput) {
                 buildRepoInput.addEventListener('input', () => {
+                    syncBuildTopCandidateFromRepo();
                     const tagSelect = document.getElementById('build_docker_tag');
                     if (tagSelect.options.length > 1 || (tagSelect.options.length === 1 && tagSelect.options[0].value !== 'latest')) {
                         tagSelect.innerHTML = '<option value="latest">latest</option>';
@@ -4997,11 +5614,16 @@
                 });
             }
 
+            syncBuildTopCandidateFromRepo();
+
             initializeRunnerMainAccordion();
             initializeRunnerPreflightTracking();
             initializeCheckPreflightTracking();
             initializeBuildPreflightTracking();
             initializeHpcPreflightTracking();
+
+            // Keep navbar status fresh without requiring user actions.
+            setInterval(updateNavbarRunStatus, 3000);
         });
 
         // ============================================================================

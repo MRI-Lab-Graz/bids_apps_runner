@@ -15,13 +15,7 @@ from datetime import datetime
 
 # Import the existing checker classes
 try:
-    from check_app_output import (
-        BIDSOutputValidator,
-        FMRIPrepChecker,
-        QSIPrepChecker,
-        FreeSurferChecker,
-        QSIReconChecker,
-    )
+    from check_app_output import BIDSOutputValidator
 except ImportError:
     logging.warning("check_app_output.py not found - validation features disabled")
     BIDSOutputValidator = None

@@ -128,7 +128,7 @@ def submit_batch_jobs(
 
             # Generate script
             script_file = script_path / f"job_{subject_id}.sh"
-            script = generate_script(config_path, subject_id, str(script_file))
+            generate_script(config_path, subject_id, str(script_file))
 
             results["scripts"].append(str(script_file))
             logging.info(f"Generated script: {script_file}")

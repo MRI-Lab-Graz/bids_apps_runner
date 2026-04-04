@@ -1,4 +1,5 @@
 import re
+import json
 
 output = """
 usage: qsiprep [-h] [--skip-bids-validation]
@@ -41,10 +42,9 @@ def parse(output):
                 continue
             flag = flag_match.group(1)
 
-            choices = []
             choice_match = re.search(r"\{([^}]+)\}", block)
             if choice_match:
-                choices = [c.strip() for c in choice_match.group(1).split(",")]
+                [c.strip() for c in choice_match.group(1).split(",")]
 
             # IMPROVED: Clean up description parsing
             # The description usually starts after the flag/metavar block
@@ -53,7 +53,7 @@ def parse(output):
             # Find the first line after the flag line
             block_lines = block.split("\n")
             if len(block_lines) > 1:
-                description = " ".join([l.strip() for l in block_lines[1:]])
+                description = " ".join([line.strip() for line in block_lines[1:]])
             else:
                 description = ""
 
@@ -64,7 +64,5 @@ def parse(output):
             sections.append({"title": header, "options": options})
     return sections
 
-
-import json
 
 print(json.dumps(parse(output), indent=2))

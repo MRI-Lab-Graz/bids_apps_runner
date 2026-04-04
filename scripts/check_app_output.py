@@ -95,10 +95,10 @@ class BIDSChecker:
                                     m.strip().strip('"').strip("'")
                                     for m in mod_match.group(1).split(",")
                                 ]
-                                self.stats["metadata"]["settings"] = (
-                                    f"Modalities: {', '.join([m for m in mods if m])}"
-                                )
-                    except:
+                                self.stats["metadata"][
+                                    "settings"
+                                ] = f"Modalities: {', '.join([m for m in mods if m])}"
+                    except Exception:
                         pass
                 elif log_files[0].suffix == ".log":
                     # Try to find Command line in log file
@@ -114,7 +114,7 @@ class BIDSChecker:
                                         ":", 1
                                     )[1].strip()[:200]
                                     break
-                    except:
+                    except Exception:
                         pass
 
     def _check_logs(self, pipeline_dir: Path):
@@ -194,7 +194,7 @@ class BIDSChecker:
                                 if len(cleaned) > 200:
                                     cleaned = cleaned[:197] + "..."
                                 unique_warnings.add(cleaned)
-            except:
+            except Exception:
                 pass
 
         self.stats["log_stats"]["error_list"] = sorted(list(unique_errors))
@@ -940,9 +940,9 @@ class QSIReconChecker(BIDSChecker):
             ]
 
             if missing_subjects:
-                self.stats["missing_subjects_by_pipeline"][recon_name] = (
-                    missing_subjects
-                )
+                self.stats["missing_subjects_by_pipeline"][
+                    recon_name
+                ] = missing_subjects
                 for missing_subj in missing_subjects:
                     self.add_missing_item(
                         f"QSIRecon subject missing from reconstruction pipeline:\n"
@@ -1168,13 +1168,9 @@ class MRIQCChecker(BIDSChecker):
             self.stats["total_subjects"] += 1
             self.stats["all_subjects_list"].append(subj)
 
-            has_report = False
-            has_metrics = False
-
             # Check for subject-level HTML reports
             subj_reports = list(pipeline_dir.glob(f"{subj}*.html"))
             if subj_reports:
-                has_report = True
                 self.stats["subjects_with_reports"] += 1
             else:
                 self.add_missing_item(f"MRIQC HTML report missing for subject: {subj}")
@@ -1184,7 +1180,6 @@ class MRIQCChecker(BIDSChecker):
             if subj_data_dir.exists():
                 json_files = list(subj_data_dir.rglob("*.json"))
                 if json_files:
-                    has_metrics = True
                     self.stats["subjects_with_metrics"] += 1
                 else:
                     self.add_missing_item(
@@ -1194,7 +1189,6 @@ class MRIQCChecker(BIDSChecker):
                 # Some versions put JSONs directly in the root or in session folders
                 json_files = list(pipeline_dir.glob(f"{subj}_*.json"))
                 if json_files:
-                    has_metrics = True
                     self.stats["subjects_with_metrics"] += 1
                 else:
                     self.add_missing_item(
@@ -1497,7 +1491,11 @@ class BIDSOutputValidator:
                         # 1. Strip severity tags
                         clean_msg = re.sub(r"\[(ERROR|WARNING|INFO)\]\s*", "", item)
                         # 2. Extract first significant line
-                        lines = [l.strip() for l in clean_msg.split("\n") if l.strip()]
+                        lines = [
+                            line.strip()
+                            for line in clean_msg.split("\n")
+                            if line.strip()
+                        ]
                         summary_msg = lines[0] if lines else "Unknown issue"
                         # 3. Replace the actual subject ID with a placeholder to group identical issues
                         summary_msg = summary_msg.replace(subj_id, "subject")
@@ -1596,7 +1594,7 @@ class BIDSOutputValidator:
                     print("  📋 Session-specific Issues:", file=sys.stderr)
                     for session, session_data in sorted(session_stats.items()):
                         missing_count = len(session_data.get("missing_subjects", []))
-                        total_count = session_data.get("total_subjects", 0)
+                        session_data.get("total_subjects", 0)
                         if missing_count > 0:
                             print(
                                 f"    {session}: Missing in {missing_count} subjects",

@@ -416,7 +416,11 @@ def _resolve_project_json_path(config_path: Optional[str]) -> Optional[str]:
     scripts_dir = Path(__file__).resolve().parent
     app_root = scripts_dir.parent
 
-    candidates = [cfg] if cfg.is_absolute() else [Path.cwd() / cfg, scripts_dir / cfg, app_root / cfg]
+    candidates = (
+        [cfg]
+        if cfg.is_absolute()
+        else [Path.cwd() / cfg, scripts_dir / cfg, app_root / cfg]
+    )
 
     for candidate in candidates:
         try:
@@ -424,7 +428,11 @@ def _resolve_project_json_path(config_path: Optional[str]) -> Optional[str]:
         except Exception:
             continue
 
-        if not resolved.exists() or not resolved.is_file() or resolved.name != "project.json":
+        if (
+            not resolved.exists()
+            or not resolved.is_file()
+            or resolved.name != "project.json"
+        ):
             continue
 
         try:
@@ -439,7 +447,9 @@ def _resolve_project_json_path(config_path: Optional[str]) -> Optional[str]:
     return None
 
 
-def _read_project_subject_state(project_json_path: Optional[str], subject: str) -> Optional[Dict[str, Any]]:
+def _read_project_subject_state(
+    project_json_path: Optional[str], subject: str
+) -> Optional[Dict[str, Any]]:
     """Read per-subject runner state from project.json."""
     if not project_json_path:
         return None
@@ -522,7 +532,9 @@ def _write_project_subject_state(
         return False
 
 
-def _clear_success_markers(common: Dict[str, Any], project_json_path: Optional[str] = None) -> None:
+def _clear_success_markers(
+    common: Dict[str, Any], project_json_path: Optional[str] = None
+) -> None:
     """Clear filesystem and project success markers."""
     removed_files = 0
     marker_dir = os.path.join(common["output_folder"], ".bids_app_runner")
@@ -586,11 +598,17 @@ def _check_generic_output_exists(subject, common):
         os.path.join(output_dir, "derivatives", "*", subject_raw),
         os.path.join(output_dir, "derivatives", "*", subject_with_prefix),
         os.path.join(output_dir, subject_raw, "func", f"{subject_raw}_*"),
-        os.path.join(output_dir, subject_with_prefix, "func", f"{subject_with_prefix}_*"),
+        os.path.join(
+            output_dir, subject_with_prefix, "func", f"{subject_with_prefix}_*"
+        ),
         os.path.join(output_dir, subject_raw, "anat", f"{subject_raw}_*"),
-        os.path.join(output_dir, subject_with_prefix, "anat", f"{subject_with_prefix}_*"),
+        os.path.join(
+            output_dir, subject_with_prefix, "anat", f"{subject_with_prefix}_*"
+        ),
         os.path.join(output_dir, subject_raw, "dwi", f"{subject_raw}_*"),
-        os.path.join(output_dir, subject_with_prefix, "dwi", f"{subject_with_prefix}_*"),
+        os.path.join(
+            output_dir, subject_with_prefix, "dwi", f"{subject_with_prefix}_*"
+        ),
         os.path.join(output_dir, f"{subject_raw}.html"),
         os.path.join(output_dir, f"{subject_with_prefix}.html"),
         # MRIQC often emits modality reports as <sub-XXX>_*.html at output root.
@@ -603,7 +621,9 @@ def _check_generic_output_exists(subject, common):
         os.path.join(output_dir, "derivatives", "qsirecon-*", subject_raw),
         os.path.join(output_dir, "derivatives", "qsirecon-*", subject_with_prefix),
         os.path.join(output_dir, "derivatives", "qsirecon-*", f"{subject_raw}_*.html"),
-        os.path.join(output_dir, "derivatives", "qsirecon-*", f"{subject_with_prefix}_*.html"),
+        os.path.join(
+            output_dir, "derivatives", "qsirecon-*", f"{subject_with_prefix}_*.html"
+        ),
     ]
 
     for pattern in patterns_to_check:
@@ -762,7 +782,9 @@ def _process_subject(
 
     # Create temporary directory
     tmp_dir = os.path.join(common["tmp_folder"], subject)
-    analysis_level = str(app.get("analysis_level", "participant")).strip() or "participant"
+    analysis_level = (
+        str(app.get("analysis_level", "participant")).strip() or "participant"
+    )
 
     # Create debug log directory if in debug mode
     debug_log_dir = None
@@ -784,7 +806,7 @@ def _process_subject(
         if already_processed:
             try:
                 shutil.rmtree(tmp_dir)
-            except:
+            except OSError:
                 pass
             return True, f"skipped-{skip_reason or 'marker'}"
 
@@ -902,7 +924,7 @@ def _process_subject(
 
                     try:
                         shutil.rmtree(tmp_dir)
-                    except:
+                    except OSError:
                         pass
                     return True, "finished"
 
@@ -924,7 +946,7 @@ def _process_subject(
 
                     try:
                         shutil.rmtree(tmp_dir)
-                    except:
+                    except OSError:
                         pass
                     return True, "finished"
                 else:
@@ -1011,7 +1033,9 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
 
     if analysis_level == "group":
         if args.subjects:
-            logging.info("Group analysis selected: ignoring subject filter (--subjects)")
+            logging.info(
+                "Group analysis selected: ignoring subject filter (--subjects)"
+            )
         subjects = ["group"]
         logging.info("Group analysis selected: running a single group-level execution")
 

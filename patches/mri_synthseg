@@ -309,7 +309,7 @@ def predict(path_images,
 
         except Exception as e:
             list_errors.append(path_images[i])
-            print('\nthe following problem occured with image %s :' % path_images[i])
+            print('\nthe following problem occurred with image %s :' % path_images[i])
             print(traceback.format_exc())
             print('resuming program execution\n')
             continue
@@ -347,7 +347,7 @@ def predict(path_images,
         print('B. Billot, D.N. Greeve, O. Puonti, A. Thielscher, K. Van Leemput, B. Fischl, A.V. Dalca, J.E. Iglesias')
 
     if len(list_errors) > 0:
-        print('\nERROR: some problems occured for the following inputs (see corresponding errors above):')
+        print('\nERROR: some problems occurred for the following inputs (see corresponding errors above):')
         for path_error_image in list_errors:
             print(path_error_image)
         sys.exit(1)
@@ -651,7 +651,7 @@ def build_model(model_file_segmentation,
             last_tensor = RandomFlip(flip_axis=0, prob=1)(last_tensor)
             last_tensor = KL.Lambda(lambda x: tf.split(x, [1] * n_labels_seg, axis=-1), name='split')(last_tensor)
             reordered_channels = [last_tensor[flip_indices[i]] for i in range(n_labels_seg)]
-            # we need the [0, ...] below because in this vresion of TF, tf.split adds a dim at the beginning...
+            # we need the [0, ...] below because in this version of TF, tf.split adds a dim at the beginning...
             last_tensor = KL.Lambda(lambda x: tf.concat(x, -1)[0, ...], name='concat')(reordered_channels)
 
             # average two segmentations and build model
@@ -879,7 +879,7 @@ def get_flip_indices(labels_segmentation, n_neutral_labels):
     neutral_labels = labels_segmentation[:n_neutral_labels]
     left = labels_segmentation[n_neutral_labels:n_neutral_labels + n_sided_labels]
 
-    # get correspondance between labels
+    # get correspondence between labels
     lr_corresp = np.stack([labels_segmentation[n_neutral_labels:n_neutral_labels + n_sided_labels],
                            labels_segmentation[n_neutral_labels + n_sided_labels:]])
     lr_corresp_unique, lr_corresp_indices = np.unique(lr_corresp[0, :], return_index=True)
@@ -1268,7 +1268,7 @@ def conv_dec(nb_features,
             name = '%s_bn_up_%d' % (prefix, level)
             last_tensor = keras.layers.BatchNormalization(axis=batch_norm, name=name)(last_tensor)
 
-    # Compute likelyhood prediction (no activation yet)
+    # Compute likelihood prediction (no activation yet)
     name = '%s_likelihood' % prefix
     last_tensor = convL(nb_labels, 1, activation=None, name=name)(last_tensor)
     like_tensor = last_tensor
@@ -1285,7 +1285,7 @@ def conv_dec(nb_features,
         name = '%s_prediction' % prefix
         pred_tensor = keras.layers.Activation('linear', name=name)(like_tensor)
 
-    # create the model and retun
+    # create the model and return
     model = keras.Model(inputs=input_tensor, outputs=pred_tensor, name=model_name)
     return model
 
@@ -1505,7 +1505,7 @@ def get_list_labels(label_list=None, labels_dir=None, save_label_list=None, FS_s
 
 
 def load_array_if_path(var, load_as_numpy=True):
-    """If var is a string and load_as_numpy is True, this function loads the array writen at the path indicated by var.
+    """If var is a string and load_as_numpy is True, this function loads the array written at the path indicated by var.
     Otherwise it simply returns var as it is."""
     if (isinstance(var, str)) & load_as_numpy:
         assert os.path.isfile(var), 'No such path: %s' % var
@@ -1520,12 +1520,12 @@ def reformat_to_list(var, length=None, load_as_numpy=False, dtype=None):
     """This function takes a variable and reformat it into a list of desired
     length and type (int, float, bool, str).
     If variable is a string, and load_as_numpy is True, it will be loaded as a numpy array.
-    If variable is None, this funtion returns None.
+    If variable is None, this function returns None.
     :param var: a str, int, float, list, tuple, or numpy array
     :param length: (optional) if var is a single item, it will be replicated to a list of this length
     :param load_as_numpy: (optional) whether var is the path to a numpy array
     :param dtype: (optional) convert all item to this type. Can be 'int', 'float', 'bool', or 'str'
-    :return: reformated list
+    :return: reformatted list
     """
 
     # convert to list
@@ -1574,7 +1574,7 @@ def reformat_to_list(var, length=None, load_as_numpy=False, dtype=None):
 
 
 def list_images_in_folder(path_dir, include_single_image=True, check_if_empty=True):
-    """List all files with extension nii, nii.gz, mgz, or npz whithin a folder."""
+    """List all files with extension nii, nii.gz, mgz, or npz within a folder."""
     basename = os.path.basename(path_dir)
     if include_single_image & \
             (('.nii.gz' in basename) | ('.nii' in basename) | ('.mgz' in basename) | ('.npz' in basename)):
@@ -1720,7 +1720,7 @@ def get_mapping_lut(source, dest=None):
     source = np.array(reformat_to_list(source), dtype='int32')
     n_labels = source.shape[0]
 
-    # build new label list if neccessary
+    # build new label list if necessary
     if dest is None:
         dest = np.arange(n_labels, dtype='int32')
     else:
@@ -2155,11 +2155,11 @@ class RandomFlip(keras.layers.Layer):
     """This function flips the input tensors along the specified axes with a probability of 0.5.
     The input tensors are expected to have shape [batchsize, shape_dim1, ..., shape_dimn, channel].
     If specified, this layer can also swap corresponding values, such that the flip tensors stay consistent with the
-    native spatial orientation (especially when flipping in the righ/left dimension).
+    native spatial orientation (especially when flipping in the right/left dimension).
     :param flip_axis: integer, or list of integers specifying the dimensions along which to flip. The values exclude the
     batch dimension (e.g. 0 will flip the tensor along the first axis after the batch dimension). Default is None, where
     the tensors can be flipped along any of the axes (except batch and channel axes).
-    :param swap_labels: list of booleans to specify wether to swap the values of each input. All the inputs for which
+    :param swap_labels: list of booleans to specify whether to swap the values of each input. All the inputs for which
     the values need to be swapped must have a int32 ot int64 dtype.
     :param label_list: if swap_labels is True, list of all labels contained in labels. Must be ordered as follows, first
      the neutral labels (i.e. non-sided), then left labels and right labels.
@@ -2211,7 +2211,7 @@ class RandomFlip(keras.layers.Layer):
         # axis along which to flip
         self.flip_axis = reformat_to_list(flip_axis)
 
-        # wether to swap labels, and corresponding label list
+        # whether to swap labels, and corresponding label list
         self.swap_labels = reformat_to_list(swap_labels)
         self.label_list = label_list
         self.n_neutral_labels = n_neutral_labels

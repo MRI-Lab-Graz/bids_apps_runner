@@ -20,7 +20,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-
 CPU_FLAGS = {"--nprocs", "--nthreads", "--n_cpus", "--n-cpus"}
 OMP_FLAG = "--omp-nthreads"
 
@@ -152,7 +151,9 @@ def normalize_subject(subject):
 def discover_subject(config):
     bids_folder = config.get("common", {}).get("bids_folder")
     if not bids_folder:
-        raise ValueError("common.bids_folder is required when --subject is not provided")
+        raise ValueError(
+            "common.bids_folder is required when --subject is not provided"
+        )
 
     bids_path = Path(bids_folder).expanduser()
     if not bids_path.exists():
@@ -392,7 +393,9 @@ def write_report(report_path, args, subject, config_path, results, recommendatio
 
     lines.append("## Pilot Results")
     lines.append("")
-    lines.append("| nprocs | exit | wall_s | max_rss_gib | gpu_util_max_pct | gpu_mem_max_mb |")
+    lines.append(
+        "| nprocs | exit | wall_s | max_rss_gib | gpu_util_max_pct | gpu_mem_max_mb |"
+    )
     lines.append("|---:|---:|---:|---:|---:|---:|")
 
     for row in results:
@@ -539,9 +542,10 @@ def main():
             cmd.append("--force")
 
         t0 = time.time()
-        with open(stdout_log, "w", encoding="utf-8") as out_f, open(
-            stderr_log, "w", encoding="utf-8"
-        ) as err_f:
+        with (
+            open(stdout_log, "w", encoding="utf-8") as out_f,
+            open(stderr_log, "w", encoding="utf-8") as err_f,
+        ):
             proc = subprocess.run(cmd, cwd=repo_root, stdout=out_f, stderr=err_f)
         wall_fallback = time.time() - t0
 

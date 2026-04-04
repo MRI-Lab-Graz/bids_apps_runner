@@ -32,7 +32,6 @@ try:
         validate_app_config,
         validate_hpc_config,
         fix_system_path,
-        print_summary,
     )
 except ImportError:
     print("ERROR: Could not import prism_core module")
@@ -237,7 +236,7 @@ def main():
         sys.exit(0)
 
     # Setup logging
-    log_file = setup_logging(args.log_level)
+    setup_logging(args.log_level)
 
     try:
         # Load configuration

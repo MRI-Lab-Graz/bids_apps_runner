@@ -284,6 +284,43 @@ Environment variables are supported and override file values per key:
 - `BIDS_RUNNER_SMTP_PASSWORD`
 - `BIDS_RUNNER_SMTP_USE_TLS` (`1`/`0`)
 
+## Global Machine Settings (Cross-Platform)
+
+The GUI Projects tab now includes a **Machine Settings** section for host-dependent defaults.
+
+By default, settings are auto-detected from the host OS and available tools:
+
+- Linux: prefer Apptainer/Singularity
+- macOS/Windows: prefer Docker
+- Runtime fallback still checks installed tools and picks what is available
+
+Use this when your students run the same project on different infrastructure (for example:
+Linux server with Apptainer vs macOS with Docker Desktop).
+
+What it controls:
+
+- preferred container engine (`auto`, `apptainer`, `docker`)
+- whether Docker/Apptainer are allowed on this machine
+- default Apptainer image folder
+- default Apptainer container image path
+- default temp/work folder
+- default Docker repo/tag
+- default parallel jobs for new projects
+
+Where it is stored:
+
+- `DATA_DIR/configs/global_settings.json`
+   - development: usually `./configs/global_settings.json`
+   - non-writable install: usually `~/.bids_apps_runner/configs/global_settings.json`
+
+You can also start from an example file:
+
+```bash
+cp configs/global_settings.example.json configs/global_settings.json
+```
+
+New projects inherit resolved defaults for the current host. Existing projects remain unchanged unless you explicitly apply settings from the GUI.
+
 ## Installation
 
 1. **Clone the repository**
