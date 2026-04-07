@@ -298,6 +298,113 @@ def _get_effective_machine_settings(machine_id=None, dependencies=None):
     return effective
 
 
+def _sanitize_pipeline_id(value):
+    """Normalize pipeline identifiers for stable storage and lookup."""
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9_]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or "default"
+
+
+def _normalize_project_pipelines(config):
+    """Return (pipelines, active_pipeline_id) from mixed legacy/new config shapes."""
+    if not isinstance(config, dict):
+        return {}, ""
+
+    pipelines = {}
+    raw_pipelines = config.get("pipelines")
+    if isinstance(raw_pipelines, dict):
+        for raw_id, raw_entry in raw_pipelines.items():
+            if not isinstance(raw_entry, dict):
+                continue
+
+            pipeline_id = _sanitize_pipeline_id(raw_id)
+            entry_name = str(raw_entry.get("name") or raw_id or pipeline_id).strip()
+            entry_desc = str(raw_entry.get("description") or "").strip()
+
+            entry_common = raw_entry.get("common")
+            entry_app = raw_entry.get("app")
+
+            # Backward compatibility for flat pipeline entries that are app-like objects.
+            if not isinstance(entry_app, dict) and any(
+                key in raw_entry for key in ("analysis_level", "options", "mounts")
+            ):
+                entry_app = raw_entry
+
+            if not isinstance(entry_common, dict):
+                entry_common = {}
+            if not isinstance(entry_app, dict):
+                entry_app = {}
+
+            pipelines[pipeline_id] = {
+                "name": entry_name or pipeline_id,
+                "description": entry_desc,
+                "common": copy.deepcopy(entry_common),
+                "app": copy.deepcopy(entry_app),
+            }
+
+    # Legacy fallback: one implicit default pipeline from config.common + config.app.
+    if not pipelines:
+        legacy_common = config.get("common")
+        legacy_app = config.get("app")
+        if isinstance(legacy_common, dict) and isinstance(legacy_app, dict):
+            pipelines["default"] = {
+                "name": "Default Pipeline",
+                "description": "",
+                "common": copy.deepcopy(legacy_common),
+                "app": copy.deepcopy(legacy_app),
+            }
+
+    preferred_active = _sanitize_pipeline_id(config.get("active_pipeline"))
+    if preferred_active and preferred_active in pipelines:
+        active_pipeline = preferred_active
+    elif pipelines:
+        active_pipeline = next(iter(pipelines.keys()))
+    else:
+        active_pipeline = ""
+
+    return pipelines, active_pipeline
+
+
+def _coerce_project_config_shape(config):
+    """Normalize config for persistence while retaining legacy common/app fields."""
+    if not isinstance(config, dict):
+        config = {}
+
+    normalized = copy.deepcopy(config)
+    pipelines, active_pipeline = _normalize_project_pipelines(normalized)
+    if not pipelines:
+        normalized.setdefault("common", {})
+        normalized.setdefault(
+            "app", {"analysis_level": "participant", "options": [], "mounts": []}
+        )
+        return normalized
+
+    selected = pipelines.get(active_pipeline)
+    if selected is None:
+        active_pipeline = next(iter(pipelines.keys()))
+        selected = pipelines.get(active_pipeline, {})
+
+    selected_common = (
+        selected.get("common") if isinstance(selected.get("common"), dict) else {}
+    )
+    selected_app = selected.get("app") if isinstance(selected.get("app"), dict) else {}
+
+    base_common = normalized.get("common") if isinstance(normalized.get("common"), dict) else {}
+    merged_common = copy.deepcopy(base_common)
+    merged_common.update(copy.deepcopy(selected_common))
+
+    base_app = normalized.get("app") if isinstance(normalized.get("app"), dict) else {}
+    merged_app = copy.deepcopy(base_app)
+    merged_app.update(copy.deepcopy(selected_app))
+
+    normalized["common"] = merged_common
+    normalized["app"] = merged_app
+    normalized["pipelines"] = pipelines
+    normalized["active_pipeline"] = active_pipeline
+    return normalized
+
+
 class ProjectManager:
     """Manages BIDS App Runner projects."""
 
@@ -342,6 +449,22 @@ class ProjectManager:
 
         default_tmp_folder = str(machine_defaults.get("default_tmp_folder") or "").strip()
 
+        default_common = {
+            "bids_folder": "",
+            "output_folder": "",
+            "tmp_folder": default_tmp_folder,
+            "templateflow_dir": "",
+            "pipeline_output_root": "",
+            "pipeline_app_name": "",
+            "pipeline_version": "",
+            "pipeline_auto_versioning": False,
+            "notify_email": "",
+            "container_engine": default_engine,
+            "container": default_container,
+            "jobs": default_jobs,
+        }
+        default_app = {"analysis_level": "participant", "options": [], "mounts": []}
+
         project_json = {
             "id": project_id,
             "name": name,
@@ -350,17 +473,17 @@ class ProjectManager:
             "last_modified": datetime.now().isoformat(),
             "last_log": None,
             "config": {
-                "common": {
-                    "bids_folder": "",
-                    "output_folder": "",
-                    "tmp_folder": default_tmp_folder,
-                    "templateflow_dir": "",
-                    "notify_email": "",
-                    "container_engine": default_engine,
-                    "container": default_container,
-                    "jobs": default_jobs,
+                "common": copy.deepcopy(default_common),
+                "app": copy.deepcopy(default_app),
+                "pipelines": {
+                    "default": {
+                        "name": "Default Pipeline",
+                        "description": "",
+                        "common": copy.deepcopy(default_common),
+                        "app": copy.deepcopy(default_app),
+                    }
                 },
-                "app": {"analysis_level": "participant", "options": [], "mounts": []},
+                "active_pipeline": "default",
             },
         }
 
@@ -380,7 +503,12 @@ class ProjectManager:
             return None
 
         with open(project_json_path, "r") as f:
-            return json.load(f)
+            project_json = json.load(f)
+
+        if isinstance(project_json, dict) and isinstance(project_json.get("config"), dict):
+            project_json["config"] = _coerce_project_config_shape(project_json["config"])
+
+        return project_json
 
     @staticmethod
     def save_project(project_id, config):
@@ -394,7 +522,7 @@ class ProjectManager:
         with open(project_json_path, "r") as f:
             project_json = json.load(f)
 
-        project_json["config"] = config
+        project_json["config"] = _coerce_project_config_shape(config)
         project_json["last_modified"] = datetime.now().isoformat()
 
         with open(project_json_path, "w") as f:
@@ -441,6 +569,12 @@ class ProjectManager:
                 try:
                     with open(project_json_path, "r") as f:
                         project_data = json.load(f)
+                    if isinstance(project_data, dict) and isinstance(
+                        project_data.get("config"), dict
+                    ):
+                        project_data["config"] = _coerce_project_config_shape(
+                            project_data["config"]
+                        )
                     projects.append(project_data)
                 except Exception as e:
                     print(f"[ERROR] Failed to load project {project_dir.name}: {e}")
@@ -503,11 +637,38 @@ def _validate_project_json_shape(project_json):
     if not isinstance(config, dict):
         return "Invalid project.json: config must be an object"
 
-    if not isinstance(config.get("common"), dict):
+    has_common = isinstance(config.get("common"), dict)
+    has_legacy_app = isinstance(config.get("app"), dict)
+    has_pipelines = isinstance(config.get("pipelines"), dict) and bool(
+        config.get("pipelines")
+    )
+
+    if not has_common and not has_pipelines:
         return "Invalid project.json: config.common must be an object"
 
-    if not isinstance(config.get("app"), dict):
-        return "Invalid project.json: config.app must be an object"
+    if not has_legacy_app and not has_pipelines:
+        return (
+            "Invalid project.json: config must include config.app or "
+            "non-empty config.pipelines"
+        )
+
+    if has_pipelines:
+        for pipeline_id, entry in config.get("pipelines", {}).items():
+            if not isinstance(entry, dict):
+                return (
+                    "Invalid project.json: each config.pipelines entry must be an object "
+                    f"(invalid: {pipeline_id})"
+                )
+            if not isinstance(entry.get("app"), dict):
+                return (
+                    "Invalid project.json: each pipeline must include app object "
+                    f"(invalid: {pipeline_id})"
+                )
+            if "common" in entry and not isinstance(entry.get("common"), dict):
+                return (
+                    "Invalid project.json: pipeline common section must be an object "
+                    f"(invalid: {pipeline_id})"
+                )
 
     return None
 
@@ -620,11 +781,60 @@ def resolve_config_path(config_path):
     raise FileNotFoundError(f"Config file not found: {config_path}")
 
 
-def _extract_runtime_config(cfg):
+def _materialize_runtime_config(config, preferred_pipeline_id=None):
+    """Resolve a single runnable config from legacy or multi-pipeline shapes."""
+    if not isinstance(config, dict):
+        return {}
+
+    pipelines, active_pipeline = _normalize_project_pipelines(config)
+    if not pipelines:
+        return config
+
+    selected_pipeline = (
+        _sanitize_pipeline_id(preferred_pipeline_id)
+        if preferred_pipeline_id
+        else active_pipeline
+    )
+    if selected_pipeline not in pipelines:
+        selected_pipeline = active_pipeline
+    if selected_pipeline not in pipelines and pipelines:
+        selected_pipeline = next(iter(pipelines.keys()))
+
+    selected = pipelines.get(selected_pipeline) or {}
+    selected_common = (
+        selected.get("common") if isinstance(selected.get("common"), dict) else {}
+    )
+    selected_app = selected.get("app") if isinstance(selected.get("app"), dict) else {}
+
+    base_common = config.get("common") if isinstance(config.get("common"), dict) else {}
+    merged_common = copy.deepcopy(base_common)
+    merged_common.update(copy.deepcopy(selected_common))
+
+    base_app = config.get("app") if isinstance(config.get("app"), dict) else {}
+    merged_app = copy.deepcopy(base_app)
+    merged_app.update(copy.deepcopy(selected_app))
+
+    runtime = {}
+    for key, value in config.items():
+        if key in {"common", "app", "pipelines", "active_pipeline"}:
+            continue
+        runtime[key] = copy.deepcopy(value)
+
+    runtime["common"] = merged_common
+    runtime["app"] = merged_app
+    runtime["active_pipeline"] = selected_pipeline
+    return runtime
+
+
+def _extract_runtime_config(cfg, selected_pipeline_id=None):
     """Return runnable config payload from either config.json or project.json."""
     if isinstance(cfg, dict) and isinstance(cfg.get("config"), dict):
-        return cfg["config"]
-    return cfg if isinstance(cfg, dict) else {}
+        return _materialize_runtime_config(
+            cfg["config"], preferred_pipeline_id=selected_pipeline_id
+        )
+    if isinstance(cfg, dict):
+        return _materialize_runtime_config(cfg, preferred_pipeline_id=selected_pipeline_id)
+    return {}
 
 
 def _drop_flag_with_value(options, flag):
@@ -3073,6 +3283,7 @@ def run_app():
     data = request.get_json(silent=True) or {}
     config_path_raw = data.get("config_path")
     project_id = data.get("project_id")  # NEW: project context
+    pipeline_id = (data.get("pipeline_id") or "").strip()
     runner_args = _normalize_runner_args(data.get("runner_args", []))
     max_usage_enabled = bool(data.get("max_usage_enabled", False))
     max_usage_percent = data.get("max_usage_percent", 100)
@@ -3087,7 +3298,9 @@ def run_app():
         with open(config_path, "r") as f:
             cfg_raw = json.load(f)
 
-        runtime_cfg = _extract_runtime_config(cfg_raw)
+        runtime_cfg = _extract_runtime_config(
+            cfg_raw, selected_pipeline_id=pipeline_id or None
+        )
 
         common = runtime_cfg.get("common", {})
         if not notify_email:
@@ -3363,6 +3576,7 @@ def run_pilot_estimator():
     req = request.get_json(silent=True) or {}
     config_path_raw = req.get("config_path")
     project_id = req.get("project_id")
+    pipeline_id = (req.get("pipeline_id") or "").strip()
     subject = (req.get("subject") or "").strip()
     nprocs_mode = (req.get("nprocs_mode") or "auto").strip().lower()
     nprocs = str(req.get("nprocs") or "").strip()
@@ -3389,6 +3603,19 @@ def run_pilot_estimator():
         if not script_path.exists():
             return jsonify({"error": f"Pilot estimator not found: {script_path}"}), 500
 
+        runtime_config_path = config_path
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg_raw = json.load(f)
+
+        runtime_cfg = _extract_runtime_config(
+            cfg_raw, selected_pipeline_id=pipeline_id or None
+        )
+        if runtime_cfg is not cfg_raw:
+            cfg_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            runtime_config_path = work_dir / f"pilot_runtime_config_{cfg_stamp}.json"
+            with open(runtime_config_path, "w", encoding="utf-8") as f:
+                json.dump(runtime_cfg, f, indent=2)
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         job_id = f"pilot_{timestamp}_{uuid.uuid4().hex[:8]}"
         output_dir = work_dir / f"pilot_resource_estimator_{timestamp}"
@@ -3401,7 +3628,7 @@ def run_pilot_estimator():
             "-u",
             str(script_path),
             "--config",
-            str(config_path),
+            str(runtime_config_path),
             "--output-dir",
             str(output_dir),
         ]

@@ -210,6 +210,38 @@
             color: #7a8593;
             opacity: 0.85;
         }
+
+        .runner-action-bar {
+            position: sticky;
+            top: 74px;
+            z-index: 40;
+            margin-bottom: 16px;
+        }
+        #runnerTab > .card,
+        #runnerTab > .card > .card-body {
+            overflow: visible;
+        }
+        .runner-action-bar-inner {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px;
+            border: 1px solid var(--studio-border);
+            border-radius: 12px;
+            background: color-mix(in srgb, var(--studio-surface) 88%, white 12%);
+            backdrop-filter: blur(4px);
+            box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+        }
+        @media (max-width: 767.98px) {
+            .runner-action-bar {
+                top: 64px;
+            }
+            .runner-action-bar-inner .btn {
+                flex: 1 1 calc(50% - 8px);
+                min-width: 150px;
+            }
+        }
     </style>
 {% endblock %}
 
@@ -270,7 +302,7 @@
                                     <button type="button" class="btn btn-outline-secondary" onclick="openFileBrowser('loadProjectPath', ['.json'], 'project.json')">...</button>
                                     <button type="button" class="btn btn-outline-primary" onclick="loadProjectFromPath()">Load</button>
                                 </div>
-                                <div class="text-muted small mt-1">Pick a valid project.json file (must include id, name, and config.common/config.app).</div>
+                                <div class="text-muted small mt-1">Pick a valid project.json file (must include id, name, config.common, and either config.app or config.pipelines).</div>
                             </div>
                         </div>
                         <div class="col-md-6">
@@ -403,6 +435,25 @@
                 <div id="runnerProjectScopeNotice" class="alert alert-warning py-2 px-3 small mb-3">
                     Runs and terminal output are project-scoped. Load a project in Projects before starting a run.
                 </div>
+                <div id="runnerPipelineSection" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;">
+                    <div class="d-flex flex-wrap align-items-end gap-2">
+                        <div class="flex-grow-1" style="min-width: 220px;">
+                            <label class="form-label mb-1" for="active_pipeline_select">Pipeline Preset</label>
+                            <select id="active_pipeline_select" class="form-select form-select-sm" onchange="switchActivePipelineFromRunner()"></select>
+                        </div>
+                        <div style="min-width: 140px; width: 160px;">
+                            <label class="form-label mb-1" for="pipeline_version">Version</label>
+                            <input type="text" id="pipeline_version" class="form-control form-control-sm" placeholder="v1.0">
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="createPipelinePresetBtn" onclick="createPipelinePreset()">
+                            <i class="fas fa-plus me-1"></i>New
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" id="deletePipelinePresetBtn" onclick="deleteActivePipelinePreset()">
+                            <i class="fas fa-trash me-1"></i>Delete
+                        </button>
+                    </div>
+                    <div class="form-text mt-2">Pipeline presets keep separate app/container arguments inside one project. Save the project after switching or editing presets.</div>
+                </div>
                 <div id="runnerActiveRunsNotice" class="alert py-2 px-3 small mb-3" style="display:none;"></div>
                 <div id="runnerOptionsLoadStatus" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;"></div>
                 <div id="runnerPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
@@ -412,6 +463,18 @@
                     </div>
                     <ul id="runnerPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
                 </div>
+
+                <div class="runner-action-bar">
+                    <div class="runner-action-bar-inner">
+                        <button class="btn btn-outline-primary" type="button" onclick="loadExistingConfig()"><i class="fas fa-folder-open me-2"></i>Load Config</button>
+                        <button class="btn btn-outline-success" type="button" onclick="handleSaveAndRun(false)"><i class="fas fa-save me-2"></i>Save Only</button>
+                        <button class="btn btn-danger px-4" id="saveStartBtn" type="button" onclick="handleSaveAndRun(true)"><i class="fas fa-play-circle me-2"></i>Save & Start Runner</button>
+                        <button class="btn btn-warning" id="runApp" style="display: none;" type="button" onclick="executeNow()"><i class="fas fa-bolt me-2"></i>Run (Cached)</button>
+                        <button class="btn btn-dark" id="killCurrentBtn" type="button" onclick="killApp('current')"><i class="fas fa-stop-circle me-2"></i>Stop Current Run</button>
+                        <button class="btn btn-outline-dark" id="killAllBtn" type="button" onclick="killApp('all')"><i class="fas fa-ban me-2"></i>Stop All Runs</button>
+                    </div>
+                </div>
+
                 <form id="runnerForm">
                     <div class="section-header">1. Data Locations</div>
                     <div class="row">
@@ -426,8 +489,42 @@
                             <label class="form-label" title="Where derivative results will be saved">Output Folder</label>
                             <div class="input-group">
                                 <input type="text" id="output_folder" class="form-control" placeholder="/path/to/derivatives">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('output_folder')">...</button>
+                                <button type="button" class="btn btn-outline-secondary" id="output_folder_browse_btn" onclick="openBrowser('output_folder')">...</button>
                             </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Root derivatives directory used for versioned output layout">Derivatives Root (Versioned Mode)</label>
+                            <div class="input-group">
+                                <input type="text" id="pipeline_output_root" class="form-control" placeholder="/path/to/derivatives">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('pipeline_output_root')">...</button>
+                            </div>
+                        </div>
+                        <div class="col-md-3 mb-4">
+                            <label class="form-label" title="Pipeline/app folder name under derivatives root">Pipeline App</label>
+                            <select id="pipeline_app_name" class="form-select">
+                                <option value="">Auto-detect</option>
+                                <option value="fmriprep">fmriprep</option>
+                                <option value="freesurfer">freesurfer</option>
+                                <option value="fastsurfer">fastsurfer</option>
+                                <option value="qsiprep">qsiprep</option>
+                                <option value="qsirecon">qsirecon</option>
+                                <option value="mriqc">mriqc</option>
+                                <option value="cat12">cat12</option>
+                                <option value="nibabies">nibabies</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3 mb-4 d-flex align-items-end">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="pipeline_auto_versioning" checked>
+                                <label class="form-check-label" for="pipeline_auto_versioning">Auto Paths</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-12 mb-4">
+                            <div class="form-text" id="pipelineVersioningPreview">Versioned output preview: not configured.</div>
                         </div>
                     </div>
                     <div class="row">
@@ -878,15 +975,6 @@
                     </div>
 
                     <div id="statusAlert" style="display:none; padding: 15px; margin-bottom: 25px; border-radius: 8px; text-align: center; font-weight: 600;"></div>
-
-                    <div class="d-flex flex-wrap gap-2 justify-content-center">
-                        <button class="btn btn-outline-primary" type="button" onclick="loadExistingConfig()"><i class="fas fa-folder-open me-2"></i>Load Config</button>
-                        <button class="btn btn-outline-success" type="button" onclick="handleSaveAndRun(false)"><i class="fas fa-save me-2"></i>Save Only</button>
-                        <button class="btn btn-danger px-4" id="saveStartBtn" type="button" onclick="handleSaveAndRun(true)"><i class="fas fa-play-circle me-2"></i>Save & Start Runner</button>
-                        <button class="btn btn-warning" id="runApp" style="display: none;" type="button" onclick="executeNow()"><i class="fas fa-bolt me-2"></i>Run (Cached)</button>
-                        <button class="btn btn-dark" id="killCurrentBtn" type="button" onclick="killApp('current')"><i class="fas fa-stop-circle me-2"></i>Stop Current Run</button>
-                        <button class="btn btn-outline-dark" id="killAllBtn" type="button" onclick="killApp('all')"><i class="fas fa-ban me-2"></i>Stop All Runs</button>
-                    </div>
 
                     <div class="row mt-4 justify-content-center">
                         <div class="col-md-8">
@@ -1365,6 +1453,8 @@
         let projectDirty = false;
         let suppressProjectDirtyTracking = false;
         let loadedProjectMeta = null;
+        let currentProjectPipelines = {};
+        let currentPipelineId = '';
         let lastProjectSavedAt = '';
         let lastProjectSavePath = '';
         let projectLoadInProgress = false;
@@ -1447,6 +1537,304 @@
             if (isQR) updateQsireconFsDir();
         }
 
+        const KNOWN_PIPELINE_APPS = ['fmriprep', 'freesurfer', 'fastsurfer', 'qsiprep', 'qsirecon', 'mriqc', 'cat12', 'nibabies'];
+
+        function _normalizePathForJoin(pathValue) {
+            return String(pathValue || '').trim().replace(/\/+$/g, '');
+        }
+
+        function _joinPathParts(parts) {
+            const cleaned = parts
+                .map((part) => String(part || '').trim())
+                .filter(Boolean)
+                .map((part, idx) => idx === 0 ? part.replace(/\/+$/g, '') : part.replace(/^\/+|\/+$/g, ''));
+            return cleaned.join('/');
+        }
+
+        function _derivePipelineRootFromOutput(outputFolder, appName, version) {
+            const out = _normalizePathForJoin(outputFolder);
+            const app = String(appName || '').trim();
+            const ver = String(version || '').trim();
+            if (!out || !app) return '';
+
+            const suffix = _joinPathParts([app, ver]);
+            const appOnly = _joinPathParts([app]);
+            if (suffix && out.endsWith('/' + suffix)) {
+                return out.slice(0, -(suffix.length + 1));
+            }
+            if (!ver && appOnly && out.endsWith('/' + appOnly)) {
+                return out.slice(0, -(appOnly.length + 1));
+            }
+            return '';
+        }
+
+        function _inferPipelineAppFromContainerValues(engine, containerRef) {
+            const value = String(containerRef || '').toLowerCase();
+            if (!value) return '';
+
+            for (const appName of KNOWN_PIPELINE_APPS) {
+                if (value.includes(appName)) return appName;
+            }
+
+            return '';
+        }
+
+        function inferCurrentPipelineAppName() {
+            const manual = (document.getElementById('pipeline_app_name')?.value || '').trim().toLowerCase();
+            if (manual) return manual;
+
+            const engine = document.getElementById('container_engine').value;
+            if (engine === 'docker') {
+                const repo = (document.getElementById('container_docker_repo').value || '').trim().toLowerCase();
+                const detected = _inferPipelineAppFromContainerValues(engine, repo);
+                if (detected) return detected;
+            } else {
+                const image = (document.getElementById('container_select').value || '').trim().toLowerCase();
+                const detected = _inferPipelineAppFromContainerValues(engine, image || currentContainerPath || '');
+                if (detected) return detected;
+            }
+
+            const fallback = sanitizePipelineId(currentPipelineId || '').replace(/_\d+$/g, '');
+            return fallback || '';
+        }
+
+        function updateVersionedOutputControls() {
+            const autoEl = document.getElementById('pipeline_auto_versioning');
+            const outputEl = document.getElementById('output_folder');
+            const browseBtn = document.getElementById('output_folder_browse_btn');
+            if (!autoEl || !outputEl) return;
+
+            const autoEnabled = !!autoEl.checked;
+            outputEl.readOnly = autoEnabled;
+            if (browseBtn) {
+                browseBtn.disabled = autoEnabled;
+                browseBtn.title = autoEnabled
+                    ? 'Output path is auto-derived from root/app/version while Auto Paths is enabled.'
+                    : '';
+            }
+        }
+
+        function applyVersionedOutputPaths(options = {}) {
+            const autoEl = document.getElementById('pipeline_auto_versioning');
+            const previewEl = document.getElementById('pipelineVersioningPreview');
+            if (!autoEl) return false;
+
+            const autoEnabled = !!autoEl.checked;
+            const root = _normalizePathForJoin(document.getElementById('pipeline_output_root')?.value || '');
+            const version = String(document.getElementById('pipeline_version')?.value || '').trim();
+            const appName = inferCurrentPipelineAppName();
+
+            updateVersionedOutputControls();
+
+            if (!autoEnabled) {
+                if (previewEl) {
+                    previewEl.textContent = 'Versioned output preview: Auto Paths disabled (manual output/check paths).';
+                }
+                return false;
+            }
+
+            if (!root || !appName) {
+                if (previewEl) {
+                    previewEl.textContent = 'Versioned output preview: set Derivatives Root and App (or container) to derive paths.';
+                }
+                return false;
+            }
+
+            const targetOutput = _joinPathParts([root, appName, version]);
+            if (targetOutput) {
+                document.getElementById('output_folder').value = targetOutput;
+            }
+
+            const validationDeriv = document.getElementById('validation_derivatives_folder');
+            if (validationDeriv) {
+                validationDeriv.value = root;
+            }
+
+            const validationPipeline = document.getElementById('validation_pipeline');
+            if (validationPipeline) {
+                validationPipeline.value = version ? `${appName}@${version}` : appName;
+            }
+
+            if (previewEl) {
+                previewEl.textContent = `Versioned output preview: ${targetOutput} (validation root: ${root}, selector: ${version ? `${appName}@${version}` : appName})`;
+            }
+
+            scheduleRunnerPreflightRefresh();
+            scheduleCheckPreflightRefresh();
+            return true;
+        }
+
+        function cloneJson(value) {
+            if (value === undefined) return undefined;
+            return JSON.parse(JSON.stringify(value));
+        }
+
+        function sanitizePipelineId(value) {
+            const raw = String(value || '').trim().toLowerCase();
+            const normalized = raw
+                .replace(/[^a-z0-9_]+/g, '_')
+                .replace(/_+/g, '_')
+                .replace(/^_+|_+$/g, '');
+            return normalized || 'default';
+        }
+
+        function normalizePipelineEntry(rawEntry, fallbackName = 'Pipeline') {
+            const entry = (rawEntry && typeof rawEntry === 'object') ? rawEntry : {};
+
+            let app = {};
+            if (entry.app && typeof entry.app === 'object') {
+                app = cloneJson(entry.app) || {};
+            } else if (
+                Object.prototype.hasOwnProperty.call(entry, 'analysis_level') ||
+                Object.prototype.hasOwnProperty.call(entry, 'options') ||
+                Object.prototype.hasOwnProperty.call(entry, 'mounts')
+            ) {
+                app = cloneJson(entry) || {};
+            }
+
+            if (!Array.isArray(app.options)) app.options = [];
+            if (!Array.isArray(app.mounts)) app.mounts = [];
+            if (!app.analysis_level) app.analysis_level = 'participant';
+
+            const common = (entry.common && typeof entry.common === 'object')
+                ? (cloneJson(entry.common) || {})
+                : {};
+
+            return {
+                name: String(entry.name || fallbackName).trim() || fallbackName,
+                description: String(entry.description || '').trim(),
+                common,
+                app,
+            };
+        }
+
+        function buildFreshPipelinePreset(presetName) {
+            const source = normalizePipelineEntry(getCurrentPipelineEntry() || {}, presetName || 'Pipeline');
+            const sourceCommon = source.common || {};
+            const inferredApp = sanitizePipelineId(presetName || '').replace(/_\d+$/g, '');
+
+            return {
+                name: String(presetName || 'Pipeline').trim() || 'Pipeline',
+                description: '',
+                common: {
+                    bids_folder: sourceCommon.bids_folder || '',
+                    output_folder: sourceCommon.output_folder || '',
+                    tmp_folder: sourceCommon.tmp_folder || '',
+                    templateflow_dir: sourceCommon.templateflow_dir || '',
+                    fs_license_file: sourceCommon.fs_license_file || '',
+                    pipeline_output_root: sourceCommon.pipeline_output_root || '',
+                    pipeline_app_name: sourceCommon.pipeline_app_name || inferredApp || '',
+                    pipeline_version: '',
+                    pipeline_auto_versioning: sourceCommon.pipeline_auto_versioning === true,
+                    notify_email: sourceCommon.notify_email || '',
+                    container_engine: sourceCommon.container_engine || 'apptainer',
+                    container: '',
+                    container_locked: false,
+                    jobs: sourceCommon.jobs || 1,
+                },
+                app: {
+                    analysis_level: source.app?.analysis_level || 'participant',
+                    options: [],
+                    mounts: [],
+                },
+            };
+        }
+
+        function ensureProjectPipelineState(cfg) {
+            const safeCfg = (cfg && typeof cfg === 'object') ? cfg : {};
+            const normalizedPipelines = {};
+
+            const rawPipelines = (safeCfg.pipelines && typeof safeCfg.pipelines === 'object')
+                ? safeCfg.pipelines
+                : {};
+
+            Object.entries(rawPipelines).forEach(([rawId, rawEntry]) => {
+                const pipelineId = sanitizePipelineId(rawId);
+                normalizedPipelines[pipelineId] = normalizePipelineEntry(rawEntry, rawId || pipelineId);
+            });
+
+            if (Object.keys(normalizedPipelines).length === 0) {
+                normalizedPipelines.default = normalizePipelineEntry(
+                    {
+                        name: 'Default Pipeline',
+                        common: (safeCfg.common && typeof safeCfg.common === 'object') ? safeCfg.common : {},
+                        app: (safeCfg.app && typeof safeCfg.app === 'object')
+                            ? safeCfg.app
+                            : { analysis_level: 'participant', options: [], mounts: [] },
+                    },
+                    'Default Pipeline'
+                );
+            }
+
+            let activePipeline = sanitizePipelineId(safeCfg.active_pipeline || 'default');
+            if (!normalizedPipelines[activePipeline]) {
+                activePipeline = Object.keys(normalizedPipelines)[0];
+            }
+
+            return {
+                pipelines: normalizedPipelines,
+                activePipeline,
+            };
+        }
+
+        function getCurrentPipelineEntry() {
+            if (!currentPipelineId) return null;
+            return currentProjectPipelines[currentPipelineId] || null;
+        }
+
+        function getCurrentPipelineName() {
+            const entry = getCurrentPipelineEntry();
+            return (entry && entry.name) ? entry.name : currentPipelineId;
+        }
+
+        function renderPipelinePresetSelector() {
+            const section = document.getElementById('runnerPipelineSection');
+            const selectEl = document.getElementById('active_pipeline_select');
+            const deleteBtn = document.getElementById('deletePipelinePresetBtn');
+            if (!section || !selectEl) return;
+
+            const pipelineIds = Object.keys(currentProjectPipelines || {});
+            if (!lastProjectId || pipelineIds.length === 0) {
+                section.style.display = 'none';
+                selectEl.innerHTML = '';
+                return;
+            }
+
+            section.style.display = 'block';
+            selectEl.innerHTML = '';
+
+            pipelineIds.forEach((pipelineId) => {
+                const entry = currentProjectPipelines[pipelineId] || {};
+                const label = entry.name || pipelineId;
+                selectEl.add(new Option(label, pipelineId));
+            });
+
+            if (currentPipelineId && currentProjectPipelines[currentPipelineId]) {
+                selectEl.value = currentPipelineId;
+            } else if (pipelineIds.length > 0) {
+                currentPipelineId = pipelineIds[0];
+                selectEl.value = currentPipelineId;
+            }
+
+            if (deleteBtn) {
+                deleteBtn.disabled = pipelineIds.length <= 1;
+                deleteBtn.title = pipelineIds.length <= 1
+                    ? 'At least one pipeline preset is required.'
+                    : 'Delete the active pipeline preset.';
+            }
+        }
+
+        function syncCurrentProjectConfigWithPipelines() {
+            if (!currentProjectConfig || typeof currentProjectConfig !== 'object') return;
+            if (!currentPipelineId || !currentProjectPipelines[currentPipelineId]) return;
+
+            const selected = currentProjectPipelines[currentPipelineId];
+            currentProjectConfig.pipelines = cloneJson(currentProjectPipelines) || {};
+            currentProjectConfig.active_pipeline = currentPipelineId;
+            currentProjectConfig.common = cloneJson(selected.common) || {};
+            currentProjectConfig.app = cloneJson(selected.app) || {};
+        }
+
         function setNavbarProjectName(name) {
             const container = document.getElementById('navbarProject');
             const nameEl = document.getElementById('navbarProjectName');
@@ -1507,12 +1895,16 @@
             }
 
             summaryEl.className = summaryClass;
+            const activePipelineLine = currentPipelineId
+                ? `<div><strong>Active pipeline:</strong> ${escapeHtml(getCurrentPipelineName() || currentPipelineId)} (${escapeHtml(currentPipelineId)})</div>`
+                : '';
             summaryEl.innerHTML = `
                 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <strong>Loaded: ${escapeHtml(loadedProjectMeta.name || loadedProjectMeta.id || lastProjectId)}</strong>
                     ${statusBadge}
                 </div>
                 <div class="mt-1"><strong>ID:</strong> ${escapeHtml(lastProjectId)}</div>
+                ${activePipelineLine}
                 <div><strong>Last saved:</strong> ${escapeHtml(saveText)}</div>
                 <div><strong>Target:</strong> ${escapeHtml(savePath)}</div>
                 ${loadingLine}
@@ -1524,6 +1916,8 @@
             const notice = document.getElementById('runnerProjectScopeNotice');
             if (!notice) return;
 
+            renderPipelinePresetSelector();
+
             if (!lastProjectId || !loadedProjectMeta) {
                 notice.className = 'alert alert-warning py-2 px-3 small mb-3';
                 notice.innerHTML = 'Runs and terminal output are project-scoped. Load a project in <strong>Projects</strong> before starting a run.';
@@ -1532,8 +1926,180 @@
 
             const projectName = loadedProjectMeta.name || loadedProjectMeta.id || lastProjectId;
             notice.className = 'alert alert-info py-2 px-3 small mb-3';
-            notice.innerHTML = `Active run context: <strong>${escapeHtml(projectName)}</strong> (${escapeHtml(lastProjectId)}).`;
+            const pipelineInfo = currentPipelineId
+                ? ` Pipeline: <strong>${escapeHtml(getCurrentPipelineName() || currentPipelineId)}</strong> (${escapeHtml(currentPipelineId)}).`
+                : '';
+            notice.innerHTML = `Active run context: <strong>${escapeHtml(projectName)}</strong> (${escapeHtml(lastProjectId)}).${pipelineInfo}`;
             updateRunnerActiveRunsNotice();
+        }
+
+        async function applyPipelineEntryToRunnerForm(entry, options = {}) {
+            const markDirty = !!options.markDirty;
+            const loadToken = ++activeProjectLoadToken;
+            const safeEntry = normalizePipelineEntry(entry || {}, getCurrentPipelineName() || currentPipelineId || 'Pipeline');
+            const common = safeEntry.common || {};
+            const app = safeEntry.app || {};
+
+            suppressProjectDirtyTracking = true;
+            try {
+                document.getElementById('bids_folder').value = common.bids_folder || '';
+                document.getElementById('output_folder').value = common.output_folder || '';
+                document.getElementById('tmp_folder').value = common.tmp_folder || '';
+                document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
+                document.getElementById('fs_license_file').value = common.fs_license_file || '';
+                const inferredRoot = _derivePipelineRootFromOutput(
+                    common.output_folder || '',
+                    common.pipeline_app_name || '',
+                    common.pipeline_version || ''
+                );
+                document.getElementById('pipeline_output_root').value = common.pipeline_output_root || inferredRoot || '';
+                document.getElementById('pipeline_app_name').value = common.pipeline_app_name || '';
+                document.getElementById('pipeline_version').value = common.pipeline_version || '';
+                document.getElementById('pipeline_auto_versioning').checked = common.pipeline_auto_versioning === true;
+                document.getElementById('notify_email').value = common.notify_email || '';
+                document.getElementById('jobs').value = common.jobs || 1;
+                document.getElementById('analysis_level').value = app.analysis_level || 'participant';
+                syncRunnerSubjectFilterWithAnalysisLevel();
+
+                const engine = common.container_engine || 'apptainer';
+                document.getElementById('container_engine').value = engine;
+
+                if (engine === 'docker') {
+                    const containerImage = common.container || '';
+                    const parts = containerImage.split(':');
+                    document.getElementById('container_docker_repo').value = parts[0] || '';
+                    document.getElementById('container_docker_tag').value = parts[1] || 'latest';
+                } else {
+                    const containerPath = common.container || '';
+                    if (containerPath) {
+                        const folder = containerPath.substring(0, containerPath.lastIndexOf('/'));
+                        document.getElementById('container_folder').value = folder;
+                    } else {
+                        document.getElementById('container_folder').value = '';
+                    }
+                }
+
+                toggleEngineFields();
+                applyMachineSettingsToRunnerForm({ silent: true, fillOnlyEmpty: true });
+                applyVersionedOutputPaths({ source: 'pipeline-switch' });
+
+                currentContainerPath = common.container || '';
+                containerLocked = common.container_locked || false;
+
+                if (!common.container) {
+                    document.getElementById('custom_args').value = '';
+                    document.getElementById('custom_mounts').value = '';
+                    document.getElementById('qsirecon_fs_subjects_dir').value = '';
+                    document.getElementById('dynamicOptionsSection').style.display = 'none';
+                    document.getElementById('optionsContainer').innerHTML = '';
+                }
+            } finally {
+                suppressProjectDirtyTracking = false;
+            }
+
+            await restoreProjectLoadDetails({ app }, common, loadToken);
+            syncCurrentProjectConfigWithPipelines();
+            updateLoadedProjectSummary();
+            scheduleRunnerPreflightRefresh();
+            scheduleCheckPreflightRefresh();
+            scheduleBuildPreflightRefresh();
+
+            if (markDirty) {
+                setProjectDirty(true);
+            }
+        }
+
+        async function switchActivePipelineById(pipelineId, options = {}) {
+            const markDirty = !!options.markDirty;
+            const allowUnsavedDiscard = options.allowUnsavedDiscard !== false;
+            const nextId = sanitizePipelineId(pipelineId);
+            const selectEl = document.getElementById('active_pipeline_select');
+
+            if (!nextId || !currentProjectPipelines[nextId]) {
+                if (selectEl && currentPipelineId) {
+                    selectEl.value = currentPipelineId;
+                }
+                return;
+            }
+
+            if (nextId === currentPipelineId) {
+                if (selectEl) selectEl.value = currentPipelineId;
+                return;
+            }
+
+            if (allowUnsavedDiscard && hasUnsavedProjectChanges() && !confirmDiscardUnsavedChanges('switch pipeline presets')) {
+                if (selectEl && currentPipelineId) {
+                    selectEl.value = currentPipelineId;
+                }
+                return;
+            }
+
+            currentPipelineId = nextId;
+            if (selectEl) {
+                selectEl.value = currentPipelineId;
+            }
+            await applyPipelineEntryToRunnerForm(currentProjectPipelines[currentPipelineId], { markDirty });
+        }
+
+        async function switchActivePipelineFromRunner() {
+            const selectEl = document.getElementById('active_pipeline_select');
+            if (!selectEl) return;
+            await switchActivePipelineById(selectEl.value, { markDirty: true, allowUnsavedDiscard: true });
+        }
+
+        async function createPipelinePreset() {
+            if (!lastProjectId) {
+                showStatus('Load a project before creating pipeline presets.', true);
+                return;
+            }
+
+            if (hasUnsavedProjectChanges() && !confirmDiscardUnsavedChanges('create a new pipeline preset')) {
+                return;
+            }
+
+            const suggested = `Pipeline ${Object.keys(currentProjectPipelines || {}).length + 1}`;
+            const enteredName = prompt('Name for the new pipeline preset:', suggested);
+            if (enteredName === null) return;
+
+            const cleanName = String(enteredName || '').trim() || suggested;
+            let pipelineId = sanitizePipelineId(cleanName);
+            const existingIds = new Set(Object.keys(currentProjectPipelines || {}));
+            if (existingIds.has(pipelineId)) {
+                let counter = 2;
+                while (existingIds.has(`${pipelineId}_${counter}`)) {
+                    counter += 1;
+                }
+                pipelineId = `${pipelineId}_${counter}`;
+            }
+
+            currentProjectPipelines[pipelineId] = buildFreshPipelinePreset(cleanName);
+            renderPipelinePresetSelector();
+            await switchActivePipelineById(pipelineId, { markDirty: true, allowUnsavedDiscard: false });
+            showStatus(`Created pipeline preset: ${cleanName}`);
+        }
+
+        async function deleteActivePipelinePreset() {
+            if (!lastProjectId) {
+                showStatus('Load a project before deleting pipeline presets.', true);
+                return;
+            }
+
+            const pipelineIds = Object.keys(currentProjectPipelines || {});
+            if (pipelineIds.length <= 1) {
+                showStatus('At least one pipeline preset must remain.', true);
+                return;
+            }
+
+            const currentName = getCurrentPipelineName() || currentPipelineId;
+            if (!confirm(`Delete pipeline preset "${currentName}"?`)) {
+                return;
+            }
+
+            delete currentProjectPipelines[currentPipelineId];
+            const fallbackId = Object.keys(currentProjectPipelines)[0];
+            renderPipelinePresetSelector();
+            await switchActivePipelineById(fallbackId, { markDirty: true, allowUnsavedDiscard: false });
+            showStatus(`Deleted pipeline preset: ${currentName}`);
         }
 
         function updateRunnerActiveRunsNotice(statusData = null) {
@@ -1864,6 +2430,7 @@
 
         function evaluateRunnerPreflight() {
             const projectLoaded = !!lastProjectId;
+            const pipelineSelected = !projectLoaded || (!!currentPipelineId && !!getCurrentPipelineEntry());
             const bidsFolder = (document.getElementById('bids_folder').value || '').trim();
             const outputFolder = (document.getElementById('output_folder').value || '').trim();
             const containerValue = getConfiguredContainerValue();
@@ -1877,6 +2444,12 @@
                     id: 'project',
                     label: 'Project loaded',
                     ok: projectLoaded,
+                    blocking: true,
+                },
+                {
+                    id: 'pipeline',
+                    label: 'Pipeline preset selected',
+                    ok: pipelineSelected,
                     blocking: true,
                 },
                 {
@@ -2278,17 +2851,27 @@
                 
                 list.innerHTML = '';
                 data.projects.forEach(proj => {
-                    const common = (proj.config && proj.config.common) ? proj.config.common : {};
-                    const app = (proj.config && proj.config.app) ? proj.config.app : {};
+                    const cfg = (proj.config && typeof proj.config === 'object') ? proj.config : {};
+                    const pipelineState = ensureProjectPipelineState(cfg);
+                    const activePipelineId = pipelineState.activePipeline;
+                    const activePipeline = pipelineState.pipelines[activePipelineId] || {};
+                    const common = (activePipeline.common && typeof activePipeline.common === 'object')
+                        ? activePipeline.common
+                        : ((cfg.common && typeof cfg.common === 'object') ? cfg.common : {});
+                    const app = (activePipeline.app && typeof activePipeline.app === 'object')
+                        ? activePipeline.app
+                        : ((cfg.app && typeof cfg.app === 'object') ? cfg.app : {});
                     const requiredMissing = [];
                     if (!common.bids_folder) requiredMissing.push('BIDS folder');
                     if (!common.output_folder) requiredMissing.push('Output folder');
                     if (!common.container) requiredMissing.push('Container');
                     if (!app.analysis_level) requiredMissing.push('Analysis level');
 
+                    const pipelineName = (activePipeline.name || activePipelineId || 'default');
+
                     const readinessHtml = requiredMissing.length === 0
-                        ? '<span class="badge bg-success">Ready to run</span>'
-                        : `<span class="badge bg-warning text-dark">Missing: ${escapeHtml(requiredMissing.join(', '))}</span>`;
+                        ? `<span class="badge bg-success">Ready to run (${escapeHtml(pipelineName)})</span>`
+                        : `<span class="badge bg-warning text-dark">Missing (${escapeHtml(pipelineName)}): ${escapeHtml(requiredMissing.join(', '))}</span>`;
 
                     const item = document.createElement('div');
                     item.className = 'list-group-item';
@@ -2539,16 +3122,22 @@
 
         async function applyProjectData(project, projectIdOverride) {
             // Load project config into the form
-            const cfg = project.config || {};
-            const common = cfg.common || {};
-            const app = cfg.app || {};
+            const cfg = (project.config && typeof project.config === 'object') ? project.config : {};
+            const pipelineState = ensureProjectPipelineState(cfg);
+            currentProjectPipelines = pipelineState.pipelines;
+            currentPipelineId = pipelineState.activePipeline;
+
+            const activeEntry = currentProjectPipelines[currentPipelineId] || normalizePipelineEntry({}, 'Default Pipeline');
+            const common = (activeEntry.common && typeof activeEntry.common === 'object') ? activeEntry.common : {};
+            const app = (activeEntry.app && typeof activeEntry.app === 'object') ? activeEntry.app : {};
             const loadToken = ++activeProjectLoadToken;
 
             // Store project info early so navbar updates immediately
             lastProjectId = projectIdOverride || project.id || '';
             lastSavedPath = null;
             setNavbarProjectName(project.name || project.id || '');
-            currentProjectConfig = cfg;
+            currentProjectConfig = cloneJson(cfg) || {};
+            syncCurrentProjectConfigWithPipelines();
             loadedProjectMeta = {
                 id: lastProjectId,
                 name: project.name || project.id || '',
@@ -2561,7 +3150,8 @@
             setProjectLoadInProgress(true);
             initialLoad = true;
             setTerminalProjectContextMessage(`[Loading logs for project: ${project.name || project.id || projectIdOverride || 'project'}]\n`);
-            updateHpcConfigDetails(cfg);
+            updateHpcConfigDetails(currentProjectConfig);
+            renderPipelinePresetSelector();
 
             suppressProjectDirtyTracking = true;
             try {
@@ -2572,6 +3162,15 @@
                 document.getElementById('tmp_folder').value = common.tmp_folder || '';
                 document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
                 document.getElementById('fs_license_file').value = common.fs_license_file || '';
+                const inferredRoot = _derivePipelineRootFromOutput(
+                    common.output_folder || '',
+                    common.pipeline_app_name || '',
+                    common.pipeline_version || ''
+                );
+                document.getElementById('pipeline_output_root').value = common.pipeline_output_root || inferredRoot || '';
+                document.getElementById('pipeline_app_name').value = common.pipeline_app_name || '';
+                document.getElementById('pipeline_version').value = common.pipeline_version || '';
+                document.getElementById('pipeline_auto_versioning').checked = common.pipeline_auto_versioning === true;
                 document.getElementById('notify_email').value = common.notify_email || '';
                 document.getElementById('jobs').value = common.jobs || 1;
                 document.getElementById('analysis_level').value = app.analysis_level || 'participant';
@@ -2579,7 +3178,7 @@
                 document.getElementById('container_engine').value = common.container_engine || 'apptainer';
 
                 // Load saved Check Output settings when present
-                const validation = cfg.validation || {};
+                const validation = currentProjectConfig.validation || {};
                 document.getElementById('validation_bids_folder').value = validation.bids_folder || common.bids_folder || '';
                 document.getElementById('validation_derivatives_folder').value = validation.derivatives_folder || common.output_folder || '';
                 document.getElementById('validation_pipeline').value = validation.pipeline || '';
@@ -2608,6 +3207,7 @@
 
                 toggleEngineFields();
                 applyMachineSettingsToRunnerForm({ silent: true, fillOnlyEmpty: true });
+                applyVersionedOutputPaths({ source: 'project-load' });
 
                 // Store container path and locked state
                 currentContainerPath = common.container || '';
@@ -2619,8 +3219,8 @@
             }
 
             // Restore heavy container metadata/options in background to keep project switch responsive.
-            void restoreProjectLoadDetails(cfg, common, loadToken);
-            showStatus(`Loaded project: ${project.name || project.id || 'project'}`);
+            void restoreProjectLoadDetails({ app }, common, loadToken);
+            showStatus(`Loaded project: ${project.name || project.id || 'project'} (pipeline: ${getCurrentPipelineName() || currentPipelineId})`);
         }
 
         async function restoreProjectLoadDetails(cfg, common, loadToken) {
@@ -2685,12 +3285,15 @@
                     if (projectId === lastProjectId) {
                         lastProjectId = '';
                         loadedProjectMeta = null;
+                        currentProjectPipelines = {};
+                        currentPipelineId = '';
                         lastProjectSavedAt = '';
                         lastProjectSavePath = '';
                         lastSavedPath = '';
                         currentProjectConfig = null;
                         setProjectDirty(false);
                         setNavbarProjectName('');
+                        renderPipelinePresetSelector();
                         setTerminalProjectContextMessage('[Load a project to view project-specific logs.]\n');
                         scheduleCheckPreflightRefresh();
                         scheduleBuildPreflightRefresh();
@@ -2787,6 +3390,7 @@
                 }
             } catch (e) {}
             updateQsireconUI();
+            applyVersionedOutputPaths({ source: 'check-app-version' });
         }
 
         async function openBrowser(id) {
@@ -3011,11 +3615,13 @@
                 dockerFields.style.display = 'none';
             }
             updateQsireconUI();
+            applyVersionedOutputPaths({ source: 'engine-toggle' });
             scheduleRunnerPreflightRefresh();
         }
 
         async function scanContainers(loadToken = null, options = {}) {
             const silent = !!options.silent;
+            applyVersionedOutputPaths({ source: 'machine-settings' });
             const f = document.getElementById('container_folder').value;
             if (!f) {
                 if (!silent) showStatus("Please specify the containers folder first.", true);
@@ -3034,6 +3640,7 @@
                 if (data.containers && data.containers.length > 0) {
                     data.containers.forEach(c => s.add(new Option(c, c)));
                     await checkAppVersion(loadToken);
+                    applyVersionedOutputPaths({ source: 'scan-containers' });
                     document.getElementById('fetchHelpBtn').style.display = 'block';
                     scheduleRunnerPreflightRefresh();
                     return true;
@@ -3074,10 +3681,12 @@
                         tagSelect.add(new Option(tag, tag));
                     });
                     showStatus(`Fetched ${data.tags.length} tags for ${repo}`);
+                    applyVersionedOutputPaths({ source: 'docker-tags' });
                     scheduleRunnerPreflightRefresh();
                 } else if (data.error) {
                     showStatus(data.error, true);
                     tagSelect.innerHTML = '<option value="latest">latest (fallback)</option>';
+                    applyVersionedOutputPaths({ source: 'docker-tags-fallback' });
                     scheduleRunnerPreflightRefresh();
                 }
             } catch (e) {
@@ -3509,24 +4118,59 @@
                 currentContainerPath = containerPath;
             }
 
+            applyVersionedOutputPaths({ source: 'save' });
+            const resolvedPipelineAppName = inferCurrentPipelineAppName();
+
+            const activeCommon = {
+                bids_folder: document.getElementById('bids_folder').value,
+                output_folder: document.getElementById('output_folder').value,
+                tmp_folder: document.getElementById('tmp_folder').value,
+                templateflow_dir: document.getElementById('templateflow_dir').value,
+                fs_license_file: document.getElementById('fs_license_file').value,
+                pipeline_output_root: (document.getElementById('pipeline_output_root').value || '').trim(),
+                pipeline_app_name: resolvedPipelineAppName,
+                pipeline_version: (document.getElementById('pipeline_version').value || '').trim(),
+                pipeline_auto_versioning: !!document.getElementById('pipeline_auto_versioning').checked,
+                notify_email: document.getElementById('notify_email').value.trim(),
+                container_engine: engine,
+                container: containerPath,
+                container_locked: containerLocked,
+                jobs: parseInt(document.getElementById('jobs').value) || 1
+            };
+
+            const activeApp = {
+                analysis_level: document.getElementById('analysis_level').value,
+                options: opts,
+                mounts: mounts
+            };
+
+            if (resolvedPipelineAppName === 'fastsurfer') {
+                activeApp.execution_adapter = 'fastsurfer-cross';
+            }
+
+            if (lastProjectId) {
+                const pipelineState = ensureProjectPipelineState(currentProjectConfig || {});
+                currentProjectPipelines = pipelineState.pipelines;
+
+                if (!currentPipelineId || !currentProjectPipelines[currentPipelineId]) {
+                    currentPipelineId = pipelineState.activePipeline || 'default';
+                }
+
+                const existingEntry = normalizePipelineEntry(
+                    currentProjectPipelines[currentPipelineId] || {},
+                    currentPipelineId
+                );
+                currentProjectPipelines[currentPipelineId] = {
+                    ...existingEntry,
+                    common: cloneJson(activeCommon) || {},
+                    app: cloneJson(activeApp) || {},
+                };
+                renderPipelinePresetSelector();
+            }
+
             const config = {
-                common: {
-                    bids_folder: document.getElementById('bids_folder').value,
-                    output_folder: document.getElementById('output_folder').value,
-                    tmp_folder: document.getElementById('tmp_folder').value,
-                    templateflow_dir: document.getElementById('templateflow_dir').value,
-                    fs_license_file: document.getElementById('fs_license_file').value,
-                    notify_email: document.getElementById('notify_email').value.trim(),
-                    container_engine: engine,
-                    container: containerPath,
-                    container_locked: containerLocked,
-                    jobs: parseInt(document.getElementById('jobs').value) || 1
-                },
-                app: { 
-                    analysis_level: document.getElementById('analysis_level').value, 
-                    options: opts,
-                    mounts: mounts 
-                },
+                common: activeCommon,
+                app: activeApp,
                 validation: {
                     bids_folder: document.getElementById('validation_bids_folder').value.trim(),
                     derivatives_folder: document.getElementById('validation_derivatives_folder').value.trim(),
@@ -3536,6 +4180,11 @@
                     list_missing: document.getElementById('validation_missing_only').checked
                 }
             };
+
+            if (lastProjectId) {
+                config.pipelines = cloneJson(currentProjectPipelines) || {};
+                config.active_pipeline = currentPipelineId || 'default';
+            }
 
             const filename = document.getElementById('config_name').value || 'config.json';
             const config_folder = document.getElementById('config_folder').value.trim();
@@ -3556,6 +4205,14 @@
                 if (resData.message) {
                     lastSavedPath = resData.path;
                     if (lastProjectId) {
+                        if (resData.project && resData.project.config) {
+                            currentProjectConfig = cloneJson(resData.project.config) || {};
+                            const refreshed = ensureProjectPipelineState(currentProjectConfig);
+                            currentProjectPipelines = refreshed.pipelines;
+                            currentPipelineId = refreshed.activePipeline;
+                            renderPipelinePresetSelector();
+                            syncCurrentProjectConfigWithPipelines();
+                        }
                         lastProjectSavedAt = new Date().toISOString();
                         lastProjectSavePath = resData.path || `projects/${lastProjectId}/project.json`;
                         if (loadedProjectMeta && loadedProjectMeta.id === lastProjectId) {
@@ -3641,6 +4298,7 @@
                 payload.max_usage_percent = parseInt(document.getElementById('max_usage_percent').value) || 100;
                 if (lastProjectId) {
                     payload.project_id = lastProjectId;
+                    payload.pipeline_id = currentPipelineId || '';
                 }
                 
                 const resp = await fetch('/run_app', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -3685,6 +4343,7 @@
 
             if (lastProjectId) {
                 payload.project_id = lastProjectId;
+                payload.pipeline_id = currentPipelineId || '';
             }
 
             if (mode === 'manual') {
@@ -3835,20 +4494,37 @@
                 const resp = await fetch(`/get_config?name=${encodeURIComponent(filename)}`);
                 const data = await resp.json();
                 const cfg = data.config;
+                const pipelineState = ensureProjectPipelineState(cfg || {});
+                const activeEntry = pipelineState.pipelines[pipelineState.activePipeline] || {};
+                const activeCommon = (activeEntry.common && typeof activeEntry.common === 'object')
+                    ? activeEntry.common
+                    : ((cfg.common && typeof cfg.common === 'object') ? cfg.common : {});
+                const activeApp = (activeEntry.app && typeof activeEntry.app === 'object')
+                    ? activeEntry.app
+                    : ((cfg.app && typeof cfg.app === 'object') ? cfg.app : {});
                 
-                document.getElementById('bids_folder').value = cfg.common.bids_folder || '';
-                document.getElementById('output_folder').value = cfg.common.output_folder || '';
-                document.getElementById('tmp_folder').value = cfg.common.tmp_folder || '';
-                document.getElementById('templateflow_dir').value = cfg.common.templateflow_dir || '';
-                document.getElementById('fs_license_file').value = cfg.common.fs_license_file || '';
-                document.getElementById('jobs').value = cfg.common.jobs || 1;
-                document.getElementById('analysis_level').value = cfg.app.analysis_level || 'participant';
+                document.getElementById('bids_folder').value = activeCommon.bids_folder || '';
+                document.getElementById('output_folder').value = activeCommon.output_folder || '';
+                document.getElementById('tmp_folder').value = activeCommon.tmp_folder || '';
+                document.getElementById('templateflow_dir').value = activeCommon.templateflow_dir || '';
+                document.getElementById('fs_license_file').value = activeCommon.fs_license_file || '';
+                const inferredRoot = _derivePipelineRootFromOutput(
+                    activeCommon.output_folder || '',
+                    activeCommon.pipeline_app_name || '',
+                    activeCommon.pipeline_version || ''
+                );
+                document.getElementById('pipeline_output_root').value = activeCommon.pipeline_output_root || inferredRoot || '';
+                document.getElementById('pipeline_app_name').value = activeCommon.pipeline_app_name || '';
+                document.getElementById('pipeline_version').value = activeCommon.pipeline_version || '';
+                document.getElementById('pipeline_auto_versioning').checked = activeCommon.pipeline_auto_versioning === true;
+                document.getElementById('jobs').value = activeCommon.jobs || 1;
+                document.getElementById('analysis_level').value = activeApp.analysis_level || 'participant';
                 syncRunnerSubjectFilterWithAnalysisLevel();
                 document.getElementById('config_name').value = filename;
 
                 const validation = cfg.validation || {};
-                document.getElementById('validation_bids_folder').value = validation.bids_folder || cfg.common.bids_folder || '';
-                document.getElementById('validation_derivatives_folder').value = validation.derivatives_folder || cfg.common.output_folder || '';
+                document.getElementById('validation_bids_folder').value = validation.bids_folder || activeCommon.bids_folder || '';
+                document.getElementById('validation_derivatives_folder').value = validation.derivatives_folder || activeCommon.output_folder || '';
                 document.getElementById('validation_pipeline').value = validation.pipeline || '';
                 document.getElementById('validation_verbose').checked = !!validation.verbose;
                 document.getElementById('validation_quiet').checked = !!validation.quiet;
@@ -3859,11 +4535,12 @@
                 lastSavedPath = `/data/local/software/bids_apps_runner/configs/${filename}`;
                 document.getElementById('runApp').style.display = 'inline-block';
 
-                const engine = cfg.common.container_engine || 'apptainer';
+                const engine = activeCommon.container_engine || 'apptainer';
                 document.getElementById('container_engine').value = engine;
                 toggleEngineFields();
+                applyVersionedOutputPaths({ source: 'config-load' });
 
-                const containerPath = cfg.common.container;
+                const containerPath = activeCommon.container;
                 if (containerPath) {
                     if (engine === 'docker') {
                         const parts = containerPath.split(':');
@@ -3905,7 +4582,7 @@
                     }
                 }
                 
-                applySavedAppConfig(cfg);
+                applySavedAppConfig({ app: activeApp });
 
                 showStatus("Configuration loaded: " + filename);
             } catch (e) {
@@ -3949,7 +4626,16 @@
                     if (!document.getElementById('validation_bids_folder').value && document.getElementById('bids_folder').value) {
                         document.getElementById('validation_bids_folder').value = document.getElementById('bids_folder').value;
                     }
-                    if (!document.getElementById('validation_derivatives_folder').value && document.getElementById('output_folder').value) {
+                    const autoVersioning = !!document.getElementById('pipeline_auto_versioning')?.checked;
+                    const derivRoot = (document.getElementById('pipeline_output_root').value || '').trim();
+                    if (autoVersioning && derivRoot) {
+                        document.getElementById('validation_derivatives_folder').value = derivRoot;
+                        const appName = inferCurrentPipelineAppName();
+                        const version = (document.getElementById('pipeline_version').value || '').trim();
+                        if (appName) {
+                            document.getElementById('validation_pipeline').value = version ? `${appName}@${version}` : appName;
+                        }
+                    } else if (!document.getElementById('validation_derivatives_folder').value && document.getElementById('output_folder').value) {
                         document.getElementById('validation_derivatives_folder').value = document.getElementById('output_folder').value;
                     }
                     scheduleCheckPreflightRefresh();
@@ -5591,6 +6277,7 @@
             fetchSystemResources();
             setNavbarProjectName('');
             setTerminalProjectContextMessage('[Load a project to view project-specific logs.]\n');
+            renderPipelinePresetSelector();
             toggleMaxUsageControls();
             togglePilotSweepMode();
             syncRunnerSubjectFilterWithAnalysisLevel();
@@ -5600,6 +6287,25 @@
             if (analysisLevelEl) {
                 analysisLevelEl.addEventListener('change', syncRunnerSubjectFilterWithAnalysisLevel);
             }
+
+            const versioningFields = [
+                'pipeline_output_root',
+                'pipeline_app_name',
+                'pipeline_version',
+                'pipeline_auto_versioning',
+                'container_engine',
+                'container_docker_repo',
+                'container_docker_tag',
+                'container_select',
+            ];
+            versioningFields.forEach((id) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.addEventListener('input', () => applyVersionedOutputPaths({ source: `${id}-input` }));
+                el.addEventListener('change', () => applyVersionedOutputPaths({ source: `${id}-change` }));
+            });
+            updateVersionedOutputControls();
+            applyVersionedOutputPaths({ source: 'initial-load' });
 
             // Clear tags if repo changes
             const buildRepoInput = document.getElementById('build_docker_repo');

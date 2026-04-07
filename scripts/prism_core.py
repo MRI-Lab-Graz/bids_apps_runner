@@ -12,6 +12,8 @@ Version: 3.0.0
 import os
 import sys
 import json
+import copy
+import re
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +48,65 @@ def setup_logging(log_level: str = "INFO", log_dir: Optional[Path] = None) -> Pa
 
     logging.info(f"Logging to file: {log_file}")
     return log_file
+
+
+def _sanitize_pipeline_id(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9_]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or "default"
+
+
+def _materialize_runtime_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve one runnable app config from legacy or multi-pipeline shapes."""
+    if not isinstance(config, dict):
+        return {}
+
+    pipelines_raw = config.get("pipelines")
+    if not isinstance(pipelines_raw, dict) or not pipelines_raw:
+        return config
+
+    normalized = {}
+    for raw_id, entry in pipelines_raw.items():
+        if not isinstance(entry, dict):
+            continue
+        pipeline_id = _sanitize_pipeline_id(raw_id)
+        entry_common = entry.get("common") if isinstance(entry.get("common"), dict) else {}
+        entry_app = entry.get("app") if isinstance(entry.get("app"), dict) else {}
+        normalized[pipeline_id] = {
+            "common": copy.deepcopy(entry_common),
+            "app": copy.deepcopy(entry_app),
+        }
+
+    if not normalized:
+        return config
+
+    active = _sanitize_pipeline_id(config.get("active_pipeline"))
+    if active not in normalized:
+        active = next(iter(normalized.keys()))
+
+    selected = normalized.get(active, {})
+    selected_common = selected.get("common", {})
+    selected_app = selected.get("app", {})
+
+    base_common = config.get("common") if isinstance(config.get("common"), dict) else {}
+    merged_common = copy.deepcopy(base_common)
+    merged_common.update(copy.deepcopy(selected_common))
+
+    base_app = config.get("app") if isinstance(config.get("app"), dict) else {}
+    merged_app = copy.deepcopy(base_app)
+    merged_app.update(copy.deepcopy(selected_app))
+
+    runtime = {}
+    for key, value in config.items():
+        if key in {"common", "app", "pipelines", "active_pipeline"}:
+            continue
+        runtime[key] = copy.deepcopy(value)
+
+    runtime["common"] = merged_common
+    runtime["app"] = merged_app
+    runtime["active_pipeline"] = active
+    return runtime
 
 
 def read_config(config_path: str) -> Dict[str, Any]:
@@ -86,11 +147,12 @@ def read_config(config_path: str) -> Dict[str, Any]:
     with open(config_file, "r") as f:
         config = json.load(f)
 
-    # Handle project.json format (GUI creates configs nested under "config" key)
+    # Handle project.json wrapper format (GUI nests run config under "config").
     if "config" in config and isinstance(config["config"], dict):
-        if "common" in config["config"]:
-            logging.debug("Detected project.json format, extracting nested config")
-            config = config["config"]
+        logging.debug("Detected project.json format, extracting nested config")
+        config = config["config"]
+
+    config = _materialize_runtime_config(config)
 
     logging.info(f"Loaded configuration from: {config_file}")
     return config

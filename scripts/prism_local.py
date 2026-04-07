@@ -22,6 +22,7 @@ import concurrent.futures
 import random
 import json
 import re
+import hashlib
 from collections import deque
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -268,6 +269,137 @@ def _ensure_mriqc_no_sub_option(container_ref, options):
     return opts
 
 
+def _infer_execution_adapter(common, app):
+    """Resolve app execution adapter from explicit config or pipeline metadata."""
+    app_cfg = app if isinstance(app, dict) else {}
+    common_cfg = common if isinstance(common, dict) else {}
+
+    explicit = str(app_cfg.get("execution_adapter", "")).strip().lower()
+    if explicit in {"fastsurfer", "fastsurfer-cross", "bids-fastsurfer"}:
+        return "fastsurfer-cross"
+
+    pipeline_app = str(common_cfg.get("pipeline_app_name", "")).strip().lower()
+    if pipeline_app == "fastsurfer":
+        return "fastsurfer-cross"
+
+    container_ref = str(common_cfg.get("container", "")).strip().lower()
+    if "fastsurfer" in container_ref:
+        return "fastsurfer-cross"
+
+    return ""
+
+
+def _drop_runtime_flags(options, flag_names):
+    """Drop flags (and optional values) from tokenized CLI options."""
+    cleaned = []
+    i = 0
+    flags = set(flag_names)
+    while i < len(options):
+        token = str(options[i])
+        if token in flags:
+            if i + 1 < len(options) and not str(options[i + 1]).startswith("-"):
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if token.startswith("--") and "=" in token:
+            left = token.split("=", 1)[0]
+            if left in flags:
+                i += 1
+                continue
+
+        cleaned.append(token)
+        i += 1
+
+    return cleaned
+
+
+def _prepare_fastsurfer_options(options):
+    """Normalize options for /fastsurfer/run_fastsurfer.sh.
+
+    Runtime-specific flags are managed by the adapter and must not be passed
+    from generic app options.
+    """
+    opts = [str(x) for x in (options or [])]
+    normalized = []
+    for token in opts:
+        if token == "--qc":
+            normalized.append("--qc_snap")
+        else:
+            normalized.append(token)
+    forbidden = {
+        "--t1",
+        "--sid",
+        "--sd",
+        "--fs_license",
+        "--fs",
+        "--participant-label",
+        "-w",
+    }
+    return _drop_runtime_flags(normalized, forbidden)
+
+
+def _discover_fastsurfer_subject_inputs(bids_folder, subject):
+    """Discover per-subject T1 inputs and derive FastSurfer SIDs.
+
+    Mirrors the wrapper strategy: find T1w files under the subject tree and
+    derive SID as sub-<id>[_ses-<id>].
+    """
+    subject_id = _normalize_subject_id(subject)
+    if not subject_id or subject_id == "group":
+        return []
+
+    subject_dir = os.path.join(str(bids_folder or ""), subject_id)
+    if not os.path.isdir(subject_dir):
+        return []
+
+    patterns = [
+        "*_desc-preproc_T1w.nii.gz",
+        "*_T1w.nii.gz",
+        "*_T1w.nii",
+    ]
+
+    candidates = []
+    seen_paths = set()
+    for pattern in patterns:
+        for path in sorted(
+            glob.glob(os.path.join(subject_dir, "**", pattern), recursive=True)
+        ):
+            abs_path = os.path.abspath(path)
+            if abs_path in seen_paths or not os.path.isfile(abs_path):
+                continue
+            seen_paths.add(abs_path)
+            candidates.append(abs_path)
+
+    resolved = []
+    seen_sids = set()
+    for path in candidates:
+        rel = os.path.relpath(path, bids_folder).replace(os.sep, "/")
+        match = re.search(r"(sub-[^/_]+)(?:/(ses-[^/_]+))?", rel)
+
+        sid_base = subject_id
+        ses_part = ""
+        if match:
+            sid_base = match.group(1)
+            ses_part = match.group(2) or ""
+
+        sid = f"{sid_base}_{ses_part}" if ses_part else sid_base
+
+        if sid in seen_sids:
+            logging.warning(
+                "FastSurfer adapter: multiple T1w files for SID %s; keeping first and skipping %s",
+                sid,
+                rel,
+            )
+            continue
+
+        seen_sids.add(sid)
+        resolved.append({"sid": sid, "t1_relpath": rel})
+
+    return resolved
+
+
 def _run_container(
     cmd, env=None, dry_run=False, debug=False, subject=None, log_dir=None
 ):
@@ -407,6 +539,58 @@ def _normalize_subject_id(subject: str) -> str:
     return subject_str if subject_str.startswith("sub-") else f"sub-{subject_str}"
 
 
+def _sanitize_marker_component(value, default=""):
+    """Normalize marker namespace components to filesystem-safe tokens."""
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9_.-]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    if text:
+        return text
+    return str(default or "")
+
+
+def _derive_marker_namespace(config: Dict[str, Any]) -> str:
+    """Derive a stable namespace for success markers and project completion state."""
+    common = config.get("common", {}) if isinstance(config, dict) else {}
+    active_pipeline = _sanitize_marker_component(
+        (config or {}).get("active_pipeline"), default="default"
+    )
+    version = _sanitize_marker_component(common.get("pipeline_version"), default="")
+
+    output_folder = str(common.get("output_folder") or "").strip()
+    output_hash = ""
+    if output_folder:
+        output_hash = hashlib.sha1(
+            os.path.abspath(output_folder).encode("utf-8")
+        ).hexdigest()[:10]
+
+    parts = [active_pipeline or "default"]
+    if version:
+        parts.append(version)
+    if output_hash:
+        parts.append(output_hash)
+
+    return "__".join(parts)
+
+
+def _get_success_marker_paths(subject, common, marker_namespace=None):
+    """Return candidate success marker paths, preferring namespaced markers."""
+    marker_dir = os.path.join(common["output_folder"], ".bids_app_runner")
+    candidates = []
+    if marker_namespace:
+        candidates.append(
+            os.path.join(marker_dir, f"{marker_namespace}__{subject}_success.txt")
+        )
+    # Legacy marker fallback for backward compatibility.
+    candidates.append(os.path.join(marker_dir, f"{subject}_success.txt"))
+
+    deduped = []
+    for path in candidates:
+        if path not in deduped:
+            deduped.append(path)
+    return deduped
+
+
 def _resolve_project_json_path(config_path: Optional[str]) -> Optional[str]:
     """Resolve a CLI config path to a valid project.json path when applicable."""
     if not config_path:
@@ -448,7 +632,7 @@ def _resolve_project_json_path(config_path: Optional[str]) -> Optional[str]:
 
 
 def _read_project_subject_state(
-    project_json_path: Optional[str], subject: str
+    project_json_path: Optional[str], subject: str, marker_namespace: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """Read per-subject runner state from project.json."""
     if not project_json_path:
@@ -461,11 +645,32 @@ def _read_project_subject_state(
         logging.warning(f"Could not read project state from {project_json_path}: {e}")
         return None
 
-    subjects_state = project_data.get("runner_state", {}).get("subjects", {})
+    runner_state = project_data.get("runner_state", {})
+    subject_id = _normalize_subject_id(subject)
+    if not subject_id:
+        return None
+
+    if marker_namespace:
+        namespaces = runner_state.get("namespaces", {})
+        if not isinstance(namespaces, dict):
+            return None
+
+        ns_state = namespaces.get(marker_namespace, {})
+        if not isinstance(ns_state, dict):
+            return None
+
+        subjects_state = ns_state.get("subjects", {})
+        if not isinstance(subjects_state, dict):
+            return None
+
+        subject_state = subjects_state.get(subject_id)
+        return subject_state if isinstance(subject_state, dict) else None
+
+    subjects_state = runner_state.get("subjects", {})
     if not isinstance(subjects_state, dict):
         return None
 
-    subject_state = subjects_state.get(_normalize_subject_id(subject))
+    subject_state = subjects_state.get(subject_id)
     return subject_state if isinstance(subject_state, dict) else None
 
 
@@ -474,6 +679,7 @@ def _write_project_subject_state(
     subject: str,
     status: str,
     reason: str = "",
+    marker_namespace: Optional[str] = None,
 ) -> bool:
     """Persist subject completion state in project.json."""
     if not project_json_path:
@@ -492,11 +698,27 @@ def _write_project_subject_state(
 
     now_iso = datetime.now().isoformat()
     runner_state = project_data.setdefault("runner_state", {})
-    subjects_state = runner_state.setdefault("subjects", {})
 
-    if not isinstance(subjects_state, dict):
-        subjects_state = {}
-        runner_state["subjects"] = subjects_state
+    if marker_namespace:
+        namespaces = runner_state.setdefault("namespaces", {})
+        if not isinstance(namespaces, dict):
+            namespaces = {}
+            runner_state["namespaces"] = namespaces
+
+        ns_state = namespaces.setdefault(marker_namespace, {})
+        if not isinstance(ns_state, dict):
+            ns_state = {}
+            namespaces[marker_namespace] = ns_state
+
+        subjects_state = ns_state.setdefault("subjects", {})
+        if not isinstance(subjects_state, dict):
+            subjects_state = {}
+            ns_state["subjects"] = subjects_state
+    else:
+        subjects_state = runner_state.setdefault("subjects", {})
+        if not isinstance(subjects_state, dict):
+            subjects_state = {}
+            runner_state["subjects"] = subjects_state
 
     state = subjects_state.get(subject_id, {})
     if not isinstance(state, dict):
@@ -511,8 +733,15 @@ def _write_project_subject_state(
         state["failed_at"] = now_iso
     if reason:
         state["reason"] = reason
+    if marker_namespace:
+        state["namespace"] = marker_namespace
 
     subjects_state[subject_id] = state
+    if marker_namespace:
+        namespaces = runner_state.get("namespaces", {})
+        ns_state = namespaces.get(marker_namespace, {}) if isinstance(namespaces, dict) else {}
+        if isinstance(ns_state, dict):
+            ns_state["updated_at"] = now_iso
     project_data["last_modified"] = now_iso
 
     tmp_path = f"{project_json_path}.tmp"
@@ -553,7 +782,9 @@ def _clear_success_markers(
             with open(project_json_path, "r", encoding="utf-8") as f:
                 project_data = json.load(f)
 
-            subjects_state = project_data.get("runner_state", {}).get("subjects", {})
+            runner_state = project_data.get("runner_state", {})
+            any_removed = False
+            subjects_state = runner_state.get("subjects", {})
             if isinstance(subjects_state, dict):
                 to_remove = [
                     sid
@@ -563,15 +794,38 @@ def _clear_success_markers(
                 ]
                 for sid in to_remove:
                     subjects_state.pop(sid, None)
-                cleared_project_markers = len(to_remove)
-
                 if to_remove:
-                    project_data["last_modified"] = datetime.now().isoformat()
-                    tmp_path = f"{project_json_path}.tmp"
-                    with open(tmp_path, "w", encoding="utf-8") as f:
-                        json.dump(project_data, f, indent=2)
-                        f.write("\n")
-                    os.replace(tmp_path, project_json_path)
+                    any_removed = True
+                cleared_project_markers += len(to_remove)
+
+            namespaces = runner_state.get("namespaces", {})
+            if isinstance(namespaces, dict):
+                for ns_name, ns_state in namespaces.items():
+                    if not isinstance(ns_state, dict):
+                        continue
+                    ns_subjects = ns_state.get("subjects", {})
+                    if not isinstance(ns_subjects, dict):
+                        continue
+                    ns_to_remove = [
+                        sid
+                        for sid, state in ns_subjects.items()
+                        if isinstance(state, dict)
+                        and (state.get("finished") or state.get("status") == "finished")
+                    ]
+                    for sid in ns_to_remove:
+                        ns_subjects.pop(sid, None)
+                    if ns_to_remove:
+                        ns_state["updated_at"] = datetime.now().isoformat()
+                        any_removed = True
+                    cleared_project_markers += len(ns_to_remove)
+
+            if any_removed:
+                project_data["last_modified"] = datetime.now().isoformat()
+                tmp_path = f"{project_json_path}.tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(project_data, f, indent=2)
+                    f.write("\n")
+                os.replace(tmp_path, project_json_path)
         except Exception as e:
             logging.warning(f"Could not clear project.json success markers: {e}")
 
@@ -646,13 +900,22 @@ def _check_generic_output_exists(subject, common):
     return False
 
 
-def _subject_processed(subject, common, app, force=False, project_json_path=None):
+def _subject_processed(
+    subject,
+    common,
+    app,
+    force=False,
+    project_json_path=None,
+    marker_namespace=None,
+):
     """Check if a subject has already been processed via explicit markers."""
     if force:
         logging.info(f"Force flag - will reprocess {subject}")
         return False, ""
 
-    subject_state = _read_project_subject_state(project_json_path, subject)
+    subject_state = _read_project_subject_state(
+        project_json_path, subject, marker_namespace=marker_namespace
+    )
     if subject_state and (
         subject_state.get("finished") or subject_state.get("status") == "finished"
     ):
@@ -660,12 +923,14 @@ def _subject_processed(subject, common, app, force=False, project_json_path=None
         return True, "project-marker"
 
     # Check success marker file
-    success_marker = os.path.join(
-        common["output_folder"], ".bids_app_runner", f"{subject}_success.txt"
+    success_markers = _get_success_marker_paths(
+        subject, common, marker_namespace=marker_namespace
     )
-    marker_exists = os.path.exists(success_marker)
+    marker_exists = next((p for p in success_markers if os.path.exists(p)), None)
     if marker_exists:
-        logging.info(f"Subject '{subject}' already processed (success marker found)")
+        logging.info(
+            f"Subject '{subject}' already processed (success marker found: {marker_exists})"
+        )
         return True, "success-marker"
 
     # In project mode, rely only on explicit markers to avoid false positives from
@@ -705,12 +970,17 @@ def _subject_processed(subject, common, app, force=False, project_json_path=None
     return False, ""
 
 
-def _create_success_marker(subject, common):
+def _create_success_marker(subject, common, marker_namespace=None):
     """Create a success marker file for a subject."""
     marker_dir = os.path.join(common["output_folder"], ".bids_app_runner")
     os.makedirs(marker_dir, exist_ok=True)
 
-    marker_file = os.path.join(marker_dir, f"{subject}_success.txt")
+    if marker_namespace:
+        marker_file = os.path.join(
+            marker_dir, f"{marker_namespace}__{subject}_success.txt"
+        )
+    else:
+        marker_file = os.path.join(marker_dir, f"{subject}_success.txt")
     try:
         with open(marker_file, "w") as f:
             f.write(f"Subject {subject} processed successfully\n")
@@ -772,6 +1042,7 @@ def _process_subject(
     force=False,
     debug=False,
     project_json_path=None,
+    marker_namespace=None,
 ):
     """Process a single subject with comprehensive error handling."""
     logging.info(f"Starting processing for subject: {subject}")
@@ -802,6 +1073,7 @@ def _process_subject(
             app,
             force,
             project_json_path=project_json_path,
+            marker_namespace=marker_namespace,
         )
         if already_processed:
             try:
@@ -834,78 +1106,153 @@ def _process_subject(
                     f"Normalized IntendedFor bids:: URIs in runtime BIDS view ({fixed_count} fmap JSON file(s)) for {subject}."
                 )
 
+        execution_adapter = _infer_execution_adapter(common, app)
+        fastsurfer_mode = execution_adapter == "fastsurfer-cross"
+        if fastsurfer_mode and analysis_level != "participant":
+            logging.error(
+                "FastSurfer adapter supports participant-level runs only. "
+                "Set analysis_level to 'participant'."
+            )
+            return False, "failed"
+
         if engine == "docker":
-            cmd = ["docker", "run", "--rm"]
+            base_cmd = ["docker", "run", "--rm"]
 
             # Apple Silicon support
             if platform.system() == "Darwin" and platform.machine() == "arm64":
                 logging.info("Apple Silicon detected - adding platform flag")
-                cmd.extend(["--platform", "linux/amd64"])
+                base_cmd.extend(["--platform", "linux/amd64"])
 
-            cmd.extend(["-e", "TEMPLATEFLOW_HOME=/templateflow"])
+            base_cmd.extend(["-e", "TEMPLATEFLOW_HOME=/templateflow"])
 
             for mnt in _build_common_mounts(common, tmp_dir, bids_mount_source):
-                cmd.extend(["-v", mnt])
+                base_cmd.extend(["-v", mnt])
 
             for mount in app.get("mounts", []):
                 if mount.get("source") and mount.get("target"):
-                    cmd.extend(["-v", f"{mount['source']}:{mount['target']}"])
+                    base_cmd.extend(["-v", f"{mount['source']}:{mount['target']}"])
 
-            cmd.append(common["container"])
+            base_cmd.append(common["container"])
         else:
             # Apptainer/Singularity
-            cmd = ["apptainer", "run"]
+            action = "exec" if fastsurfer_mode else "run"
+            base_cmd = ["apptainer", action]
 
             if app.get("apptainer_args"):
                 safe_args = _sanitize_apptainer_args(app["apptainer_args"])
-                cmd.extend(safe_args)
+                if fastsurfer_mode and "--nv" not in safe_args:
+                    safe_args.append("--nv")
+                base_cmd.extend(safe_args)
             else:
-                cmd.append("--containall")
+                base_cmd.append("--containall")
+                if fastsurfer_mode:
+                    base_cmd.append("--nv")
 
             for mnt in _build_common_mounts(common, tmp_dir, bids_mount_source):
-                cmd.extend(["-B", mnt])
+                base_cmd.extend(["-B", mnt])
 
             for mount in app.get("mounts", []):
                 if mount.get("source") and mount.get("target"):
-                    cmd.extend(["-B", f"{mount['source']}:{mount['target']}"])
+                    base_cmd.extend(["-B", f"{mount['source']}:{mount['target']}"])
 
-            cmd.extend(["--env", "TEMPLATEFLOW_HOME=/templateflow"])
-            cmd.append(common["container"])
+            base_cmd.extend(["--env", "TEMPLATEFLOW_HOME=/templateflow"])
+            base_cmd.append(common["container"])
 
-        # Add common BIDS app arguments
-        cmd.extend(["/bids", "/output", analysis_level])
+        commands = []
+        if fastsurfer_mode:
+            fs_inputs = _discover_fastsurfer_subject_inputs(bids_mount_source, subject)
+            if not fs_inputs:
+                if dry_run:
+                    placeholder_subject = _normalize_subject_id(subject) or "sub-example"
+                    fs_inputs = [
+                        {
+                            "sid": placeholder_subject,
+                            "t1_relpath": f"{placeholder_subject}/anat/{placeholder_subject}_T1w.nii.gz",
+                        }
+                    ]
+                    logging.info(
+                        "FastSurfer adapter dry-run: no T1w found for %s; using placeholder input path.",
+                        subject,
+                    )
+                else:
+                    logging.error(
+                        "FastSurfer adapter: no T1w images found for %s in %s",
+                        subject,
+                        bids_mount_source,
+                    )
+                    return False, "failed"
 
-        app_options = _ensure_mriqc_no_sub_option(container_ref, app.get("options", []))
-        if app_options:
-            cmd.extend(app_options)
+            fs_options = _prepare_fastsurfer_options(app.get("options", []))
+            fs_license_file = common.get("fs_license_file")
 
-        # Ensure FreeSurfer license is passed if provided
-        fs_license_file = common.get("fs_license_file")
-        if fs_license_file:
-            if "--fs-license-file" not in cmd and not any(
-                a.startswith("--fs-license-file=") for a in cmd
-            ):
-                cmd.extend(["--fs-license-file", "/fs/license.txt"])
+            if len(fs_inputs) > 1:
+                logging.info(
+                    "FastSurfer adapter: discovered %d T1w input(s) for %s",
+                    len(fs_inputs),
+                    subject,
+                )
 
-        if analysis_level == "participant":
-            cmd.extend(["--participant-label", subject.replace("sub-", "")])
+            for fs_input in fs_inputs:
+                cmd = list(base_cmd)
+                cmd.extend(
+                    [
+                        "/fastsurfer/run_fastsurfer.sh",
+                        "--t1",
+                        f"/bids/{fs_input['t1_relpath']}",
+                        "--sid",
+                        fs_input["sid"],
+                        "--sd",
+                        "/output",
+                    ]
+                )
+
+                if fs_license_file:
+                    cmd.extend(["--fs_license", "/fs/license.txt"])
+
+                if fs_options:
+                    cmd.extend(fs_options)
+
+                commands.append((cmd, fs_input["sid"]))
         else:
-            logging.info(
-                "Group analysis selected: skipping --participant-label for subject %s",
-                subject,
+            cmd = list(base_cmd)
+            cmd.extend(["/bids", "/output", analysis_level])
+
+            app_options = _ensure_mriqc_no_sub_option(
+                container_ref, app.get("options", [])
             )
+            if app_options:
+                cmd.extend(app_options)
 
-        cmd.extend(["-w", "/tmp"])
+            # Ensure FreeSurfer license is passed if provided
+            fs_license_file = common.get("fs_license_file")
+            if fs_license_file:
+                if "--fs-license-file" not in cmd and not any(
+                    a.startswith("--fs-license-file=") for a in cmd
+                ):
+                    cmd.extend(["--fs-license-file", "/fs/license.txt"])
 
-        # Execute the command
-        result = _run_container(
-            cmd, dry_run=dry_run, debug=debug, subject=subject, log_dir=debug_log_dir
-        )
+            if analysis_level == "participant":
+                cmd.extend(["--participant-label", subject.replace("sub-", "")])
+            else:
+                logging.info(
+                    "Group analysis selected: skipping --participant-label for subject %s",
+                    subject,
+                )
+
+            cmd.extend(["-w", "/tmp"])
+            commands.append((cmd, subject))
+
+        for cmd, run_id in commands:
+            _run_container(
+                cmd,
+                dry_run=dry_run,
+                debug=debug,
+                subject=run_id,
+                log_dir=debug_log_dir,
+            )
 
         if not dry_run:
-            container_success = result is not None and (
-                not hasattr(result, "returncode") or result.returncode == 0
-            )
+            container_success = True
 
             if container_success:
                 logging.info(f"Container execution successful for {subject}")
@@ -919,7 +1266,9 @@ def _process_subject(
                 # Group mode runs once across all participants and should not be
                 # gated on participant-style output detection.
                 if analysis_level == "group":
-                    _create_success_marker(subject, common)
+                    _create_success_marker(
+                        subject, common, marker_namespace=marker_namespace
+                    )
                     logging.info("Group analysis completed successfully")
 
                     try:
@@ -941,7 +1290,9 @@ def _process_subject(
                 )
 
                 if output_exists:
-                    _create_success_marker(subject, common)
+                    _create_success_marker(
+                        subject, common, marker_namespace=marker_namespace
+                    )
                     logging.info(f"Subject {subject} completed successfully")
 
                     try:
@@ -985,10 +1336,12 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
 
     common = config.get("common", {})
     app = config.get("app", {})
+    marker_namespace = _derive_marker_namespace(config)
     project_json_path = _resolve_project_json_path(getattr(args, "config", None))
 
     if project_json_path:
         logging.info(f"Project marker tracking enabled: {project_json_path}")
+        logging.info(f"Project marker namespace: {marker_namespace}")
 
     # Create output directory if it doesn't exist
     output_folder = common.get("output_folder")
@@ -1113,6 +1466,7 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
                 subject,
                 "finished",
                 reason="container-success",
+                marker_namespace=marker_namespace,
             )
         elif success and status == "skipped-success-marker":
             _write_project_subject_state(
@@ -1120,6 +1474,7 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
                 subject,
                 "finished",
                 reason="success-marker-skip",
+                marker_namespace=marker_namespace,
             )
         elif not success:
             _write_project_subject_state(
@@ -1127,6 +1482,7 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
                 subject,
                 "failed",
                 reason="container-failed-or-incomplete",
+                marker_namespace=marker_namespace,
             )
 
     # Process subjects
@@ -1144,6 +1500,7 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
                 force=force,
                 debug=debug,
                 project_json_path=project_json_path,
+                marker_namespace=marker_namespace,
             )
             success, status = _normalize_subject_result(success_raw)
             if success:
@@ -1168,6 +1525,7 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
                 force,
                 debug,
                 project_json_path,
+                marker_namespace,
             )
             success, status = _normalize_subject_result(success_raw)
             if success:
@@ -1195,6 +1553,7 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
                     force,
                     False,
                     project_json_path,
+                    marker_namespace,
                 )
                 future_to_subject[future] = subject
 

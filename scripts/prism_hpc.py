@@ -51,6 +51,73 @@ def _ensure_mriqc_no_sub_option(container_ref, options):
     return opts
 
 
+def _infer_execution_adapter(common, app):
+    """Resolve app execution adapter from explicit config or pipeline metadata."""
+    app_cfg = app if isinstance(app, dict) else {}
+    common_cfg = common if isinstance(common, dict) else {}
+
+    explicit = str(app_cfg.get("execution_adapter", "")).strip().lower()
+    if explicit in {"fastsurfer", "fastsurfer-cross", "bids-fastsurfer"}:
+        return "fastsurfer-cross"
+
+    pipeline_app = str(common_cfg.get("pipeline_app_name", "")).strip().lower()
+    if pipeline_app == "fastsurfer":
+        return "fastsurfer-cross"
+
+    container_ref = str(common_cfg.get("container", "")).strip().lower()
+    if "fastsurfer" in container_ref:
+        return "fastsurfer-cross"
+
+    return ""
+
+
+def _drop_runtime_flags(options, flag_names):
+    """Drop flags (and optional values) from tokenized CLI options."""
+    cleaned = []
+    i = 0
+    flags = set(flag_names)
+    while i < len(options):
+        token = str(options[i])
+        if token in flags:
+            if i + 1 < len(options) and not str(options[i + 1]).startswith("-"):
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if token.startswith("--") and "=" in token:
+            left = token.split("=", 1)[0]
+            if left in flags:
+                i += 1
+                continue
+
+        cleaned.append(token)
+        i += 1
+
+    return cleaned
+
+
+def _prepare_fastsurfer_options(options):
+    """Normalize options for /fastsurfer/run_fastsurfer.sh."""
+    opts = [str(x) for x in (options or [])]
+    normalized = []
+    for token in opts:
+        if token == "--qc":
+            normalized.append("--qc_snap")
+        else:
+            normalized.append(token)
+    forbidden = {
+        "--t1",
+        "--sid",
+        "--sd",
+        "--fs_license",
+        "--fs",
+        "--participant-label",
+        "-w",
+    }
+    return _drop_runtime_flags(normalized, forbidden)
+
+
 # ============================================================================
 # SLURM Job Management Functions
 # ============================================================================
@@ -65,6 +132,15 @@ def create_slurm_job(subject, config, work_dir, dry_run=False, debug=False):
         app = config["app"]
         hpc = config["hpc"]
         datalad = config.get("datalad", {})
+        analysis_level = (
+            str(app.get("analysis_level", "participant")).strip() or "participant"
+        )
+        execution_adapter = _infer_execution_adapter(common, app)
+        fastsurfer_mode = execution_adapter == "fastsurfer-cross"
+        if fastsurfer_mode and analysis_level != "participant":
+            raise ValueError(
+                "FastSurfer adapter supports participant-level runs only in HPC mode."
+            )
 
         job_name = f"{hpc['job_name']}_{subject}"
         job_script = os.path.join(work_dir, f"job_{subject}.sh")
@@ -176,52 +252,7 @@ else
     echo "Error: Failed to retrieve data for {subject}"
     exit 1
 fi
-
-# Run the BIDS app
-echo "Running BIDS app for {subject}"
-echo "Container: {common["container"]}"
-
-apptainer run \\"""
-
-        # Add apptainer arguments
-        if app.get("apptainer_args"):
-            for arg in app["apptainer_args"]:
-                script_content += f"    {arg} \\\n"
-        else:
-            script_content += "    --containall \\\n"
-
-        # Add bind mounts
-        script_content += f"""    -B {tmp_dir}:/tmp \\
-    -B {output_dir}:/output \\
-    -B {bids_dir}:/bids \\"""
-
-        # Add templateflow only if specified
-        if common.get("templateflow_dir"):
-            script_content += f"\n    -B {common['templateflow_dir']}:/templateflow \\"
-
-        if common.get("optional_folder"):
-            script_content += f"\n    -B {common['optional_folder']}:/base \\"
-
-        # Add custom mounts
-        for mount in app.get("mounts", []):
-            if mount.get("source") and mount.get("target"):
-                script_content += f"\n    -B {mount['source']}:{mount['target']} \\"
-
-        # Add environment and container
-        script_content += f"""
-    --env TEMPLATEFLOW_HOME=/templateflow \\
-    {common["container"]} \\
-    /bids /output {app.get("analysis_level", "participant")} \\"""
-
-        # Add app options
-        app_options = _ensure_mriqc_no_sub_option(
-            common.get("container", ""), app.get("options", [])
-        )
-        for option in app_options:
-            script_content += f"\n    {option} \\"
-
-        # Clean subject label (remove sub- prefix if present)
-        subject_label = subject.replace("sub-", "")
+"""
 
         # Add debug logging setup if debug mode is enabled
         container_log_redirection = ""
@@ -237,13 +268,158 @@ apptainer run \\"""
                 f" > >(tee {container_stdout_log}) 2> >(tee {container_stderr_log} >&2)"
             )
 
-        # Add participant label and completion logic
         script_content += f"""
+# Run the BIDS app
+echo "Running BIDS app for {subject}"
+echo "Container: {common["container"]}"
+"""
+
+        if fastsurfer_mode:
+            script_content += f"""
+FASTSURFER_SUBJECT="{subject}"
+mapfile -t FASTSURFER_T1_LIST < <(find "{bids_dir}/$FASTSURFER_SUBJECT" -type f \\( -name "*_desc-preproc_T1w.nii.gz" -o -name "*_T1w.nii.gz" -o -name "*_T1w.nii" \\) | sort)
+if [ ${{#FASTSURFER_T1_LIST[@]}} -eq 0 ]; then
+    echo "Error: No T1w image found for $FASTSURFER_SUBJECT"
+    exit 1
+fi
+echo "FastSurfer mode: found ${{#FASTSURFER_T1_LIST[@]}} T1w image(s) for $FASTSURFER_SUBJECT"
+
+FASTSURFER_EXIT=0
+for FASTSURFER_T1_HOST in "${{FASTSURFER_T1_LIST[@]}}"; do
+    FASTSURFER_T1_REL=$(echo "$FASTSURFER_T1_HOST" | sed 's#^{bids_dir}/##')
+    FASTSURFER_T1_CONTAINER="/bids/$FASTSURFER_T1_REL"
+    FASTSURFER_SID="$FASTSURFER_SUBJECT"
+    FASTSURFER_SESSION=$(echo "$FASTSURFER_T1_REL" | grep -o 'ses-[^/]*' | head -n 1 || true)
+    if [ -n "$FASTSURFER_SESSION" ]; then
+        FASTSURFER_SID="$FASTSURFER_SUBJECT"_"$FASTSURFER_SESSION"
+    fi
+
+    echo "FastSurfer mode: using $FASTSURFER_T1_CONTAINER with SID $FASTSURFER_SID"
+
+    apptainer exec \\
+"""
+
+            apptainer_args = [str(arg) for arg in app.get("apptainer_args", [])]
+            if not apptainer_args:
+                apptainer_args = ["--containall"]
+            if "--nv" not in apptainer_args:
+                apptainer_args.append("--nv")
+
+            for arg in apptainer_args:
+                script_content += f"        {arg} \\\n"
+
+            script_content += f"""        -B {tmp_dir}:/tmp \\
+        -B {output_dir}:/output \\
+        -B {bids_dir}:/bids \\
+"""
+
+            if common.get("templateflow_dir"):
+                script_content += (
+                    f"\n        -B {common['templateflow_dir']}:/templateflow \\"
+                )
+
+            if common.get("optional_folder"):
+                script_content += f"\n        -B {common['optional_folder']}:/base \\"
+
+            if common.get("fs_license_file"):
+                script_content += (
+                    f"\n        -B {common['fs_license_file']}:/fs/license.txt:ro \\"
+                )
+
+            for mount in app.get("mounts", []):
+                if mount.get("source") and mount.get("target"):
+                    script_content += (
+                        f"\n        -B {mount['source']}:{mount['target']} \\"
+                    )
+
+            script_content += f"""
+        --env TEMPLATEFLOW_HOME=/templateflow \\
+        {common["container"]} \\
+        /fastsurfer/run_fastsurfer.sh \\
+        --t1 "$FASTSURFER_T1_CONTAINER" \\
+        --sid "$FASTSURFER_SID" \\
+        --sd /output \\
+"""
+
+            if common.get("fs_license_file"):
+                script_content += "\n        --fs_license /fs/license.txt \\\\"
+
+            app_options = _prepare_fastsurfer_options(app.get("options", []))
+            for option in app_options:
+                script_content += f"\n        {option} \\"
+
+            script_content += f"""
+        {container_log_redirection} ;
+
+    FASTSURFER_CMD_RC=$?
+    if [ $FASTSURFER_CMD_RC -ne 0 ]; then
+        echo "FastSurfer failed for SID $FASTSURFER_SID (exit $FASTSURFER_CMD_RC)"
+        FASTSURFER_EXIT=$FASTSURFER_CMD_RC
+        break
+    fi
+done
+
+PROCESS_EXIT_CODE=$FASTSURFER_EXIT
+"""
+        if not fastsurfer_mode:
+            script_content += """
+apptainer run \\
+"""
+
+            apptainer_args = [str(arg) for arg in app.get("apptainer_args", [])]
+            if not apptainer_args:
+                apptainer_args = ["--containall"]
+            for arg in apptainer_args:
+                script_content += f"    {arg} \\\n"
+
+            script_content += f"""    -B {tmp_dir}:/tmp \\
+    -B {output_dir}:/output \\
+    -B {bids_dir}:/bids \\
+"""
+
+            if common.get("templateflow_dir"):
+                script_content += f"\n    -B {common['templateflow_dir']}:/templateflow \\"
+            if common.get("optional_folder"):
+                script_content += f"\n    -B {common['optional_folder']}:/base \\"
+            if common.get("fs_license_file"):
+                script_content += (
+                    f"\n    -B {common['fs_license_file']}:/fs/license.txt:ro \\"
+                )
+            for mount in app.get("mounts", []):
+                if mount.get("source") and mount.get("target"):
+                    script_content += f"\n    -B {mount['source']}:{mount['target']} \\"
+
+            script_content += f"""
+    --env TEMPLATEFLOW_HOME=/templateflow \\
+    {common["container"]} \\
+    /bids /output {analysis_level} \\
+"""
+
+            app_options = _ensure_mriqc_no_sub_option(
+                common.get("container", ""), app.get("options", [])
+            )
+            if common.get("fs_license_file"):
+                if "--fs-license-file" not in app_options and not any(
+                    str(a).startswith("--fs-license-file=") for a in app_options
+                ):
+                    app_options.extend(["--fs-license-file", "/fs/license.txt"])
+
+            for option in app_options:
+                script_content += f"\n    {option} \\"
+
+            subject_label = subject.replace("sub-", "")
+            script_content += f"""
     --participant-label {subject_label} \\
     -w /tmp{container_log_redirection}
+"""
 
+            script_content += """
+PROCESS_EXIT_CODE=$?
+"""
+
+        script_content += f"""
 # Check if processing was successful
-if [ $? -eq 0 ]; then
+if [ $PROCESS_EXIT_CODE -eq 0 ]; then
     echo "Processing completed successfully for {subject}"
     
     # Save results to output repository
@@ -251,7 +427,7 @@ if [ $? -eq 0 ]; then
     echo "Changed to output directory: {output_dir}"
     
     # Create output branch if it doesn't exist
-    echo "Setting up output branch: {datalad.get("output_branch", "results")}"
+    echo "Setting up output branch: {datalad.get("output_branch", "results")}" 
     git checkout {datalad.get("output_branch", "results")} 2>/dev/null || git checkout -b {datalad.get("output_branch", "results")}
     
     # Add and save results
@@ -274,7 +450,7 @@ else
     echo "Processing failed for {subject}"
     echo "Temporary directory preserved at: {tmp_dir}"
     echo "Check logs for details"
-    exit 1
+    exit $PROCESS_EXIT_CODE
 fi
 
 echo "Job completed at: $(date)"

@@ -1273,6 +1273,7 @@ class BIDSOutputValidator:
     PIPELINE_CHECKERS = {
         "fmriprep": FMRIPrepChecker,
         "freesurfer": FreeSurferChecker,
+        "fastsurfer": FreeSurferChecker,
         "qsiprep": QSIPrepChecker,
         "qsirecon": QSIReconChecker,
         "mriqc": MRIQCChecker,
@@ -1293,6 +1294,60 @@ class BIDSOutputValidator:
         self.quiet = quiet
         self.setup_logging(verbose, quiet, log_file)
         self.results = {}
+
+    @staticmethod
+    def _looks_like_pipeline_dir(path: Path) -> bool:
+        """Heuristic check for directories that look like pipeline outputs."""
+        if not path.exists() or not path.is_dir():
+            return False
+
+        if (path / "dataset_description.json").exists():
+            return True
+        if (path / "logs").exists() or (path / "log").exists():
+            return True
+        if any(path.glob("sub-*")):
+            return True
+        if any(path.glob("*.html")):
+            return True
+        if any(path.glob("qsirecon-*")):
+            return True
+
+        return False
+
+    def _parse_pipeline_selector(self, pipeline_selector: str):
+        """Parse selectors like 'fmriprep' or 'fmriprep@v1.0'."""
+        raw = str(pipeline_selector or "").strip()
+        if "@" in raw:
+            base, variant = raw.split("@", 1)
+            return base.strip().lower(), variant.strip()
+        return raw.strip().lower(), ""
+
+    def _resolve_pipeline_context(self, pipeline_selector: str):
+        """Resolve checker name and target directory for a pipeline selector."""
+        checker_name, variant = self._parse_pipeline_selector(pipeline_selector)
+        if checker_name not in self.PIPELINE_CHECKERS:
+            raise ValueError(f"Unknown pipeline: {pipeline_selector}")
+
+        selector_name = (
+            f"{checker_name}@{variant}" if variant else checker_name
+        )
+
+        if checker_name == "qsirecon":
+            if variant:
+                pipeline_dir = self.derivatives_dir / "qsirecon" / variant
+            else:
+                pipeline_dir = self.derivatives_dir
+            checker_root = pipeline_dir
+            return selector_name, checker_name, pipeline_dir, checker_root
+
+        if variant:
+            pipeline_dir = self.derivatives_dir / checker_name / variant
+            checker_root = pipeline_dir
+        else:
+            pipeline_dir = self.derivatives_dir / checker_name
+            checker_root = self.derivatives_dir
+
+        return selector_name, checker_name, pipeline_dir, checker_root
 
     def setup_logging(
         self, verbose: bool, quiet: bool, log_file: Optional[Path] = None
@@ -1345,49 +1400,68 @@ class BIDSOutputValidator:
     def discover_pipelines(self) -> List[str]:
         """Automatically discover available pipelines in derivatives directory."""
         discovered = []
+        seen = set()
+
+        def _add(selector: str):
+            if selector not in seen:
+                seen.add(selector)
+                discovered.append(selector)
 
         for pipeline_name in self.PIPELINE_CHECKERS.keys():
             if pipeline_name == "qsirecon":
-                # QSIRecon has special structure
-                qsirecon_dirs = list(self.derivatives_dir.glob("qsirecon*"))
+                # Classic qsirecon-* structure in derivatives root.
+                qsirecon_dirs = [
+                    d
+                    for d in self.derivatives_dir.glob("qsirecon*")
+                    if d.is_dir()
+                ]
                 if qsirecon_dirs:
-                    discovered.append(pipeline_name)
+                    _add(pipeline_name)
+
+                # Versioned structure: derivatives/qsirecon/<version>/...
+                version_root = self.derivatives_dir / "qsirecon"
+                if version_root.exists() and version_root.is_dir():
+                    for child in sorted(version_root.iterdir()):
+                        if child.is_dir() and self._looks_like_pipeline_dir(child):
+                            _add(f"{pipeline_name}@{child.name}")
             else:
                 pipeline_dir = self.derivatives_dir / pipeline_name
+                if self._looks_like_pipeline_dir(pipeline_dir):
+                    _add(pipeline_name)
+
+                # Versioned structure: derivatives/<pipeline>/<version>/...
                 if pipeline_dir.exists() and pipeline_dir.is_dir():
-                    discovered.append(pipeline_name)
+                    for child in sorted(pipeline_dir.iterdir()):
+                        if child.is_dir() and self._looks_like_pipeline_dir(child):
+                            _add(f"{pipeline_name}@{child.name}")
 
         return discovered
 
     def validate_pipeline(self, pipeline_name: str) -> Dict:
         """Validate a specific pipeline."""
-        if pipeline_name not in self.PIPELINE_CHECKERS:
-            raise ValueError(f"Unknown pipeline: {pipeline_name}")
+        selector_name, checker_name, pipeline_dir, checker_root = (
+            self._resolve_pipeline_context(pipeline_name)
+        )
 
         if logging.getLogger().getEffectiveLevel() <= logging.INFO:
-            self.logger.info(f"Validating pipeline: {pipeline_name}")
+            self.logger.info(f"Validating pipeline: {selector_name}")
 
-        # Determine pipeline directory
-        if pipeline_name == "qsirecon":
-            pipeline_dir = self.derivatives_dir  # QSIRecon looks for subdirs
-        else:
-            pipeline_dir = self.derivatives_dir / pipeline_name
-            if not pipeline_dir.exists():
-                return {
-                    "pipeline": pipeline_name,
-                    "status": "not_found",
-                    "missing_items": [f"Pipeline directory not found: {pipeline_dir}"],
-                    "total_missing": 1,
-                }
+        if not pipeline_dir.exists():
+            return {
+                "pipeline": selector_name,
+                "status": "not_found",
+                "missing_items": [f"Pipeline directory not found: {pipeline_dir}"],
+                "total_missing": 1,
+            }
 
         # Run the checker
-        checker_class = self.PIPELINE_CHECKERS[pipeline_name]
-        checker = checker_class(self.bids_dir, self.derivatives_dir)
+        checker_class = self.PIPELINE_CHECKERS[checker_name]
+        checker = checker_class(self.bids_dir, checker_root)
 
         success = checker.check_pipeline(pipeline_dir)
 
         return {
-            "pipeline": pipeline_name,
+            "pipeline": selector_name,
             "status": "passed" if success else "failed",
             "missing_items": checker.missing_items,
             "total_missing": len(checker.missing_items),
@@ -1399,11 +1473,8 @@ class BIDSOutputValidator:
     def validate_all(self, specific_pipeline: Optional[str] = None) -> Dict:
         """Validate all discovered pipelines or a specific one."""
         if specific_pipeline:
-            pipelines = (
-                [specific_pipeline]
-                if specific_pipeline in self.PIPELINE_CHECKERS
-                else []
-            )
+            base_name, _variant = self._parse_pipeline_selector(specific_pipeline)
+            pipelines = [specific_pipeline] if base_name in self.PIPELINE_CHECKERS else []
             if not pipelines:
                 raise ValueError(f"Unknown pipeline: {specific_pipeline}")
         else:
