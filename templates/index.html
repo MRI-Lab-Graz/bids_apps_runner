@@ -1468,6 +1468,7 @@
         let buildTagFetchInProgress = false;
         let globalMachineSettings = null;
         let latestRunStatus = null;
+        let currentOptionHelpCache = null;
 
         function isQsireconContainer() {
             const engine = document.getElementById('container_engine').value;
@@ -3001,12 +3002,17 @@
                 const resp = await fetch(`/load_project/${projectId}`);
                 const project = await resp.json();
                 
-                if (resp.status === 404) {
-                    showStatus("Project not found", true);
+                if (!resp.ok) {
+                    const errMsg = project && project.error
+                        ? project.error
+                        : (resp.status === 404 ? 'Project not found' : 'Failed to load project');
+                    showStatus(errMsg, true);
                     return;
                 }
 
                 await applyProjectData(project, projectId);
+                await loadRecentProjects();
+                showStatus(`Switched to project: ${project.name || project.id || projectId}`);
             } catch (e) {
                 showStatus("Failed to load project: " + e.message, true);
             }
@@ -3117,6 +3123,155 @@
             if (skippedDeprecated.length > 0) {
                 const uniqueDeprecated = Array.from(new Set(skippedDeprecated));
                 showStatus(`Ignored deprecated option(s): ${uniqueDeprecated.join(', ')}`, true);
+            }
+        }
+
+        function _isOptionHelpCacheUsable(cache, container, engine) {
+            if (!cache || typeof cache !== 'object') return false;
+            if ((cache.container || '') !== (container || '')) return false;
+            if ((cache.engine || '') !== (engine || '')) return false;
+            const payload = cache.payload;
+            return !!(payload && typeof payload === 'object' && Array.isArray(payload.sections));
+        }
+
+        function _getActivePipelineOptionHelpCache() {
+            const entry = getCurrentPipelineEntry();
+            const app = (entry && entry.app && typeof entry.app === 'object') ? entry.app : null;
+            if (!app) return null;
+            return app.option_help_cache || null;
+        }
+
+        function _persistActivePipelineOptionHelpCache(cache) {
+            if (!lastProjectId || !currentPipelineId || !currentProjectPipelines[currentPipelineId]) return;
+            const existingEntry = normalizePipelineEntry(
+                currentProjectPipelines[currentPipelineId] || {},
+                currentPipelineId
+            );
+            const app = cloneJson(existingEntry.app) || {};
+            app.option_help_cache = cloneJson(cache);
+            currentProjectPipelines[currentPipelineId] = {
+                ...existingEntry,
+                app,
+            };
+            syncCurrentProjectConfigWithPipelines();
+        }
+
+        function _renderDynamicOptionsFromHelpData(
+            data,
+            container,
+            {
+                quietSuccess = false,
+                detectedOutputResolution = null,
+                detectedOutputResolutionInfo = null,
+                restoredFromCache = false,
+            } = {}
+        ) {
+            const defaultCheckedFlags = new Set();
+            if (String(container || '').toLowerCase().includes('fmriprep')) {
+                defaultCheckedFlags.add('--fs-no-reconall');
+            }
+
+            const containerEl = document.getElementById('optionsContainer');
+            document.getElementById('dynamicOptionsSection').style.display = 'block';
+
+            if (data.app_info) document.getElementById('docLink').href = data.app_info.url;
+            currentDeprecatedFlags = new Set(data.deprecated_flags || []);
+            containerEl.innerHTML = '';
+
+            if (data.sections && data.sections.length > 0) {
+                data.sections.forEach((sec, idx) => {
+                    const secDiv = document.createElement('div');
+                    secDiv.className = 'opt-section' + (idx === 0 ? ' active' : '');
+                    const h = document.createElement('div');
+                    h.className = 'opt-section-header';
+                    h.innerHTML = `<span>${sec.title}</span><i class="fas fa-caret-down"></i>`;
+                    h.onclick = () => {
+                        secDiv.classList.toggle('active');
+                    };
+                    const content = document.createElement('div');
+                    content.className = 'opt-section-content';
+                    sec.options.forEach(opt => {
+                        const item = document.createElement('div');
+                        item.className = 'p-3 border rounded bg-light d-flex flex-column';
+                        let input = '';
+                        const reqMark = opt.required ? ' <span class="text-danger">*</span>' : '';
+                        const reqAttr = opt.required ? ' data-required="true"' : '';
+                        const optDefaultValue = (opt.flag === '--output-resolution' && detectedOutputResolution) ? detectedOutputResolution : '';
+
+                        if (opt.choices && opt.choices.length > 0) {
+                            if (opt.is_multiple) {
+                                let chks = '';
+                                opt.choices.forEach(ch => {
+                                    chks += `<div class="form-check"><input type="checkbox" class="form-check-input dynamic-opt-multi" data-flag="${opt.flag}" value="${ch}"> <label class="form-check-label">${ch}</label></div>`;
+                                });
+                                input = `<label class="form-label">${opt.name}${reqMark}</label><div${reqAttr} class="dynamic-opt-multi-wrap" data-flag="${opt.flag}" style="max-height:120px;overflow:auto;border:1px solid #dee2e6;padding:10px;background:white;border-radius:6px;">${chks}</div>`;
+                            } else {
+                                let opts = '<option value="">-- Default --</option>';
+                                opt.choices.forEach(ch => opts += `<option value="${ch}">${ch}</option>`);
+                                input = `<label class="form-label">${opt.name}${reqMark}</label><select class="dynamic-opt form-select" data-flag="${opt.flag}"${reqAttr} onchange="updateOptPreview(this)">${opts}</select>`;
+                            }
+                        } else if (opt.has_value) {
+                            if (opt.is_multiple) {
+                                input = `<label class="form-label">${opt.name}${reqMark}</label><textarea class="dynamic-opt form-control" data-flag="${opt.flag}"${reqAttr} placeholder="Enter values (one per line)" oninput="updateOptPreview(this)"></textarea>`;
+                            } else {
+                                input = `<label class="form-label">${opt.name}${reqMark}</label><input type="text" class="dynamic-opt form-control" data-flag="${opt.flag}"${reqAttr} value="${optDefaultValue}" oninput="updateOptPreview(this)">`;
+                            }
+                        } else {
+                            const isDefaultChecked = defaultCheckedFlags.has(opt.flag);
+                            let boolOptions = '';
+                            if (opt.is_negated) {
+                                boolOptions = `<option value="enabled"${!isDefaultChecked ? ' selected' : ''}>Enabled</option>
+                                               <option value="disabled"${isDefaultChecked ? ' selected' : ''}>Disabled</option>`;
+                            } else {
+                                boolOptions = `<option value="disabled"${!isDefaultChecked ? ' selected' : ''}>Disabled</option>
+                                               <option value="enabled"${isDefaultChecked ? ' selected' : ''}>Enabled</option>`;
+                            }
+
+                            input = `<label class="form-label">${opt.name}${reqMark}</label>
+                                     <select class="dynamic-opt-bool form-select" data-flag="${opt.flag}" data-negated="${opt.is_negated}"${reqAttr} onchange="updateOptPreview(this)">
+                                     ${boolOptions}
+                                     </select>`;
+                        }
+
+                        const desc = opt.description ? `<div style="font-size:0.7rem;color:#777;margin-top:10px;line-height:1.4;border-top:1px solid #eee;padding-top:8px;">${opt.description}</div>` : '';
+                        const preview = `<div class="mt-2"><span class="badge bg-secondary opacity-50 font-monospace opt-preview" style="font-size:0.65rem;"></span></div>`;
+
+                        item.innerHTML = input + preview + desc;
+                        content.appendChild(item);
+
+                        const selectEl = item.querySelector('.dynamic-opt, .dynamic-opt-bool, .dynamic-opt-multi, input, textarea');
+                        if (selectEl) updateOptPreview(selectEl);
+                    });
+                    secDiv.appendChild(h);
+                    secDiv.appendChild(content);
+                    containerEl.appendChild(secDiv);
+                });
+
+                if (detectedOutputResolution && detectedOutputResolutionInfo) {
+                    const zooms = (detectedOutputResolutionInfo.voxel_sizes_mm || []).join(' x ');
+                    showStatus(`Auto-filled --output-resolution from native DWI voxel size (${zooms} mm → ${detectedOutputResolution} mm).`);
+                }
+
+                if (!quietSuccess) {
+                    endRunnerOptionsLoad('Container options are ready.');
+                } else if (restoredFromCache) {
+                    endRunnerOptionsLoad('Container options restored from saved project cache.');
+                } else {
+                    endRunnerOptionsLoad('Container options restored from project.');
+                }
+                return;
+            }
+
+            let msg = '<div class="text-center p-4">No specific options detected for this container.</div>';
+            if (data.raw_help) {
+                msg += `<div class="mt-3"><button class="btn btn-sm btn-outline-secondary" onclick="this.nextElementSibling.style.display='block'; this.style.display='none'">Show Raw Help Output</button>
+                       <pre style="display:none; text-align:left; font-size:0.7rem; background:#f8f9fa; padding:15px; margin-top:10px; border:1px solid #eee; border-radius:5px; max-height:300px; overflow:auto;">${data.raw_help}</pre></div>`;
+            }
+            containerEl.innerHTML = msg;
+            if (restoredFromCache) {
+                endRunnerOptionsLoad('No specific options detected (restored from saved project cache).');
+            } else {
+                endRunnerOptionsLoad('No specific options detected for this container.');
             }
         }
 
@@ -3245,7 +3400,16 @@
                 if (isStaleProjectLoad(loadToken)) return;
                 const shouldLoadOptions = !!common.container;
                 if (shouldLoadOptions) {
-                    await fetchAppOptions(loadToken, { quietSuccess: true });
+                    const engine = common.container_engine || 'apptainer';
+                    const cachedHelp = (cfg && cfg.app && cfg.app.option_help_cache)
+                        ? cfg.app.option_help_cache
+                        : null;
+                    await fetchAppOptions(loadToken, {
+                        quietSuccess: true,
+                        cachedHelp: _isOptionHelpCacheUsable(cachedHelp, common.container || '', engine)
+                            ? cachedHelp
+                            : null,
+                    });
                     if (isStaleProjectLoad(loadToken)) return;
                     applySavedAppConfig(cfg);
                 }
@@ -3751,6 +3915,7 @@
 
         async function fetchAppOptions(loadToken = null, options = {}) {
             const quietSuccess = !!options.quietSuccess;
+            const cachedHelp = options.cachedHelp || null;
             if (isStaleProjectLoad(loadToken)) return;
             const engine = document.getElementById('container_engine').value;
             let container;
@@ -3808,6 +3973,22 @@
                     endRunnerOptionsLoad('');
                     return;
                 }
+
+                if (_isOptionHelpCacheUsable(cachedHelp, container, engine)) {
+                    currentOptionHelpCache = cloneJson(cachedHelp);
+                    _renderDynamicOptionsFromHelpData(
+                        cachedHelp.payload,
+                        container,
+                        {
+                            quietSuccess,
+                            detectedOutputResolution,
+                            detectedOutputResolutionInfo,
+                            restoredFromCache: true,
+                        }
+                    );
+                    return;
+                }
+
                 if (engine === 'apptainer') checkAppVersion(loadToken);
                 const resp = await fetch('/get_app_help', { 
                     method: 'POST', 
@@ -3838,107 +4019,29 @@
                     return;
                 }
 
-                if (data.app_info) document.getElementById('docLink').href = data.app_info.url;
-                currentDeprecatedFlags = new Set(data.deprecated_flags || []);
-                containerEl.innerHTML = '';
-                
-                if (data.sections && data.sections.length > 0) {
-                    data.sections.forEach((sec, idx) => {
-                        const secDiv = document.createElement('div');
-                        secDiv.className = 'opt-section' + (idx === 0 ? ' active' : '');
-                        const h = document.createElement('div');
-                        h.className = 'opt-section-header';
-                        h.innerHTML = `<span>${sec.title}</span><i class="fas fa-caret-down"></i>`;
-                        h.onclick = () => {
-                            secDiv.classList.toggle('active');
-                        };
-                        const content = document.createElement('div');
-                        content.className = 'opt-section-content';
-                        sec.options.forEach(opt => {
-                            const item = document.createElement('div');
-                            item.className = 'p-3 border rounded bg-light d-flex flex-column';
-                            let input = '';
-                            let previewStr = '';
-                            const reqMark = opt.required ? ' <span class="text-danger">*</span>' : '';
-                            const reqAttr = opt.required ? ' data-required="true"' : '';
-                            const optDefaultValue = (opt.flag === '--output-resolution' && detectedOutputResolution) ? detectedOutputResolution : '';
+                currentOptionHelpCache = {
+                    container,
+                    engine,
+                    timestamp: new Date().toISOString(),
+                    payload: {
+                        app_info: data.app_info || null,
+                        deprecated_flags: data.deprecated_flags || [],
+                        sections: data.sections || [],
+                        raw_help: data.raw_help || '',
+                    },
+                };
+                _persistActivePipelineOptionHelpCache(currentOptionHelpCache);
 
-                            if (opt.choices && opt.choices.length > 0) {
-                                if (opt.is_multiple) {
-                                    let chks = '';
-                                    opt.choices.forEach(ch => {
-                                        chks += `<div class="form-check"><input type="checkbox" class="form-check-input dynamic-opt-multi" data-flag="${opt.flag}" value="${ch}"> <label class="form-check-label">${ch}</label></div>`;
-                                    });
-                                    input = `<label class="form-label">${opt.name}${reqMark}</label><div${reqAttr} class="dynamic-opt-multi-wrap" data-flag="${opt.flag}" style="max-height:120px;overflow:auto;border:1px solid #dee2e6;padding:10px;background:white;border-radius:6px;">${chks}</div>`;
-                                } else {
-                                    let opts = '<option value="">-- Default --</option>';
-                                    opt.choices.forEach(ch => opts += `<option value="${ch}">${ch}</option>`);
-                                    input = `<label class="form-label">${opt.name}${reqMark}</label><select class="dynamic-opt form-select" data-flag="${opt.flag}"${reqAttr} onchange="updateOptPreview(this)">${opts}</select>`;
-                                }
-                            } else if (opt.has_value) {
-                                if (opt.is_multiple) {
-                                    input = `<label class="form-label">${opt.name}${reqMark}</label><textarea class="dynamic-opt form-control" data-flag="${opt.flag}"${reqAttr} placeholder="Enter values (one per line)" oninput="updateOptPreview(this)"></textarea>`;
-                                } else {
-                                    input = `<label class="form-label">${opt.name}${reqMark}</label><input type="text" class="dynamic-opt form-control" data-flag="${opt.flag}"${reqAttr} value="${optDefaultValue}" oninput="updateOptPreview(this)">`;
-                                }
-                            } else {
-                                // Boolean Flag: use Enabled/Disabled toggle for clarity
-                                const isDefaultChecked = defaultCheckedFlags.has(opt.flag);
-                                // For negated flags, "Checked" (Disabled) usually means adding the flag.
-                                // Logic: 
-                                //   Standard: Enabled (no flag) | Disabled (not possible usually unless default is on, but we follow standard CLI)
-                                //   Actually, let's keep it simple: 
-                                //   If standard flag: Enabled -> add flag, Disabled -> omit.
-                                //   If negated flag: Enabled -> omit flag, Disabled -> add flag.
-                                
-                                let options = '';
-                                if (opt.is_negated) {
-                                    // Default (Enabled) is "no flag", Disabled is "add flag"
-                                    options = `<option value="enabled"${!isDefaultChecked ? ' selected' : ''}>Enabled</option>
-                                               <option value="disabled"${isDefaultChecked ? ' selected' : ''}>Disabled</option>`;
-                                } else {
-                                    // Default (Disabled) is "no flag", Enabled is "add flag"
-                                    options = `<option value="disabled"${!isDefaultChecked ? ' selected' : ''}>Disabled</option>
-                                               <option value="enabled"${isDefaultChecked ? ' selected' : ''}>Enabled</option>`;
-                                }
-                                
-                                          input = `<label class="form-label">${opt.name}${reqMark}</label>
-                                                      <select class="dynamic-opt-bool form-select" data-flag="${opt.flag}" data-negated="${opt.is_negated}"${reqAttr} onchange="updateOptPreview(this)">
-                                            ${options}
-                                         </select>`;
-                            }
-                            
-                            const desc = opt.description ? `<div style="font-size:0.7rem;color:#777;margin-top:10px;line-height:1.4;border-top:1px solid #eee;padding-top:8px;">${opt.description}</div>` : '';
-                            const preview = `<div class="mt-2"><span class="badge bg-secondary opacity-50 font-monospace opt-preview" style="font-size:0.65rem;"></span></div>`;
-                            
-                            item.innerHTML = input + preview + desc;
-                            content.appendChild(item);
-                            
-                            // Initialize preview
-                            const selectEl = item.querySelector('.dynamic-opt, .dynamic-opt-bool, .dynamic-opt-multi, input, textarea');
-                            if (selectEl) updateOptPreview(selectEl);
-                        });
-                        secDiv.appendChild(h); secDiv.appendChild(content); containerEl.appendChild(secDiv);
-                    });
-
-                    if (detectedOutputResolution && detectedOutputResolutionInfo) {
-                        const zooms = (detectedOutputResolutionInfo.voxel_sizes_mm || []).join(' x ');
-                        showStatus(`Auto-filled --output-resolution from native DWI voxel size (${zooms} mm → ${detectedOutputResolution} mm).`);
+                _renderDynamicOptionsFromHelpData(
+                    currentOptionHelpCache.payload,
+                    container,
+                    {
+                        quietSuccess,
+                        detectedOutputResolution,
+                        detectedOutputResolutionInfo,
+                        restoredFromCache: false,
                     }
-                    if (!quietSuccess) {
-                        endRunnerOptionsLoad('Container options are ready.');
-                    } else {
-                        endRunnerOptionsLoad('Container options restored from project.');
-                    }
-                } else {
-                    let msg = '<div class="text-center p-4">No specific options detected for this container.</div>';
-                    if (data.raw_help) {
-                        msg += `<div class="mt-3"><button class="btn btn-sm btn-outline-secondary" onclick="this.nextElementSibling.style.display='block'; this.style.display='none'">Show Raw Help Output</button>
-                               <pre style="display:none; text-align:left; font-size:0.7rem; background:#f8f9fa; padding:15px; margin-top:10px; border:1px solid #eee; border-radius:5px; max-height:300px; overflow:auto;">${data.raw_help}</pre></div>`;
-                    }
-                    containerEl.innerHTML = msg;
-                    endRunnerOptionsLoad('No specific options detected for this container.');
-                }
+                );
             } catch (e) {
                 containerEl.innerHTML = `<div class="alert alert-danger m-4">Connection error. Could not retrieve container help.</div>`;
                 endRunnerOptionsLoad('Could not retrieve container options.', true);
@@ -4143,6 +4246,18 @@
                 options: opts,
                 mounts: mounts
             };
+
+            const existingPipelineApp = (
+                lastProjectId && currentPipelineId && currentProjectPipelines[currentPipelineId]
+            )
+                ? (currentProjectPipelines[currentPipelineId].app || {})
+                : {};
+            if (
+                existingPipelineApp.option_help_cache &&
+                _isOptionHelpCacheUsable(existingPipelineApp.option_help_cache, containerPath, engine)
+            ) {
+                activeApp.option_help_cache = cloneJson(existingPipelineApp.option_help_cache);
+            }
 
             if (resolvedPipelineAppName === 'fastsurfer') {
                 activeApp.execution_adapter = 'fastsurfer-cross';
