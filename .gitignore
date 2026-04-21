@@ -30,3 +30,7 @@ docs/_build/
 node_modules
 .venv
 venv
+
+# Coverage artifacts
+.coverage
+coverage.xml

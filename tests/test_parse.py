@@ -1,11 +1,47 @@
 import re
-import json
 
-output = """
+
+def parse_help_sections(help_output: str):
+    parts = re.split(r"\n(?=[A-Z][^:]+:)", help_output)
+    sections = []
+
+    for part in parts:
+        lines = part.strip().split("\n")
+        if not lines:
+            continue
+
+        header = lines[0].strip().rstrip(":")
+        if "usage" in header.lower():
+            continue
+
+        content = "\n".join(lines[1:])
+        if "--" not in content:
+            continue
+
+        options = []
+        arg_blocks = re.split(r"\n\s+(?=--)", "\n  " + content)
+        for block in arg_blocks:
+            flag_match = re.search(r"(--[a-zA-Z0-9-]+)", block)
+            if not flag_match:
+                continue
+
+            flag = flag_match.group(1)
+            block_lines = block.split("\n")
+            description = " ".join(line.strip() for line in block_lines[1:])
+            description = re.sub(r"\s+", " ", description).strip()
+            options.append({"flag": flag, "description": description})
+
+        if options:
+            sections.append({"title": header, "options": options})
+
+    return sections
+
+
+def test_parse_help_sections_extracts_flags_and_descriptions():
+    output = """
 usage: qsiprep [-h] [--skip-bids-validation]
                [--output-resolution RESOLUTION]
-               [--participant-label PARTICIPANT_LABEL [PARTICIPANT_LABEL ...]]
-               
+
 Options for workflow:
   --output-resolution {1.2,2,3}
                         Output resolution. (default: 1.25)
@@ -17,52 +53,25 @@ Options for filtering BIDS queries:
                         Skip BIDS validation.
 """
 
+    sections = parse_help_sections(output)
 
-def parse(output):
-    parts = re.split(r"\n(?=[A-Z][^:]+:)", output)
-    sections = []
-    for part in parts:
-        lines = part.strip().split("\n")
-        if not lines:
-            continue
-        header = lines[0].strip().rstrip(":")
-        if "usage" in header.lower():
-            continue
-        content = "\n".join(lines[1:])
-        if "--" not in content:
-            continue
-
-        options = []
-        # Fix: Better splitting of argument blocks
-        arg_blocks = re.split(r"\n\s+(?=--)", "\n  " + content)
-
-        for block in arg_blocks:
-            flag_match = re.search(r"(--[a-zA-Z0-9-]+)", block)
-            if not flag_match:
-                continue
-            flag = flag_match.group(1)
-
-            choice_match = re.search(r"\{([^}]+)\}", block)
-            if choice_match:
-                [c.strip() for c in choice_match.group(1).split(",")]
-
-            # IMPROVED: Clean up description parsing
-            # The description usually starts after the flag/metavar block
-            # In argparse, it's often separated by multiple spaces or a newline+indent
-
-            # Find the first line after the flag line
-            block_lines = block.split("\n")
-            if len(block_lines) > 1:
-                description = " ".join([line.strip() for line in block_lines[1:]])
-            else:
-                description = ""
-
-            description = re.sub(r"\s+", " ", description)
-
-            options.append({"flag": flag, "description": description})
-        if options:
-            sections.append({"title": header, "options": options})
-    return sections
+    assert [s["title"] for s in sections] == [
+        "Options for workflow",
+        "Options for filtering BIDS queries",
+    ]
+    assert sections[0]["options"][0]["flag"] == "--output-resolution"
+    assert "Output resolution" in sections[0]["options"][0]["description"]
+    assert sections[1]["options"][0]["flag"] == "--skip-bids-validation"
 
 
-print(json.dumps(parse(output), indent=2))
+def test_parse_help_sections_ignores_text_without_flags():
+    output = """
+Description:
+  This section has no argparse flags.
+
+More Notes:
+  Also plain text.
+"""
+
+    assert parse_help_sections(output) == []
+

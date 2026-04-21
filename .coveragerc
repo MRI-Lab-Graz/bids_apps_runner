@@ -1,0 +1,17 @@
+[run]
+source =
+    scripts
+omit =
+    scripts/check_app_output.py
+    scripts/hpc_datalad_runner.py
+    scripts/prism_datalad.py
+    scripts/prism_hpc.py
+    scripts/prism_local.py
+    scripts/run_bids_apps.py
+    scripts/archive/*
+    scripts/tests/*
+
+[report]
+show_missing = true
+skip_covered = false
+

@@ -294,7 +294,8 @@ def parse_time_metrics(stderr_file):
     elapsed_seconds = None
 
     rss_re = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)")
-    elapsed_re = re.compile(r"Elapsed \(wall clock\) time .*:\s*([0-9:.]+)")
+    elapsed_label_re = re.compile(r"Elapsed \(wall clock\) time")
+    elapsed_token_re = re.compile(r"\d+(?::\d+){0,2}(?:\.\d+)?")
 
     with open(stderr_file, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -302,9 +303,10 @@ def parse_time_metrics(stderr_file):
             if rss_match:
                 max_rss_kb = int(rss_match.group(1))
 
-            elapsed_match = elapsed_re.search(line)
-            if elapsed_match:
-                elapsed_seconds = parse_elapsed_to_seconds(elapsed_match.group(1))
+            if elapsed_label_re.search(line):
+                elapsed_tokens = elapsed_token_re.findall(line)
+                if elapsed_tokens:
+                    elapsed_seconds = parse_elapsed_to_seconds(elapsed_tokens[-1])
 
     return max_rss_kb, elapsed_seconds
 
