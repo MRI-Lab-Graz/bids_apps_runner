@@ -135,6 +135,61 @@ def test_build_apptainer_status_requires_build_id(client):
     assert response.get_json()["error"] == "build_id is required"
 
 
+def test_pilot_estimator_status_requires_identifiers(client):
+    csrf_token = _login_client(client)
+
+    response = client.post(
+        "/pilot_estimator_status",
+        json={},
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "job_id or log_file/output_dir required"
+
+
+def test_kill_job_rejects_invalid_scope(client):
+    csrf_token = _login_client(client)
+
+    response = client.post(
+        "/kill_job",
+        json={"scope": "bad-scope"},
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "Invalid scope. Use 'current' or 'all'."
+
+
+def test_run_output_check_requires_bids_and_derivatives_dirs(client):
+    csrf_token = _login_client(client)
+
+    response = client.post(
+        "/run_output_check",
+        json={},
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 400
+    assert (
+        response.get_json()["error"]
+        == "Both BIDS and derivatives folders must be provided."
+    )
+
+
+def test_list_containers_requires_folder(client):
+    csrf_token = _login_client(client)
+
+    response = client.post(
+        "/list_containers",
+        json={},
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "No folder provided"
+
+
 def test_remote_token_bypasses_login_and_csrf(monkeypatch, isolated_project_store):
     monkeypatch.setattr(prism_app_runner, "GUI_LOGIN_ENABLED", True)
     monkeypatch.setattr(
