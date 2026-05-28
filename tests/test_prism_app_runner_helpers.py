@@ -1,4 +1,5 @@
 import requests
+import pytest
 
 import prism_app_runner
 
@@ -143,3 +144,13 @@ def test_get_latest_version_from_dockerhub_handles_errors(monkeypatch):
 
     monkeypatch.setattr(prism_app_runner.requests, "get", _raise)
     assert prism_app_runner.get_latest_version_from_dockerhub("nipreps/fmriprep") is None
+
+
+def test_normalize_project_id_rejects_traversal():
+    with pytest.raises(ValueError):
+        prism_app_runner._normalize_project_id("../../etc/passwd")
+
+
+def test_normalize_json_filename_rejects_path_components():
+    with pytest.raises(ValueError):
+        prism_app_runner._normalize_json_filename("../../config.json")

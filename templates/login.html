@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Login | BIDS App Runner{% endblock %}
+
+{% block styles %}
+<style>
+    .login-shell {
+        max-width: 460px;
+        margin: 6rem auto 0;
+    }
+    .login-card {
+        border: 1px solid var(--studio-border);
+        border-radius: 18px;
+        box-shadow: 0 24px 64px rgba(15, 23, 42, 0.12);
+        overflow: hidden;
+    }
+    .login-card .card-header {
+        background: linear-gradient(135deg, var(--studio-brand-primary), #2f3943);
+        color: #fff;
+        padding: 1.25rem 1.5rem;
+        border-bottom: 0;
+    }
+    .login-card .card-body {
+        padding: 1.5rem;
+        background: linear-gradient(180deg, #ffffff, #f7faf8);
+    }
+    .login-note {
+        font-size: 0.92rem;
+        color: #5b6673;
+    }
+</style>
+{% endblock %}
+
+{% block navbar_content %}
+<div class="navbar-text ms-lg-3 text-muted small">
+    Secure session login required
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="login-shell">
+    <div class="card login-card">
+        <div class="card-header">
+            <h1 class="h4 mb-1">Sign in to BIDS App Runner</h1>
+            <p class="mb-0 small opacity-75">Use the GUI password configured for this runner instance.</p>
+        </div>
+        <div class="card-body">
+            {% if login_error %}
+            <div class="alert alert-danger" role="alert">{{ login_error }}</div>
+            {% endif %}
+            <form method="post" action="{{ url_for('login') }}">
+                <input type="hidden" name="csrf_token" value="{{ prism_csrf_token }}">
+                <input type="hidden" name="next" value="{{ next_path }}">
+                <div class="mb-3">
+                    <label for="guiPassword" class="form-label">Password</label>
+                    <input type="password" class="form-control" id="guiPassword" name="password" autocomplete="current-password" required autofocus>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Sign In</button>
+            </form>
+            <p class="login-note mt-3 mb-0">
+                Tip: set <code>PRISM_GUI_PASSWORD</code> or <code>PRISM_GUI_PASSWORD_HASH</code> to control the login credential explicitly.
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

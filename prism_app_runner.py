@@ -35,11 +35,27 @@ import shutil
 import tempfile
 import webbrowser
 import threading
+import socket
 from typing import Any
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify
-from waitress import serve
 from pathlib import Path
+
+from gui_auth_routes import register_auth_handlers
+from gui_project_routes import register_project_config_handlers
+from gui_projects import ProjectStore
+from gui_system_routes import register_system_routes
+from gui_utility_routes import register_utility_routes
+from gui_security import (
+    is_loopback_host as _is_loopback_host,
+    load_gui_password_config,
+    load_or_create_secret_key as _load_or_create_secret_key,
+    normalize_json_filename as _normalize_json_filename,
+    normalize_project_id as _normalize_project_id,
+    request_is_loopback as _request_is_loopback,
+    resolve_config_storage_dir as _resolve_config_storage_dir,
+    resolve_named_config_path as _resolve_named_config_path,
+    resolve_project_dir as _resolve_project_dir,
+)
 from version import __version__
 
 # Add scripts directory to path for imports
@@ -47,7 +63,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 
 from check_app_output import BIDSOutputValidator
 
-# Try to import HPC DataLad runner
 try:
     import hpc_datalad_runner  # noqa: F401
 
@@ -70,9 +85,9 @@ def _fix_system_path():
     ]
     current_path = os.environ.get("PATH", "").split(os.pathsep)
     path_changed = False
-    for p in extra_paths:
-        if p not in current_path and os.path.exists(p):
-            current_path.append(p)
+    for path_entry in extra_paths:
+        if path_entry not in current_path and os.path.exists(path_entry):
+            current_path.append(path_entry)
             path_changed = True
 
     if path_changed:
@@ -83,11 +98,9 @@ def _fix_system_path():
         )
 
 
-# Important to fix path before any shutil.which calls
 _fix_system_path()
 
 if getattr(sys, "frozen", False):
-    # Running in a bundle
     BUNDLE_DIR = Path(getattr(sys, "_MEIPASS"))
     app = Flask(
         __name__,
@@ -95,37 +108,31 @@ if getattr(sys, "frozen", False):
         static_folder=str(BUNDLE_DIR / "static"),
     )
 else:
-    # Running in normal Python environment
     BUNDLE_DIR = Path(__file__).resolve().parent
     app = Flask(__name__)
 
-app.secret_key = "bids-app-runner-secret-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.config["APP_VERSION"] = __version__
 
-# Application base directory (for scripts, etc.)
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
     BASE_DIR = BUNDLE_DIR
 
 
-# Data directory (for logs, configs, etc.) - must be writable
 def _get_data_dir():
-    # If BASE_DIR is writable (e.g. during development), use it
     try:
         test_file = BASE_DIR / ".write_test"
         test_file.touch()
         test_file.unlink()
         return BASE_DIR
     except (PermissionError, OSError):
-        # Otherwise, use a standard user-writable location
         if platform.system() == "Darwin":
-            d = Path.home() / "Library" / "Application Support" / "BIDSAppsRunner"
+            data_dir = Path.home() / "Library" / "Application Support" / "BIDSAppsRunner"
         else:
-            d = Path.home() / ".bids_apps_runner"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+            data_dir = Path.home() / ".bids_apps_runner"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir
 
 
 DATA_DIR = _get_data_dir()
@@ -134,6 +141,15 @@ PROJECTS_DIR = DATA_DIR / "projects"
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 GLOBAL_SETTINGS_DIR = DATA_DIR / "configs"
 GLOBAL_SETTINGS_PATH = GLOBAL_SETTINGS_DIR / "global_settings.json"
+GUI_HOST = (os.environ.get("PRISM_GUI_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+GUI_AUTH_TOKEN = (os.environ.get("PRISM_GUI_AUTH_TOKEN") or "").strip()
+GUI_AUTH_HEADER = "X-Prism-Auth"
+CSRF_HEADER = "X-CSRF-Token"
+GUI_LOGIN_CONFIG = load_gui_password_config()
+GUI_LOGIN_ENABLED = bool(GUI_LOGIN_CONFIG.get("enabled"))
+GUI_LOGIN_PASSWORD_HASH = str(GUI_LOGIN_CONFIG.get("password_hash") or "")
+GUI_BOOTSTRAP_PASSWORD = GUI_LOGIN_CONFIG.get("bootstrap_password")
+PUBLIC_ENDPOINTS = {"/health", "/login"}
 
 
 def _current_machine_id():
@@ -238,6 +254,55 @@ def _read_global_settings_doc():
         doc["machines"] = cleaned_machines
 
     return doc
+
+
+def _request_auth_token() -> str:
+    header_token = str(request.headers.get(GUI_AUTH_HEADER) or "").strip()
+    if header_token:
+        return header_token
+
+    auth_header = str(request.headers.get("Authorization") or "").strip()
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+
+    return ""
+
+
+def _find_available_port(host, start_port=5000, max_tries=50):
+    bind_host = str(host or "127.0.0.1").strip() or "127.0.0.1"
+    family = socket.AF_INET6 if ":" in bind_host and bind_host != "localhost" else socket.AF_INET
+
+    for offset in range(max_tries):
+        port = start_port + offset
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                if family == socket.AF_INET6:
+                    sock.bind((bind_host, port, 0, 0))
+                else:
+                    sock.bind((bind_host, port))
+                return port
+            except OSError:
+                continue
+
+    raise RuntimeError(f"No available port found for {host} after {max_tries} attempts")
+
+
+app.secret_key = _load_or_create_secret_key(DATA_DIR)
+
+register_auth_handlers(
+    app,
+    login_enabled=lambda: GUI_LOGIN_ENABLED,
+    login_password_hash=lambda: GUI_LOGIN_PASSWORD_HASH,
+    auth_token=lambda: GUI_AUTH_TOKEN,
+    auth_header=GUI_AUTH_HEADER,
+    csrf_header=CSRF_HEADER,
+    request_auth_token=_request_auth_token,
+    request_is_loopback=_request_is_loopback,
+    public_paths=PUBLIC_ENDPOINTS,
+    index_endpoint="index",
+    login_template="login.html",
+)
 
 
 def _write_global_settings_doc(doc):
@@ -405,212 +470,13 @@ def _coerce_project_config_shape(config):
     return normalized
 
 
-class ProjectManager:
-    """Manages BIDS App Runner projects."""
-
-    @staticmethod
-    def create_project(name, description=""):
-        """Create a new project with the given name."""
-        # Generate unique project ID from name
-        project_id = name.lower().replace(" ", "_").replace("-", "_")
-        project_id = re.sub(r"[^a-z0-9_]", "", project_id)
-        if not project_id:
-            project_id = "project_" + str(int(time.time()))
-
-        # Ensure uniqueness
-        counter = 1
-        original_id = project_id
-        while (PROJECTS_DIR / project_id).exists():
-            project_id = f"{original_id}_{counter}"
-            counter += 1
-
-        project_dir = PROJECTS_DIR / project_id
-        project_dir.mkdir(parents=True, exist_ok=True)
-        (project_dir / "logs").mkdir(exist_ok=True)
-
-        machine_defaults = _get_effective_machine_settings()
-        default_jobs = machine_defaults.get("default_jobs", 1)
-        try:
-            default_jobs = max(1, int(default_jobs))
-        except (TypeError, ValueError):
-            default_jobs = 1
-
-        default_engine = machine_defaults.get("resolved_container_engine", "apptainer")
-        default_container = ""
-        if default_engine == "docker":
-            docker_repo = str(machine_defaults.get("default_docker_repo") or "").strip()
-            docker_tag = str(machine_defaults.get("default_docker_tag") or "latest").strip() or "latest"
-            if docker_repo:
-                default_container = f"{docker_repo}:{docker_tag}"
-        else:
-            default_container = str(
-                machine_defaults.get("default_apptainer_container") or ""
-            ).strip()
-
-        default_tmp_folder = str(machine_defaults.get("default_tmp_folder") or "").strip()
-
-        default_common = {
-            "bids_folder": "",
-            "output_folder": "",
-            "tmp_folder": default_tmp_folder,
-            "templateflow_dir": "",
-            "pipeline_output_root": "",
-            "pipeline_app_name": "",
-            "pipeline_version": "",
-            "pipeline_auto_versioning": False,
-            "notify_email": "",
-            "container_engine": default_engine,
-            "container": default_container,
-            "jobs": default_jobs,
-        }
-        default_app = {"analysis_level": "participant", "options": [], "mounts": []}
-
-        project_json = {
-            "id": project_id,
-            "name": name,
-            "description": description,
-            "created": datetime.now().isoformat(),
-            "last_modified": datetime.now().isoformat(),
-            "last_log": None,
-            "config": {
-                "common": copy.deepcopy(default_common),
-                "app": copy.deepcopy(default_app),
-                "pipelines": {
-                    "default": {
-                        "name": "Default Pipeline",
-                        "description": "",
-                        "common": copy.deepcopy(default_common),
-                        "app": copy.deepcopy(default_app),
-                    }
-                },
-                "active_pipeline": "default",
-            },
-        }
-
-        project_json_path = project_dir / "project.json"
-        with open(project_json_path, "w") as f:
-            json.dump(project_json, f, indent=2)
-
-        return project_id, project_json
-
-    @staticmethod
-    def load_project(project_id):
-        """Load a project by ID."""
-        project_dir = PROJECTS_DIR / project_id
-        project_json_path = project_dir / "project.json"
-
-        if not project_json_path.exists():
-            return None
-
-        with open(project_json_path, "r") as f:
-            project_json = json.load(f)
-
-        if isinstance(project_json, dict) and isinstance(project_json.get("config"), dict):
-            project_json["config"] = _coerce_project_config_shape(project_json["config"])
-
-        return project_json
-
-    @staticmethod
-    def save_project(project_id, config):
-        """Save project configuration."""
-        project_dir = PROJECTS_DIR / project_id
-        project_json_path = project_dir / "project.json"
-
-        if not project_json_path.exists():
-            return False
-
-        with open(project_json_path, "r") as f:
-            project_json = json.load(f)
-
-        project_json["config"] = _coerce_project_config_shape(config)
-        project_json["last_modified"] = datetime.now().isoformat()
-
-        with open(project_json_path, "w") as f:
-            json.dump(project_json, f, indent=2)
-
-        return True
-
-    @staticmethod
-    def update_project_log(project_id, log_filename):
-        """Update the last_log field in project.json."""
-        project_dir = PROJECTS_DIR / project_id
-        project_json_path = project_dir / "project.json"
-
-        if not project_json_path.exists():
-            return False
-
-        with open(project_json_path, "r") as f:
-            project_json = json.load(f)
-
-        project_json["last_log"] = log_filename
-        project_json["last_modified"] = datetime.now().isoformat()
-
-        with open(project_json_path, "w") as f:
-            json.dump(project_json, f, indent=2)
-
-        return True
-
-    @staticmethod
-    def list_projects(limit=None):
-        """List all projects, sorted by last_modified (newest first)."""
-        projects = []
-
-        if not PROJECTS_DIR.exists():
-            return projects
-
-        for project_dir in sorted(
-            PROJECTS_DIR.iterdir(), key=lambda x: x.is_dir(), reverse=True
-        ):
-            if not project_dir.is_dir():
-                continue
-
-            project_json_path = project_dir / "project.json"
-            if project_json_path.exists():
-                try:
-                    with open(project_json_path, "r") as f:
-                        project_data = json.load(f)
-                    if isinstance(project_data, dict) and isinstance(
-                        project_data.get("config"), dict
-                    ):
-                        project_data["config"] = _coerce_project_config_shape(
-                            project_data["config"]
-                        )
-                    projects.append(project_data)
-                except Exception as e:
-                    print(f"[ERROR] Failed to load project {project_dir.name}: {e}")
-
-        # Sort by last_modified, newest first
-        projects.sort(key=lambda x: x.get("last_modified", ""), reverse=True)
-
-        if limit:
-            projects = projects[:limit]
-
-        return projects
-
-    @staticmethod
-    def count_projects():
-        """Count available projects on disk."""
-        if not PROJECTS_DIR.exists():
-            return 0
-
-        total = 0
-        for project_dir in PROJECTS_DIR.iterdir():
-            if not project_dir.is_dir():
-                continue
-            if (project_dir / "project.json").exists():
-                total += 1
-        return total
-
-    @staticmethod
-    def delete_project(project_id):
-        """Delete a project and all its data."""
-        project_dir = PROJECTS_DIR / project_id
-
-        if project_dir.exists():
-            shutil.rmtree(project_dir)
-            return True
-
-        return False
+ProjectManager = ProjectStore(
+    PROJECTS_DIR,
+    machine_settings_provider=_get_effective_machine_settings,
+    config_normalizer=_coerce_project_config_shape,
+    project_dir_resolver=lambda project_id: _resolve_project_dir(PROJECTS_DIR, project_id),
+    timestamp_factory=lambda: datetime.now().isoformat(),
+)
 
 
 def _validate_project_json_shape(project_json):
@@ -1172,15 +1038,7 @@ def get_docker_tags():
         }
         url = f"https://registry.hub.docker.com/v2/repositories/{repo}/tags?page_size=100&ordering=last_updated"
 
-        # Try with a longer timeout and verify=True first, but handle SSLError
-        try:
-            response = requests.get(url, headers=headers, timeout=15)
-        except requests.exceptions.SSLError:
-            print(
-                f"[DEBUG] SSL Error for {repo}, retrying without verification...",
-                flush=True,
-            )
-            response = requests.get(url, headers=headers, timeout=15, verify=False)
+        response = requests.get(url, headers=headers, timeout=15)
 
         if response.status_code == 200:
             data = response.json()
@@ -1196,6 +1054,8 @@ def get_docker_tags():
                 jsonify({"error": f"Docker Hub error {response.status_code}"}),
                 response.status_code,
             )
+    except requests.exceptions.SSLError:
+        return jsonify({"error": "TLS verification failed while contacting Docker Hub"}), 502
     except Exception as e:
         print(f"[DEBUG] Exception fetching tags for {repo}: {str(e)}", flush=True)
         return jsonify({"error": str(e)}), 500
@@ -1245,6 +1105,27 @@ def _get_active_tracked_run_jobs():
             RUN_JOBS.pop(run_id, None)
 
     return active_jobs
+
+
+register_project_config_handlers(
+    app,
+    project_manager_getter=lambda: ProjectManager,
+    normalize_project_id=_normalize_project_id,
+    resolve_project_dir=lambda project_id: _resolve_project_dir(PROJECTS_DIR, project_id),
+    normalize_json_filename=_normalize_json_filename,
+    resolve_named_config_path=_resolve_named_config_path,
+    resolve_config_storage_dir=lambda directory: _resolve_config_storage_dir(
+        directory,
+        DATA_DIR / "configs",
+        BASE_DIR / "configs",
+    ),
+    validate_project_json_shape=_validate_project_json_shape,
+    get_active_tracked_run_jobs=_get_active_tracked_run_jobs,
+    data_dir=DATA_DIR,
+    base_dir=BASE_DIR,
+    log_cache=_log_cache,
+    log_cache_ttl=_log_cache_ttl,
+)
 
 
 def _terminate_pid_group(pid):
@@ -1597,6 +1478,25 @@ def _run_smtp_diagnostics():
     return result
 
 
+register_system_routes(
+    app,
+    version=__version__,
+    check_system_dependencies=check_system_dependencies,
+    get_active_tracked_run_jobs=_get_active_tracked_run_jobs,
+    project_manager_getter=lambda: ProjectManager,
+    find_app_related_pids=_find_app_related_pids,
+    get_total_memory_bytes=_get_total_memory_bytes,
+    current_machine_id=_current_machine_id,
+    read_global_settings_doc=_read_global_settings_doc,
+    write_global_settings_doc=_write_global_settings_doc,
+    sanitize_machine_settings=_sanitize_machine_settings,
+    get_effective_machine_settings=_get_effective_machine_settings,
+    global_settings_path=GLOBAL_SETTINGS_PATH,
+    run_smtp_diagnostics=_run_smtp_diagnostics,
+    send_run_completion_email=_send_run_completion_email,
+)
+
+
 def _monitor_run_job(run_id):
     with RUN_JOBS_LOCK:
         state = RUN_JOBS.get(run_id)
@@ -1919,393 +1819,16 @@ def _run_apptainer_build_async(build_id):
             shutil.rmtree(per_build_dir, ignore_errors=True)
 
 
-@app.route("/get_log", methods=["GET"])
-def get_log():
-    try:
-        project_id = (request.args.get("project_id") or "").strip()
-
-        # Terminal output is project-scoped only.
-        if not project_id:
-            return jsonify({"content": "", "filename": "none", "is_active": False}), 200
-
-        cache_key = project_id
-        cache_entry = _log_cache.get(cache_key)
-
-        # Check cache first
-        current_time = time.time()
-        if cache_entry and (current_time - cache_entry["timestamp"] < _log_cache_ttl):
-            return jsonify(
-                {
-                    "content": cache_entry["content"],
-                    "filename": cache_entry["filename"],
-                    "is_active": cache_entry["is_active"],
-                }
-            )
-
-        tracked_jobs = _get_active_tracked_run_jobs()
-        has_active_job = any(
-            (job.get("project_id") or "") == project_id for job in tracked_jobs
-        )
-
-        project_dir = PROJECTS_DIR / project_id / "logs"
-        if project_dir.exists():
-            log_files = sorted(
-                list(project_dir.glob("*.log")), key=os.path.getmtime, reverse=True
-            )
-        else:
-            log_files = []
-
-        if not log_files:
-            return jsonify({"content": "", "filename": "none", "is_active": False}), 200
-
-        latest_log = log_files[0]
-
-        # Check if log file was modified within the last 5 minutes (300 seconds)
-        current_time = time.time()
-        log_mtime = os.path.getmtime(latest_log)
-        is_recently_active = (current_time - log_mtime) < 300
-
-        # Only show logs if there's an active job OR the log was recently modified
-        if not (has_active_job or is_recently_active):
-            return jsonify({"content": "", "filename": "none", "is_active": False}), 200
-
-        # Use tail to get last 150 lines efficiently
-        result = subprocess.run(
-            ["tail", "-n", "150", latest_log], capture_output=True, text=True
-        )
-        content = result.stdout
-
-        # Strip ANSI escape sequences (colors)
-        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-        content = ansi_escape.sub("", content)
-
-        # Add idle indicator if no active job and log is stale
-        if not has_active_job and not is_recently_active:
-            content = (
-                "[Idle - Last activity: "
-                + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(log_mtime))
-                + "]\n"
-                + content
-            )
-
-        # Update cache
-        _log_cache[cache_key] = {
-            "timestamp": current_time,
-            "content": content,
-            "filename": (
-                os.path.basename(latest_log)
-                if (has_active_job or is_recently_active)
-                else "none"
-            ),
-            "is_active": has_active_job or is_recently_active,
-        }
-
-        return jsonify(
-            {
-                "filename": _log_cache[cache_key]["filename"],
-                "content": _log_cache[cache_key]["content"],
-                "is_active": _log_cache[cache_key]["is_active"],
-            }
-        )
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/get_projects", methods=["GET"])
-def get_projects():
-    """Get list of recent projects (limit 5)."""
-    try:
-        limit = 5
-        projects = ProjectManager.list_projects(limit=limit)
-        total_projects = ProjectManager.count_projects()
-        return (
-            jsonify(
-                {
-                    "projects": projects,
-                    "limit": limit,
-                    "total_projects": total_projects,
-                }
-            ),
-            200,
-        )
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/create_project", methods=["POST"])
-def create_project():
-    """Create a new project."""
-    try:
-        data = request.json
-        name = data.get("name", "").strip()
-        description = data.get("description", "").strip()
-
-        if not name:
-            return jsonify({"error": "Project name is required"}), 400
-
-        project_id, project_json = ProjectManager.create_project(name, description)
-        return jsonify({"project_id": project_id, "project": project_json}), 201
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/load_project/<project_id>", methods=["GET"])
-def load_project(project_id):
-    """Load a project configuration."""
-    try:
-        project_json = ProjectManager.load_project(project_id)
-        if not project_json:
-            return jsonify({"error": f"Project {project_id} not found"}), 404
-
-        return jsonify(project_json), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/save_project/<project_id>", methods=["POST"])
-def save_project(project_id):
-    """Save project configuration."""
-    try:
-        data = request.json
-        config = data.get("config")
-
-        if not config:
-            return jsonify({"error": "Config is required"}), 400
-
-        success = ProjectManager.save_project(project_id, config)
-        if not success:
-            return jsonify({"error": f"Project {project_id} not found"}), 404
-
-        return jsonify({"message": "Project saved successfully"}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/delete_project/<project_id>", methods=["DELETE"])
-def delete_project(project_id):
-    """Delete a project."""
-    try:
-        success = ProjectManager.delete_project(project_id)
-        if not success:
-            return jsonify({"error": f"Project {project_id} not found"}), 404
-
-        return jsonify({"message": "Project deleted successfully"}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/health")
-def health():
-    return f"Flask is running and responding! (v{__version__})", 200
-
-
-@app.route("/check_system", methods=["GET"])
-def check_system():
-    """Endpoint to check system dependencies."""
-    deps = check_system_dependencies()
-    deps["os"] = (platform.system() or "unknown").strip().lower()
-    return jsonify(deps)
-
-
-@app.route("/run_status", methods=["GET"])
-def run_status():
-    """Return active runner status for lightweight navbar polling."""
-    tracked_jobs = _get_active_tracked_run_jobs()
-    jobs = []
-    project_counts = {}
-    project_names = {}
-
-    for state in tracked_jobs:
-        project_id = str(state.get("project_id") or "").strip() or None
-        project_name = None
-        if project_id:
-            project_counts[project_id] = project_counts.get(project_id, 0) + 1
-            if project_id not in project_names:
-                try:
-                    project = ProjectManager.load_project(project_id)
-                    if project:
-                        project_names[project_id] = (
-                            str(project.get("name") or "").strip() or project_id
-                        )
-                    else:
-                        project_names[project_id] = project_id
-                except Exception:
-                    project_names[project_id] = project_id
-            project_name = project_names.get(project_id, project_id)
-
-        started_at = state.get("started_at")
-        started_iso = None
-        if isinstance(started_at, (int, float)):
-            started_iso = datetime.fromtimestamp(started_at).isoformat(timespec="seconds")
-
-        jobs.append(
-            {
-                "run_id": state.get("id"),
-                "project_id": project_id,
-                "project_name": project_name,
-                "pid": state.get("pid"),
-                "started_at": started_iso,
-                "source": "tracked",
-            }
-        )
-
-    active_projects = [
-        {
-            "id": project_id,
-            "name": project_names.get(project_id, project_id),
-            "count": count,
-        }
-        for project_id, count in sorted(project_counts.items())
-    ]
-
-    tracked_pids = {
-        int(state.get("pid"))
-        for state in tracked_jobs
-        if isinstance(state.get("pid"), int)
-    }
-
-    detected_pids = sorted(_find_app_related_pids(include_marked=True))
-    fallback_pids = [pid for pid in detected_pids if pid not in tracked_pids]
-    for pid in fallback_pids:
-        jobs.append(
-            {
-                "run_id": None,
-                "project_id": None,
-                "project_name": None,
-                "pid": pid,
-                "started_at": None,
-                "source": "detected",
-            }
-        )
-
-    unscoped_count = 0
-    for job in jobs:
-        if not job.get("project_id"):
-            unscoped_count += 1
-
-    running = len(jobs) > 0
-    return jsonify(
-        {
-            "running": running,
-            "count": len(jobs),
-            "active_projects": active_projects,
-            "jobs": jobs,
-            "detected_pid_count": len(fallback_pids),
-            "unscoped_count": unscoped_count,
-        }
-    )
-
-
-@app.route("/system_resources", methods=["GET"])
-def system_resources():
-    """Return lightweight host resource info for GUI defaults."""
-    mem_bytes = _get_total_memory_bytes()
-    mem_gib = round(mem_bytes / (1024**3), 2) if mem_bytes is not None else None
-    return jsonify(
-        {
-            "cpu_count": os.cpu_count() or 1,
-            "memory_total_bytes": mem_bytes,
-            "memory_total_gib": mem_gib,
-            "gpu_available": shutil.which("nvidia-smi") is not None,
-            "slurm_available": shutil.which("sbatch") is not None,
-        }
-    )
-
-
-@app.route("/global_settings", methods=["GET"])
-def get_global_settings():
-    """Return effective global settings for the current machine."""
-    machine_id = _current_machine_id()
-    settings_file_exists = GLOBAL_SETTINGS_PATH.exists()
-    deps = check_system_dependencies()
-    doc = _read_global_settings_doc()
-    effective = _get_effective_machine_settings(machine_id=machine_id, dependencies=deps)
-    return (
-        jsonify(
-            {
-                "machine_id": machine_id,
-                "os": platform.system(),
-                "autodetected": not settings_file_exists,
-                "effective": effective,
-                "default": doc.get("default", {}),
-                "machine_override": doc.get("machines", {}).get(machine_id, {}),
-                "system": deps,
-                "path": str(GLOBAL_SETTINGS_PATH),
-            }
-        ),
-        200,
-    )
-
-
-@app.route("/global_settings", methods=["POST"])
-def save_global_settings():
-    """Save global settings either for default policy or current machine."""
-    data = request.get_json(silent=True) or {}
-    scope = str(data.get("scope") or "machine").strip().lower()
-    settings = data.get("settings")
-
-    if not isinstance(settings, dict):
-        return jsonify({"error": "settings must be a JSON object"}), 400
-
-    cleaned = _sanitize_machine_settings(settings)
-    machine_id = _current_machine_id()
-
-    doc = _read_global_settings_doc()
-    if scope == "default":
-        doc["default"].update(cleaned)
-    elif scope == "machine":
-        doc.setdefault("machines", {})
-        doc["machines"][machine_id] = cleaned
-    else:
-        return jsonify({"error": "scope must be 'machine' or 'default'"}), 400
-
-    try:
-        _write_global_settings_doc(doc)
-    except Exception as exc:
-        return jsonify({"error": f"Failed to save global settings: {exc}"}), 500
-
-    deps = check_system_dependencies()
-    effective = _get_effective_machine_settings(machine_id=machine_id, dependencies=deps)
-    return (
-        jsonify(
-            {
-                "message": "Global settings saved successfully",
-                "machine_id": machine_id,
-                "effective": effective,
-                "path": str(GLOBAL_SETTINGS_PATH),
-            }
-        ),
-        200,
-    )
-
-
-@app.route("/smtp_diagnostics", methods=["POST"])
-def smtp_diagnostics():
-    """Inspect SMTP capabilities and optionally send a test email."""
-    data = request.get_json(silent=True) or {}
-    send_test = bool(data.get("send_test", False))
-    recipient = (data.get("recipient") or "").strip()
-
-    diagnostics = _run_smtp_diagnostics()
-    response = {"diagnostics": diagnostics}
-
-    if send_test:
-        if not recipient:
-            return jsonify({"error": "recipient is required when send_test=true"}), 400
-
-        subject = "BIDS App Runner SMTP diagnostic test"
-        body = (
-            "This is a diagnostic test email from BIDS App Runner.\n"
-            f"Time: {datetime.now().isoformat()}\n"
-        )
-        sent, details = _send_run_completion_email(recipient, subject, body)
-        response["test_email"] = {
-            "recipient": recipient,
-            "sent": bool(sent),
-            "details": details,
-        }
-
-    return jsonify(response), 200
+register_utility_routes(
+    app,
+    data_dir=DATA_DIR,
+    ensure_logs_dir=_ensure_logs_dir,
+    prepare_apptainer_build=_prepare_apptainer_build,
+    run_apptainer_build_async=_run_apptainer_build_async,
+    apptainer_builds=APPTAINER_BUILDS,
+    apptainer_builds_lock=APPTAINER_BUILDS_LOCK,
+    read_log_tail=_read_log_tail,
+)
 
 
 @app.route("/list_reports", methods=["POST"])
@@ -2473,216 +1996,6 @@ def detect_validation_pipelines():
         return jsonify({"pipelines": pipelines})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-@app.route("/pull_image", methods=["POST"])
-def pull_image():
-    data = request.json
-    image = data.get("image")
-    engine = data.get("engine", "docker")
-
-    if not image:
-        return jsonify({"error": "No image name provided"}), 400
-
-    try:
-        _ensure_logs_dir()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Use the same naming pattern so get_log picks it up
-        log_file = DATA_DIR / f"nohup_bids_runner_pull_{timestamp}.log"
-
-        print(f"[GUI] Pulling image: {image} using {engine}...", flush=True)
-        if engine == "docker":
-            cmd = ["docker", "pull", image]
-        else:
-            # For apptainer, pulling usually requires a destination path.
-            # This is more complex so we might just focus on Docker for now
-            # as requested by the user.
-            return jsonify({"error": "Pull only implemented for Docker engine"}), 400
-
-        # Run in background to not block
-        def run_pull():
-            try:
-                with open(log_file, "w") as f:
-                    f.write(
-                        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Started pulling {image}...\n\n"
-                    )
-                    f.flush()
-                    print(f"[GUI] Pulling image: {image}...", flush=True)
-                    # Use Popen to stream output to the log file (stdout)
-                    process = subprocess.Popen(
-                        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-                    )
-                    for line in process.stdout:
-                        if line.strip():
-                            line_out = f"[DOCKER] {line.strip()}"
-                            print(line_out, flush=True)
-                            f.write(line_out + "\n")
-                            f.flush()
-                    process.wait()
-
-                    if process.returncode == 0:
-                        msg = f"\n[GUI] Successfully pulled {image}"
-                        print(msg, flush=True)
-                        f.write(msg + "\n")
-                    else:
-                        msg = f"\n[GUI] Docker pull failed for {image} with return code {process.returncode}"
-                        print(msg, flush=True)
-                        f.write(msg + "\n")
-            except Exception as e:
-                err_msg = f"\n[GUI] Error pulling {image}: {str(e)}"
-                print(err_msg, flush=True)
-                with open(log_file, "a") as f:
-                    f.write(err_msg + "\n")
-
-        threading.Thread(target=run_pull).start()
-
-        return jsonify(
-            {
-                "message": f"Started pulling {image} in the background. Check console output."
-            }
-        )
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/make_dir", methods=["POST"])
-def make_dir():
-    data = request.json
-    path = data.get("path")
-    name = data.get("name")
-    if not path or not name:
-        return jsonify({"error": "Path and name are required"}), 400
-
-    try:
-        new_dir = Path(os.path.expanduser(path)) / name
-        new_dir.mkdir(parents=True, exist_ok=True)
-        return jsonify(
-            {"message": f"Directory created: {new_dir}", "path": str(new_dir)}
-        )
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/build_apptainer", methods=["POST"])
-def build_apptainer():
-    data = request.get_json(silent=True) or {}
-    prepared, error_response = _prepare_apptainer_build(data)
-    if error_response:
-        return error_response
-
-    build_id = (
-        f"build_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-    )
-    with APPTAINER_BUILDS_LOCK:
-        APPTAINER_BUILDS[build_id] = {
-            "id": build_id,
-            "status": "running",
-            "cmd": prepared["cmd"],
-            "log_file": prepared["log_file"],
-            "output_image": prepared["output_image"],
-            "per_build_dir": prepared["per_build_dir"],
-            "keep_temp": prepared["keep_temp"],
-            "timeout_seconds": prepared["timeout_seconds"],
-            "cwd": prepared["cwd"],
-            "env": prepared["env"],
-            "process": None,
-            "pid": None,
-            "cancel_requested": False,
-            "returncode": None,
-            "error": None,
-            "started_at": time.time(),
-            "finished_at": None,
-        }
-
-    worker = threading.Thread(
-        target=_run_apptainer_build_async,
-        args=(build_id,),
-        daemon=True,
-    )
-    worker.start()
-
-    return jsonify(
-        {
-            "success": True,
-            "build_id": build_id,
-            "status": "running",
-            "log_file": prepared["log_file"],
-            "output_image": prepared["output_image"],
-        }
-    )
-
-
-@app.route("/build_apptainer_status", methods=["GET"])
-def build_apptainer_status():
-    build_id = (request.args.get("build_id") or "").strip()
-    if not build_id:
-        return jsonify({"error": "build_id is required"}), 400
-
-    with APPTAINER_BUILDS_LOCK:
-        state = APPTAINER_BUILDS.get(build_id)
-        if not state:
-            return jsonify({"error": "Build not found"}), 404
-        status = state.get("status", "unknown")
-        returncode = state.get("returncode")
-        output_image = state.get("output_image")
-        log_file = state.get("log_file")
-        error = state.get("error")
-        pid = state.get("pid")
-
-    log_tail = _read_log_tail(log_file)
-
-    if not output_image and status in {"completed", "failed"}:
-        match = re.search(r"Apptainer image built successfully at:\s*(.+)", log_tail)
-        if match:
-            output_image = match.group(1).strip()
-
-    return jsonify(
-        {
-            "build_id": build_id,
-            "status": status,
-            "success": status == "completed",
-            "returncode": returncode,
-            "output_image": output_image,
-            "log_file": log_file,
-            "log_tail": log_tail,
-            "error": error,
-            "pid": pid,
-        }
-    )
-
-
-@app.route("/build_apptainer_cancel", methods=["POST"])
-def build_apptainer_cancel():
-    data = request.get_json(silent=True) or {}
-    build_id = (data.get("build_id") or "").strip()
-    if not build_id:
-        return jsonify({"error": "build_id is required"}), 400
-
-    with APPTAINER_BUILDS_LOCK:
-        state = APPTAINER_BUILDS.get(build_id)
-        if not state:
-            return jsonify({"error": "Build not found"}), 404
-        status = state.get("status")
-        process = state.get("process")
-
-        if status != "running":
-            return jsonify(
-                {
-                    "success": True,
-                    "status": status,
-                    "message": "Build already finished.",
-                }
-            )
-
-        state["cancel_requested"] = True
-
-    if process is not None:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except OSError:
-            pass
-
-    return jsonify({"success": True, "status": "cancelling", "build_id": build_id})
 
 
 @app.route("/get_app_help", methods=["POST"])
@@ -3096,34 +2409,6 @@ def list_dirs():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/load_project_file", methods=["POST"])
-def load_project_file():
-    """Load a project.json from an explicit file path."""
-    try:
-        payload = request.json or {}
-        path = payload.get("path", "").strip()
-        if not path:
-            return jsonify({"error": "Path is required"}), 400
-
-        p = Path(path)
-        if not p.exists() or not p.is_file():
-            return jsonify({"error": "File not found"}), 404
-
-        if p.name != "project.json":
-            return jsonify({"error": "Please select a project.json file"}), 400
-
-        with open(p, "r") as f:
-            project_json = json.load(f)
-
-        validation_error = _validate_project_json_shape(project_json)
-        if validation_error:
-            return jsonify({"error": validation_error}), 400
-
-        return jsonify(project_json), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/")
 def index():
     try:
@@ -3148,101 +2433,6 @@ def list_containers():
         )
         containers = [os.path.basename(c) for c in containers]
         return jsonify({"containers": sorted(containers)})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/list_configs", methods=["GET"])
-def list_configs():
-    try:
-        combined_configs = set()
-        # Defaults
-        default_dir = BASE_DIR / "configs"
-        if default_dir.exists():
-            combined_configs.update(
-                [f for f in os.listdir(default_dir) if f.endswith(".json")]
-            )
-
-        # User configs
-        user_dir = DATA_DIR / "configs"
-        if user_dir.exists():
-            combined_configs.update(
-                [f for f in os.listdir(user_dir) if f.endswith(".json")]
-            )
-
-        return jsonify({"configs": sorted(list(combined_configs))})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/get_config", methods=["GET"])
-def get_config():
-    name = request.args.get("name")
-    if not name:
-        return jsonify({"error": "No name provided"}), 400
-    try:
-        # Check user dir first
-        config_path = DATA_DIR / "configs" / name
-        if not config_path.exists():
-            # Check default dir
-            config_path = BASE_DIR / "configs" / name
-
-        with open(config_path, "r") as f:
-            data = json.load(f)
-        return jsonify({"config": data})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/save_config", methods=["POST"])
-def save_config():
-    data = request.json
-    filename = data.get("filename", "config.json")
-    config_data = data.get("config")
-    save_dir = data.get("config_folder", "").strip()
-    project_id = data.get("project_id")  # NEW: project context
-
-    if not config_data:
-        return jsonify({"error": "No config data provided"}), 400
-
-    try:
-        # If project_id provided, save to project
-        if project_id:
-            success = ProjectManager.save_project(project_id, config_data)
-            if not success:
-                return jsonify({"error": f"Project {project_id} not found"}), 404
-
-            project = ProjectManager.load_project(project_id)
-            config_path = f"projects/{project_id}/project.json"
-            return jsonify(
-                {
-                    "message": "Project config saved successfully",
-                    "path": config_path,
-                    "project": project,
-                }
-            )
-
-        # Otherwise, save as standalone config file (backward compatibility)
-        # Ensure filename ends with .json
-        if not filename.endswith(".json"):
-            filename += ".json"
-
-        if save_dir:
-            config_path = Path(os.path.expanduser(save_dir)) / filename
-        else:
-            config_path = DATA_DIR / "configs" / filename
-
-        os.makedirs(config_path.parent, exist_ok=True)
-
-        with open(config_path, "w") as f:
-            json.dump(config_data, f, indent=2)
-
-        return jsonify(
-            {
-                "message": f"Config saved successfully to {config_path}",
-                "path": str(config_path),
-            }
-        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -4092,30 +3282,42 @@ def cancel_hpc_job():
 
 
 if __name__ == "__main__":
-    import socket
+    host = GUI_HOST
+    if not _is_loopback_host(host) and not GUI_AUTH_TOKEN and not GUI_LOGIN_ENABLED:
+        print(
+            "[ERROR] Refusing to bind the GUI to a non-loopback host without PRISM_GUI_AUTH_TOKEN or GUI login",
+            flush=True,
+        )
+        sys.exit(1)
 
-    port = 8080
-    max_tries = 20
+    try:
+        port = _find_available_port(host)
+    except RuntimeError as exc:
+        print(f"[ERROR] {exc}", flush=True)
+        sys.exit(1)
 
-    # Simple loop to find an available port
-    for _ in range(max_tries):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("0.0.0.0", port)) != 0:
-                # Port is available
-                break
-            else:
-                port += 1
+    display_host = "localhost" if _is_loopback_host(host) else host
 
     print(f"🌐 Starting BIDS App Runner GUI v{__version__}")
-    print(f"🔗 URL: http://localhost:{port}")
+    print(f"🔗 URL: http://{display_host}:{port}")
     print("💡 Press Ctrl+C to stop the server\n")
-    print(f"🚀 Running with Waitress server on 0.0.0.0:{port}")
+    print(f"🚀 Running with Waitress server on {host}:{port}")
+    if GUI_LOGIN_ENABLED:
+        print("🔒 Browser login is enabled", flush=True)
+        if GUI_BOOTSTRAP_PASSWORD:
+            print(f"🔑 Generated GUI password for this run: {GUI_BOOTSTRAP_PASSWORD}", flush=True)
+    if GUI_AUTH_TOKEN:
+        print(
+            f"🔐 Remote requests must provide {GUI_AUTH_HEADER} or Authorization: Bearer <token>",
+            flush=True,
+        )
 
     # Automatically open the browser after a short delay
     def open_browser():
         webbrowser.open(f"http://localhost:{port}")
         print("✅ Browser opened automatically")
 
-    threading.Timer(1, open_browser).start()
+    if _is_loopback_host(host):
+        threading.Timer(1, open_browser).start()
 
-    serve(app, host="0.0.0.0", port=port, threads=4)
+    serve(app, host=host, port=port, threads=4)

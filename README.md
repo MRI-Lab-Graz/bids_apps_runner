@@ -241,6 +241,14 @@ The project ships with a lightweight Flask/Waitress application (`prism_app_runn
 
 The interface fetches the container's `--help` output to surface pipeline-specific arguments, links directly to the upstream documentation, and runs `run_bids_apps.py` in the background via `--nohup`. Read the GUI reference on Read the Docs to see how the REST endpoints, log tailing, and help parsing work.
 
+Security defaults:
+
+- The GUI now binds to `127.0.0.1` by default. This is intentional; do not expose it directly on a shared network unless you have an authenticated reverse proxy in front of it.
+- Browser login is enabled by default. Set `PRISM_GUI_PASSWORD` or `PRISM_GUI_PASSWORD_HASH` to control the credential explicitly. If neither is set, the runner prints a generated password for the current process at startup.
+- To override the bind host, set `PRISM_GUI_HOST`. Non-loopback binds require either browser login or `PRISM_GUI_AUTH_TOKEN`. Token-authenticated remote callers must send that token in either `X-Prism-Auth` or `Authorization: Bearer <token>`.
+- The browser UI now attaches CSRF tokens automatically to mutating requests. If you call the POST/DELETE endpoints yourself with a browser session, send `X-CSRF-Token` from the current page token.
+- Set `PRISM_SECRET_KEY` in production-like deployments if you do not want the runner to generate a per-machine local secret file.
+
 ### Email notifications for long/detached runs
 
 The GUI can send completion/failure emails when a run finishes, even if the browser is closed.
@@ -261,6 +269,8 @@ cp configs/smtp_settings.example.json configs/smtp_settings.json
 # 3) Restrict permissions (recommended)
 chmod 600 configs/smtp_settings.json
 ```
+
+Do not commit real SMTP credentials. Prefer environment overrides (`BIDS_RUNNER_SMTP_HOST`, `BIDS_RUNNER_SMTP_PORT`, `BIDS_RUNNER_SMTP_SENDER`, `BIDS_RUNNER_SMTP_USERNAME`, `BIDS_RUNNER_SMTP_PASSWORD`, `BIDS_RUNNER_SMTP_USE_TLS`) for shared or managed deployments.
 
 `smtp_settings.json` schema:
 

@@ -17,10 +17,52 @@ import os
 import sys
 import json
 import logging
+import re
+import shlex
 import subprocess
 import argparse
 from pathlib import Path
 from typing import Dict, Optional
+
+
+_SAFE_SUBJECT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_SAFE_SHELL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_SAFE_ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SAFE_SLURM_DIRECTIVE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9-]*$")
+_SAFE_SLURM_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9._%/@:+,=~-]+$")
+_SAFE_OPTION_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
+
+
+def _shell_quote(value: object) -> str:
+    return shlex.quote(str(value))
+
+
+def _validate_subject(subject: str) -> str:
+    normalized = subject.replace("sub-", "", 1) if subject.startswith("sub-") else subject
+    if not _SAFE_SUBJECT_PATTERN.fullmatch(normalized):
+        raise ValueError(f"Invalid subject identifier: {subject}")
+    return normalized
+
+
+def _validate_shell_name(value: object, label: str) -> str:
+    normalized = str(value or "").strip()
+    if not _SAFE_SHELL_NAME_PATTERN.fullmatch(normalized):
+        raise ValueError(f"Invalid {label}: {value}")
+    return normalized
+
+
+def _validate_sbatch_directive_name(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not _SAFE_SLURM_DIRECTIVE_PATTERN.fullmatch(normalized):
+        raise ValueError(f"Invalid SBATCH directive: {value}")
+    return normalized
+
+
+def _validate_sbatch_value(value: object, label: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or not _SAFE_SLURM_VALUE_PATTERN.fullmatch(normalized):
+        raise ValueError(f"Invalid {label}: {value}")
+    return normalized
 
 
 def setup_logging(log_level="INFO"):
@@ -79,9 +121,7 @@ class DataLadHPCScriptGenerator:
             job_id: SLURM job ID variable (default uses $SLURM_JOB_ID)
         """
         self.config = config
-        self.subject = (
-            subject.replace("sub-", "") if subject.startswith("sub-") else subject
-        )
+        self.subject = _validate_subject(subject)
         self.job_id_var = f"${job_id}"
         self.job_id_prefix = job_id.lstrip("$")
 
@@ -108,23 +148,40 @@ class DataLadHPCScriptGenerator:
 
     def _header(self) -> str:
         """Generate SLURM header."""
-        job_name = f"{self.hpc.get('job_name', 'bids_app')}_{self.subject}"
+        job_name = _validate_sbatch_value(
+            f"{self.hpc.get('job_name', 'bids_app')}_{self.subject}", "job_name"
+        )
+        partition = _validate_sbatch_value(
+            self.hpc.get("partition", "standard"), "partition"
+        )
+        time_limit = _validate_sbatch_value(self.hpc.get("time", "24:00:00"), "time")
+        mem = _validate_sbatch_value(self.hpc.get("mem", "32G"), "mem")
+        cpus = int(self.hpc.get("cpus", 8))
+        output_log = _validate_sbatch_value(
+            self.hpc.get("output_log", "slurm-%j.out"), "output_log"
+        )
+        error_log = _validate_sbatch_value(
+            self.hpc.get("error_log", "slurm-%j.err"), "error_log"
+        )
 
         header = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
-#SBATCH --partition={self.hpc.get("partition", "standard")}
-#SBATCH --time={self.hpc.get("time", "24:00:00")}
-#SBATCH --mem={self.hpc.get("mem", "32G")}
-#SBATCH --cpus-per-task={self.hpc.get("cpus", 8)}
-#SBATCH --output={self.hpc.get("output_log", "slurm-%j.out")}
-#SBATCH --error={self.hpc.get("error_log", "slurm-%j.err")}
+#SBATCH --partition={partition}
+#SBATCH --time={time_limit}
+#SBATCH --mem={mem}
+#SBATCH --cpus-per-task={cpus}
+#SBATCH --output={output_log}
+#SBATCH --error={error_log}
 """
 
         # Add additional SLURM directives if provided
         for key, value in self.hpc.items():
             if key.startswith("sbatch_"):
-                directive = key.replace("sbatch_", "").replace("_", "-")
-                header += f"#SBATCH --{directive}={value}\n"
+                directive = _validate_sbatch_directive_name(
+                    key.replace("sbatch_", "").replace("_", "-")
+                )
+                directive_value = _validate_sbatch_value(value, directive)
+                header += f"#SBATCH --{directive}={directive_value}\n"
 
         return header
 
@@ -142,7 +199,7 @@ echo "=========================================="
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_JOB_NODELIST"
 echo "Partition: $SLURM_JOB_PARTITION"
-echo "Subject: {subject}
+echo "Subject: sub-{subject}"
 echo "Start time: $(date)"
 echo ""
 """.format(subject=self.subject)
@@ -152,7 +209,7 @@ echo ""
         if modules:
             setup += "# Load modules\n"
             for module in modules:
-                setup += f"module load {module}\n"
+                setup += f"module load {_shell_quote(module)}\n"
             setup += "\n"
 
         # Set environment variables
@@ -160,17 +217,22 @@ echo ""
         if env_vars:
             setup += "# Set environment variables\n"
             for key, value in env_vars.items():
-                setup += f"export {key}={value}\n"
+                key = str(key or "").strip()
+                if not _SAFE_ENV_KEY_PATTERN.fullmatch(key):
+                    raise ValueError(f"Invalid environment variable name: {key}")
+                setup += f"export {key}={_shell_quote(value)}\n"
             setup += "\n"
 
         # Setup work directory and lock file
-        work_dir = self.common.get("work_dir", "/tmp/bids_work")
+        work_dir = _shell_quote(self.common.get("work_dir", "/tmp/bids_work"))
         setup += f"""
 # Setup directories
 export WORK_DIR={work_dir}
 export DS_DIR="${{WORK_DIR}}/ds"
 export DS_LOCKFILE="${{WORK_DIR}}/datalad.lock"
 export TMPDIR="${{WORK_DIR}}/tmp/$SLURM_JOB_ID"
+
+export PRISM_JOB_BRANCH="job-${{{self.job_id_prefix}}}"
 
 mkdir -p "${{TMPDIR}}"
 mkdir -p "$(dirname "${{DS_LOCKFILE}}")"
@@ -185,6 +247,10 @@ echo ""
         """Generate DataLad clone section."""
         input_repo = self.datalad.get("input_repo")
         clone_method = self.datalad.get("clone_method", "clone")
+        if clone_method not in {"clone", "install"}:
+            raise ValueError(f"Unsupported DataLad clone method: {clone_method}")
+        quoted_input_repo = _shell_quote(input_repo)
+        quoted_display_repo = _shell_quote(f"Cloning dataset from {input_repo}...")
 
         section = """
 # Clone DataLad Dataset
@@ -194,8 +260,8 @@ echo "=========================================="
 if [ -d "$DS_DIR" ]; then
     echo "Dataset already cloned at $DS_DIR"
 else
-    echo "Cloning dataset from {input_repo}..."
-    flock --verbose "$DS_LOCKFILE" datalad {clone_method} {input_repo} "$DS_DIR"
+    printf '%s\n' {quoted_display_repo}
+    flock --verbose "$DS_LOCKFILE" datalad {clone_method} {quoted_input_repo} "$DS_DIR"
     if [ $? -eq 0 ]; then
         echo "Successfully cloned dataset"
     else
@@ -205,7 +271,11 @@ else
 fi
 cd "$DS_DIR"
 echo ""
-""".format(input_repo=input_repo, clone_method=clone_method)
+""".format(
+        clone_method=clone_method,
+        quoted_input_repo=quoted_input_repo,
+        quoted_display_repo=quoted_display_repo,
+    )
 
         return section
 
@@ -241,13 +311,15 @@ git submodule foreach --recursive git annex dead here 2>/dev/null || true
         output_repos = self.container.get("outputs", [])
         if isinstance(output_repos, list):
             for repo in output_repos:
+                quoted_repo = _shell_quote(repo)
+                quoted_repo_display = _shell_quote(str(repo))
                 section += f"""
-if [ -d "{repo}" ]; then
-    echo "Creating branch job-{self.job_id_var} in {repo}..."
-    git -C {repo} checkout -b "job-{self.job_id_var}" 2>/dev/null || \\
-    git -C {repo} checkout "job-{self.job_id_var}"
+if [ -d {quoted_repo} ]; then
+    printf '%s\n' {_shell_quote(f'Creating branch job in {repo}...')}
+    git -C {quoted_repo} checkout -b "$PRISM_JOB_BRANCH" 2>/dev/null || \\
+    git -C {quoted_repo} checkout "$PRISM_JOB_BRANCH"
 else
-    echo "WARNING: Output directory {repo} not found"
+    printf '%s\n' {_shell_quote(f'WARNING: Output directory {repo} not found')}
 fi
 """
 
@@ -257,15 +329,11 @@ fi
     def _container_run(self) -> str:
         """Generate datalad containers-run section."""
         self.container.get("image")
-        container_name = self.container.get("name", "bids_app")
+        container_name = _validate_shell_name(
+            self.container.get("name", "bids_app"), "container name"
+        )
         outputs = self.container.get("outputs", [])
         inputs = self.container.get("inputs", [])
-
-        # Build outputs argument
-        outputs_arg = " ".join([f"-o {o}" for o in outputs]) if outputs else ""
-
-        # Build inputs argument
-        inputs_arg = " ".join([f"-i {i}" for i in inputs]) if inputs else ""
 
         # Get container arguments
         container_args = self.container.get("bids_args", {})
@@ -274,17 +342,26 @@ fi
         analysis_level = container_args.get("analysis_level", "participant")
 
         # Build container command
-        container_cmd = f"{bids_folder} {output_folder} {analysis_level}"
+        container_cmd = " ".join(
+            [
+                _shell_quote(bids_folder),
+                _shell_quote(output_folder),
+                _shell_quote(analysis_level),
+            ]
+        )
 
         # Add optional arguments
         optional_args = ""
         for key, value in container_args.items():
             if key not in ["bids_folder", "output_folder", "analysis_level"]:
+                key = str(key or "").strip()
+                if not _SAFE_OPTION_KEY_PATTERN.fullmatch(key):
+                    raise ValueError(f"Invalid container option: {key}")
                 if isinstance(value, bool):
                     if value:
                         optional_args += f" \\\n    --{key}"
                 else:
-                    optional_args += f" \\\n    --{key} {value}"
+                    optional_args += f" \\\n+    --{key} {_shell_quote(value)}"
 
         # Add participant label
         optional_args += f" \\\n    --participant-label {self.subject}"
@@ -292,20 +369,30 @@ fi
         # Add working directory
         optional_args += " \\\n    -w .git/tmp/wdir"
 
+        continuation = "\\"
+        command_lines = [
+            "datalad containers-run " + continuation,
+            f"   -m {_shell_quote(f'{container_name} sub-{self.subject}')} " + continuation,
+            "   --explicit " + continuation,
+        ]
+        command_lines.extend(
+            [f"   -o {_shell_quote(output)} " + continuation for output in outputs]
+        )
+        command_lines.extend(
+            [f"   -i {_shell_quote(input_path)} " + continuation for input_path in inputs]
+        )
+        command_lines.append(f"   -n code/pipelines/{container_name} " + continuation)
+        command_lines.append(f"   {container_cmd}{optional_args}")
+        run_command = "\n".join(command_lines)
+
         section = f"""
 # Run Container via DataLad
 echo "=========================================="
 echo "Container Execution"
 echo "=========================================="
-echo "Running {container_name} for subject sub-{self.subject}..."
+printf '%s\n' {_shell_quote(f'Running {container_name} for subject sub-{self.subject}...')}
 
-datalad containers-run \\
-   -m "{{container_name}} sub-{self.subject} (job {self.job_id_var})" \\
-   --explicit \\
-   {outputs_arg} \\
-   {inputs_arg} \\
-   -n code/pipelines/{container_name} \\
-   {container_cmd}{optional_args}
+{run_command}
 
 if [ $? -eq 0 ]; then
     echo "Container execution completed successfully"
@@ -314,7 +401,7 @@ else
     exit 1
 fi
 echo ""
-""".format(container_name=container_name)
+"""
 
         return section
 
@@ -331,13 +418,14 @@ echo "=========================================="
 
         if isinstance(output_repos, list):
             for repo in output_repos:
+                quoted_repo = _shell_quote(repo)
                 section += f"""
-echo "Pushing results from {repo}..."
-flock --verbose "${{DS_LOCKFILE}}" datalad push -d {repo} --to origin
+printf '%s\n' {_shell_quote(f'Pushing results from {repo}...')}
+flock --verbose "${{DS_LOCKFILE}}" datalad push -d {quoted_repo} --to origin
 if [ $? -eq 0 ]; then
-    echo "Successfully pushed {repo}"
+    printf '%s\n' {_shell_quote(f'Successfully pushed {repo}')}
 else
-    echo "WARNING: Failed to push {repo}"
+    printf '%s\n' {_shell_quote(f'WARNING: Failed to push {repo}')}
 fi
 """
 

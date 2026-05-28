@@ -34,3 +34,4 @@ venv
 # Coverage artifacts
 .coverage
 coverage.xml
+.secret_key
