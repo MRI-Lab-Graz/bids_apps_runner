@@ -1676,6 +1676,7 @@ def _prepare_apptainer_build(data):
     cmd = []
     built_image = None
     per_build_dir = None
+    sandbox_dir = None
     build_env = os.environ.copy()
     cache_dir = None
 
@@ -1745,6 +1746,7 @@ def _prepare_apptainer_build(data):
         "log_file": str(log_file),
         "output_image": str(built_image) if built_image else None,
         "per_build_dir": per_build_dir,
+        "sandbox_dir": str(sandbox_dir) if sandbox_dir else None,
         "keep_temp": keep_temp,
         "timeout_seconds": timeout_seconds,
         "cwd": str(BASE_DIR),
@@ -1802,6 +1804,59 @@ def _run_apptainer_build_async(build_id):
                         APPTAINER_BUILDS[build_id]["process"] = None
 
                 if return_code != 0:
+                    # If the sandbox→SIF step failed, try system mksquashfs as fallback.
+                    # apptainer's bundled mksquashfs can crash on large images (heap
+                    # corruption, exit 134/139); the system one is typically more stable.
+                    sandbox_dir = state.get("sandbox_dir")
+                    output_image = state.get("output_image")
+                    is_sif_step = step_index == len(steps) - 1 and sandbox_dir and output_image
+                    if is_sif_step and Path(sandbox_dir).is_dir() and shutil.which("mksquashfs"):
+                        logf.write(
+                            f"\napptainer build exited {return_code} — retrying with "
+                            f"system mksquashfs fallback...\n\n"
+                        )
+                        logf.flush()
+                        squashfs_path = Path(state["per_build_dir"]) / "rootfs.squashfs"
+                        fallback_steps = [
+                            ["mksquashfs", sandbox_dir, str(squashfs_path),
+                             "-noappend", "-processors", "1"],
+                            ["apptainer", "sif", "new", output_image],
+                            ["apptainer", "sif", "add",
+                             "--datatype", "4", "--parttype", "2", "--partfs", "1",
+                             "--partarch", "2", "--groupid", "1",
+                             output_image, str(squashfs_path)],
+                        ]
+                        fallback_names = ["mksquashfs", "sif new", "sif add"]
+                        for fb_name, fb_cmd in zip(fallback_names, fallback_steps):
+                            logf.write(f"Fallback ({fb_name}): {' '.join(fb_cmd)}\n\n")
+                            logf.flush()
+                            with APPTAINER_BUILDS_LOCK:
+                                if APPTAINER_BUILDS.get(build_id, {}).get("cancel_requested"):
+                                    return_code = -1
+                                    break
+                            fb_proc = subprocess.Popen(
+                                fb_cmd,
+                                stdout=logf,
+                                stderr=subprocess.STDOUT,
+                                text=True,
+                                cwd=state["cwd"],
+                                env=state["env"],
+                                start_new_session=True,
+                            )
+                            with APPTAINER_BUILDS_LOCK:
+                                if build_id in APPTAINER_BUILDS:
+                                    APPTAINER_BUILDS[build_id]["process"] = fb_proc
+                                    APPTAINER_BUILDS[build_id]["pid"] = fb_proc.pid
+                            return_code = fb_proc.wait(timeout=timeout_seconds)
+                            with APPTAINER_BUILDS_LOCK:
+                                if build_id in APPTAINER_BUILDS:
+                                    APPTAINER_BUILDS[build_id]["process"] = None
+                            if return_code != 0:
+                                break
+                        try:
+                            squashfs_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
                     break
 
                 if len(steps) > 1:
