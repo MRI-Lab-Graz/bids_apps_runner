@@ -107,7 +107,7 @@ def register_auth_handlers(
         if has_valid_remote_token():
             return None
 
-        if request_is_loopback(request.remote_addr):
+        if not login_enabled() and request_is_loopback(request.remote_addr):
             return None
 
         if not login_enabled():
