@@ -1719,29 +1719,29 @@ def _prepare_apptainer_build(data):
                 500,
             )
         per_build_dir = tempfile.mkdtemp(prefix="apptainer_build_", dir=str(tmp_path))
-        cache_dir = Path(per_build_dir) / "cache"
+        cache_dir = tmp_path / "apptainer_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         built_image = output_path / f"{Path(docker_repo).name}_{docker_tag}.sif"
+        sandbox_dir = Path(per_build_dir) / "sandbox"
         cmd = [
-            "apptainer",
-            "build",
-            "--force",
-            "--tmpdir",
-            per_build_dir,
-            str(built_image),
-            f"docker://{docker_repo}:{docker_tag}",
+            ["apptainer", "build", "--sandbox", str(sandbox_dir),
+             f"docker://{docker_repo}:{docker_tag}"],
+            ["apptainer", "build", "--force", "--tmpdir", per_build_dir,
+             str(built_image), str(sandbox_dir)],
         ]
 
     build_env["APPTAINER_TMPDIR"] = str(tmp_path)
     build_env["SINGULARITY_TMPDIR"] = str(tmp_path)
     build_env["TMPDIR"] = str(tmp_path)
+    build_env.setdefault("APPTAINER_MKSQUASHFS_PROCS", "1")
     build_env[APP_LAUNCH_ENV_KEY] = APP_LAUNCH_ENV_VALUE
     if cache_dir is not None:
         build_env["APPTAINER_CACHEDIR"] = str(cache_dir)
         build_env["SINGULARITY_CACHEDIR"] = str(cache_dir)
 
+    steps = cmd if isinstance(cmd[0], list) else [cmd]
     return {
-        "cmd": cmd,
+        "steps": steps,
         "log_file": str(log_file),
         "output_image": str(built_image) if built_image else None,
         "per_build_dir": per_build_dir,
@@ -1759,32 +1759,54 @@ def _run_apptainer_build_async(build_id):
             return
 
     log_file = state["log_file"]
-    cmd = state["cmd"]
+    steps = state.get("steps") or [state["cmd"]]
     per_build_dir = state.get("per_build_dir")
     keep_temp = bool(state.get("keep_temp"))
+    timeout_seconds = state.get("timeout_seconds", 7200)
+    return_code = 0
 
     try:
         with open(log_file, "w", encoding="utf-8") as logf:
-            logf.write(f"Command: {' '.join(cmd)}\n")
-            logf.write(f"Started: {datetime.now().isoformat()}\n\n")
-            logf.flush()
+            for step_index, cmd in enumerate(steps):
+                with APPTAINER_BUILDS_LOCK:
+                    if APPTAINER_BUILDS.get(build_id, {}).get("cancel_requested"):
+                        return_code = -1
+                        break
 
-            process = subprocess.Popen(
-                cmd,
-                stdout=logf,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=state["cwd"],
-                env=state["env"],
-                start_new_session=True,
-            )
+                if len(steps) > 1:
+                    logf.write(f"Step {step_index + 1}/{len(steps)}: {' '.join(cmd)}\n")
+                else:
+                    logf.write(f"Command: {' '.join(cmd)}\n")
+                logf.write(f"Started: {datetime.now().isoformat()}\n\n")
+                logf.flush()
 
-            with APPTAINER_BUILDS_LOCK:
-                if build_id in APPTAINER_BUILDS:
-                    APPTAINER_BUILDS[build_id]["process"] = process
-                    APPTAINER_BUILDS[build_id]["pid"] = process.pid
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=logf,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    cwd=state["cwd"],
+                    env=state["env"],
+                    start_new_session=True,
+                )
 
-            return_code = process.wait(timeout=state.get("timeout_seconds", 7200))
+                with APPTAINER_BUILDS_LOCK:
+                    if build_id in APPTAINER_BUILDS:
+                        APPTAINER_BUILDS[build_id]["process"] = process
+                        APPTAINER_BUILDS[build_id]["pid"] = process.pid
+
+                return_code = process.wait(timeout=timeout_seconds)
+
+                with APPTAINER_BUILDS_LOCK:
+                    if build_id in APPTAINER_BUILDS:
+                        APPTAINER_BUILDS[build_id]["process"] = None
+
+                if return_code != 0:
+                    break
+
+                if len(steps) > 1:
+                    logf.write(f"\nStep {step_index + 1} finished (exit {return_code})\n\n")
+                    logf.flush()
 
         with APPTAINER_BUILDS_LOCK:
             if build_id in APPTAINER_BUILDS:
