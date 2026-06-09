@@ -107,10 +107,10 @@ def register_auth_handlers(
         if has_valid_remote_token():
             return None
 
-        if not login_enabled():
-            if request.path == "/health" or request_is_loopback(request.remote_addr):
-                return None
+        if request_is_loopback(request.remote_addr):
+            return None
 
+        if not login_enabled():
             response = jsonify(
                 {
                     "error": "Unauthorized",

@@ -1931,9 +1931,10 @@ if __name__ == "__main__":
     display_host = "localhost" if _is_loopback_host(host) else host
 
     print(f"🌐 Starting BIDS App Runner GUI v{__version__}")
-    print(f"🔗 URL: http://{display_host}:{port}")
+    print(f"🔗 Open in browser: http://{display_host}:{port}")
+    print(f"   (VS Code: use the PORTS panel → globe icon next to port {port})")
     print("💡 Press Ctrl+C to stop the server\n")
-    print(f"🚀 Running with Waitress server on {host}:{port}")
+    print(f"🚀 Running with Waitress server on {host}:{port}", flush=True)
     if GUI_LOGIN_ENABLED:
         print("🔒 Browser login is enabled", flush=True)
         if GUI_BOOTSTRAP_PASSWORD:
@@ -1943,13 +1944,5 @@ if __name__ == "__main__":
             f"🔐 Remote requests must provide {GUI_AUTH_HEADER} or Authorization: Bearer <token>",
             flush=True,
         )
-
-    # Automatically open the browser after a short delay
-    def open_browser():
-        webbrowser.open(f"http://localhost:{port}")
-        print("✅ Browser opened automatically")
-
-    if _is_loopback_host(host):
-        threading.Timer(1, open_browser).start()
 
     serve(app, host=host, port=port, threads=4)

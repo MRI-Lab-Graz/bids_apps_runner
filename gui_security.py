@@ -102,12 +102,11 @@ def load_gui_password_config(
             "source": "env-password",
         }
 
-    bootstrap_password = secrets.token_urlsafe(18)
     return {
-        "enabled": True,
-        "password_hash": generate_password_hash(bootstrap_password),
-        "bootstrap_password": bootstrap_password,
-        "source": "generated",
+        "enabled": False,
+        "password_hash": "",
+        "bootstrap_password": None,
+        "source": "default-disabled",
     }
 
 
