@@ -125,6 +125,7 @@ def register_utility_routes(
                 "log_file": prepared["log_file"],
                 "output_image": prepared["output_image"],
                 "per_build_dir": prepared["per_build_dir"],
+                "sandbox_dir": prepared.get("sandbox_dir"),
                 "keep_temp": prepared["keep_temp"],
                 "timeout_seconds": prepared["timeout_seconds"],
                 "cwd": prepared["cwd"],

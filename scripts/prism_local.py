@@ -144,7 +144,14 @@ def _fix_bids_uri_intendedfor_for_subject(bids_folder, subject):
 
             new_item = item
             if new_item.startswith("bids::"):
-                new_item = new_item[len("bids::") :]
+                # Strip bids:: and convert to legacy subject-relative path.
+                # bids-validator 1.x interprets non-URI IntendedFor as relative
+                # to the subject directory, so strip the leading sub-XXX/ component.
+                new_item = new_item[len("bids::"):]
+                new_item = new_item.lstrip("/")
+                parts = new_item.split("/", 1)
+                if len(parts) > 1 and parts[0].startswith("sub-"):
+                    new_item = parts[1]
                 changed = True
 
             if new_item.startswith("/"):
