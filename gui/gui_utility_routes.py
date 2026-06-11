@@ -121,7 +121,7 @@ def register_utility_routes(
             apptainer_builds[build_id] = {
                 "id": build_id,
                 "status": "running",
-                "cmd": prepared["cmd"],
+                "steps": prepared["steps"],
                 "log_file": prepared["log_file"],
                 "output_image": prepared["output_image"],
                 "per_build_dir": prepared["per_build_dir"],
