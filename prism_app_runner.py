@@ -41,6 +41,7 @@ from datetime import datetime
 from pathlib import Path
 
 from gui.gui_auth_routes import register_auth_handlers
+from gui.gui_cohort_routes import register_cohort_routes
 from gui.gui_misc_routes import register_misc_routes
 from gui.gui_project_routes import register_project_config_handlers
 from gui.gui_projects import ProjectStore
@@ -1920,6 +1921,13 @@ register_misc_routes(
     ensure_logs_dir=_ensure_logs_dir,
     log_dir=LOG_DIR,
     base_dir=BASE_DIR,
+)
+
+register_cohort_routes(
+    app,
+    base_dir=BASE_DIR,
+    log_dir=LOG_DIR,
+    ensure_logs_dir=_ensure_logs_dir,
 )
 
 def _extract_fs_license_path(options):

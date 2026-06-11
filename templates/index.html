@@ -111,6 +111,13 @@
         .tab-card-accordion.is-open > .tab-card-accordion-body {
             display: block;
         }
+
+        /* Run-mode toggle */
+        .run-mode-toggle-bar { border: 1px solid var(--studio-border); border-radius: 8px; overflow: hidden; display: inline-flex; }
+        .run-mode-toggle-bar .btn { border-radius: 0; border: none; border-right: 1px solid var(--studio-border); }
+        .run-mode-toggle-bar .btn:last-child { border-right: none; }
+        #sharedRunSection .section-header { color: var(--accent-color); }
+        #localRunPanel, #hpcRunPanel { margin-top: 0; }
         .utility-status { display: none; border-radius: 8px; padding: 12px 18px; min-height: 48px; font-weight: 600; }
         .utility-log { background: #0f172a; color: #f8fafc; border-radius: 10px; padding: 18px; border: 1px solid #1d2939; min-height: 180px; font-family: 'Consolas', 'Menlo', monospace; white-space: pre-wrap; overflow-y: auto; }
 
@@ -250,7 +257,6 @@
         <div class="btn-group ms-lg-3" role="tablist">
             <button class="btn btn-primary tab-button active" id="tabProjectsBtn" type="button" onclick="switchTab('projectsTab', this)"><i class="fas fa-project-diagram me-1"></i>Projects</button>
             <button class="btn btn-outline-primary tab-button" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)"><i class="fas fa-play-circle me-1"></i>Run App</button>
-            <button class="btn btn-outline-primary tab-button" id="tabHPCBtn" type="button" onclick="switchTab('hpcTab', this)"><i class="fas fa-server me-1"></i>HPC</button>
             <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)"><i class="fas fa-check-circle me-1"></i>Check Output</button>
             <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)"><i class="fas fa-hammer me-1"></i>Build</button>
         </div>
@@ -454,108 +460,29 @@
                     </div>
                     <div class="form-text mt-2">Pipeline presets keep separate app/container arguments inside one project. Save the project after switching or editing presets.</div>
                 </div>
-                <div id="runnerActiveRunsNotice" class="alert py-2 px-3 small mb-3" style="display:none;"></div>
-                <div id="runnerOptionsLoadStatus" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;"></div>
-                <div id="runnerPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
-                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                        <strong>Launch Preflight</strong>
-                        <span id="runnerPreflightBadge" class="badge bg-secondary">Checking...</span>
-                    </div>
-                    <ul id="runnerPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
+                <!-- ═══════════════════════════════════════════════════════════
+                     RUN MODE TOGGLE  (LOCAL / HPC)
+                ═══════════════════════════════════════════════════════════ -->
+                <div class="d-flex gap-0 mb-4 run-mode-toggle-bar" role="group" aria-label="Run mode">
+                    <button type="button" id="modeLocalBtn"
+                            class="btn btn-primary px-4 py-2"
+                            onclick="switchRunMode('local')"
+                            title="Run BIDS app locally on this machine">
+                        <i class="fas fa-laptop me-2"></i>Local
+                    </button>
+                    <button type="button" id="modeHPCBtn"
+                            class="btn btn-outline-primary px-4 py-2"
+                            onclick="switchRunMode('hpc')"
+                            title="Submit jobs to a SLURM/HPC cluster">
+                        <i class="fas fa-server me-2"></i>HPC / SLURM
+                    </button>
                 </div>
 
-                <div class="runner-action-bar">
-                    <div class="runner-action-bar-inner">
-                        <button class="btn btn-outline-primary" type="button" onclick="loadExistingConfig()"><i class="fas fa-folder-open me-2"></i>Load Config</button>
-                        <button class="btn btn-outline-success" type="button" onclick="handleSaveAndRun(false)"><i class="fas fa-save me-2"></i>Save Only</button>
-                        <button class="btn btn-danger px-4" id="saveStartBtn" type="button" onclick="handleSaveAndRun(true)"><i class="fas fa-play-circle me-2"></i>Save & Start Runner</button>
-                        <button class="btn btn-warning" id="runApp" style="display: none;" type="button" onclick="executeNow()"><i class="fas fa-bolt me-2"></i>Run (Cached)</button>
-                        <button class="btn btn-dark" id="killCurrentBtn" type="button" onclick="killApp('current')"><i class="fas fa-stop-circle me-2"></i>Stop Current Run</button>
-                        <button class="btn btn-outline-dark" id="killAllBtn" type="button" onclick="killApp('all')"><i class="fas fa-ban me-2"></i>Stop All Runs</button>
-                    </div>
-                </div>
-
-                <form id="runnerForm">
-                    <div class="section-header">1. Data Locations</div>
-                    <div class="row">
-                        <div class="col-md-6 mb-4">
-                            <label id="bids_folder_label" class="form-label" title="Path to raw BIDS data (must contain dataset_description.json)">BIDS Dataset Folder</label>
-                            <div class="input-group">
-                                <input type="text" id="bids_folder" class="form-control" placeholder="/path/to/rawdata">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('bids_folder')">...</button>
-                            </div>
-                        </div>
-                        <div class="col-md-6 mb-4">
-                            <label class="form-label" title="Where derivative results will be saved">Output Folder</label>
-                            <div class="input-group">
-                                <input type="text" id="output_folder" class="form-control" placeholder="/path/to/derivatives">
-                                <button type="button" class="btn btn-outline-secondary" id="output_folder_browse_btn" onclick="openBrowser('output_folder')">...</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-4">
-                            <label class="form-label" title="Root derivatives directory used for versioned output layout">Derivatives Root (Versioned Mode)</label>
-                            <div class="input-group">
-                                <input type="text" id="pipeline_output_root" class="form-control" placeholder="/path/to/derivatives">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('pipeline_output_root')">...</button>
-                            </div>
-                        </div>
-                        <div class="col-md-3 mb-4">
-                            <label class="form-label" title="Pipeline/app folder name under derivatives root">Pipeline App</label>
-                            <select id="pipeline_app_name" class="form-select">
-                                <option value="">Auto-detect</option>
-                                <option value="fmriprep">fmriprep</option>
-                                <option value="freesurfer">freesurfer</option>
-                                <option value="fastsurfer">fastsurfer</option>
-                                <option value="qsiprep">qsiprep</option>
-                                <option value="qsirecon">qsirecon</option>
-                                <option value="mriqc">mriqc</option>
-                                <option value="cat12">cat12</option>
-                                <option value="nibabies">nibabies</option>
-                            </select>
-                        </div>
-                        <div class="col-md-3 mb-4 d-flex align-items-end">
-                            <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="pipeline_auto_versioning" checked>
-                                <label class="form-check-label" for="pipeline_auto_versioning">Auto Paths</label>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-12 mb-4">
-                            <div class="form-text" id="pipelineVersioningPreview">Versioned output preview: not configured.</div>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-4">
-                            <label class="form-label" title="Temporary space for intermediate files (recommended for performance)">Work/Temp Folder</label>
-                            <div class="input-group">
-                                <input type="text" id="tmp_folder" class="form-control" placeholder="/path/to/temp">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('tmp_folder')">...</button>
-                            </div>
-                        </div>
-                        <div class="col-md-6 mb-4">
-                            <label class="form-label" title="Local directory for pre-downloaded TemplateFlow resources (Optional)">Templateflow (Optional)</label>
-                            <div class="input-group">
-                                <input type="text" id="templateflow_dir" class="form-control">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('templateflow_dir')">...</button>
-                                <button type="button" class="btn btn-primary" onclick="openTemplateFlowPicker()"><i class="fas fa-search me-1"></i> Scan</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-4">
-                            <label class="form-label" title="Optional: Required for fMRIPrep/QSIPrep to run FreeSurfer">FreeSurfer License File (Optional)</label>
-                            <div class="input-group">
-                                <input type="text" id="fs_license_file" class="form-control" placeholder="/path/to/license.txt">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openFileBrowser('fs_license_file', [], '', true)">...</button>
-                            </div>
-                            <div class="form-text">Optional: required for fMRIPrep and QSIPrep when FreeSurfer is used.</div>
-                        </div>
-                    </div>
-
-                    <div class="section-header">2. Container Settings</div>
+                <!-- ═══════════════════════════════════════════════════════════
+                     SHARED: Container & Tools  (always visible)
+                ═══════════════════════════════════════════════════════════ -->
+                <div id="sharedRunSection">
+                    <div class="section-header">1. Container &amp; Tools</div>
                     <div class="row align-items-end">
                         <div class="col-md-12 mb-4">
                             <div class="card bg-light border-0 shadow-none">
@@ -617,6 +544,115 @@
                         </div>
                     </div>
 
+                    <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Local directory for pre-downloaded TemplateFlow resources (Optional)">Templateflow (Optional)</label>
+                            <div class="input-group">
+                                <input type="text" id="templateflow_dir" class="form-control">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('templateflow_dir')">...</button>
+                                <button type="button" class="btn btn-primary" onclick="openTemplateFlowPicker()"><i class="fas fa-search me-1"></i> Scan</button>
+                            </div>
+                        </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Optional: Required for fMRIPrep/QSIPrep to run FreeSurfer">FreeSurfer License File (Optional)</label>
+                            <div class="input-group">
+                                <input type="text" id="fs_license_file" class="form-control" placeholder="/path/to/license.txt">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openFileBrowser('fs_license_file', [], '', true)">...</button>
+                            </div>
+                            <div class="form-text">Optional: required for fMRIPrep and QSIPrep when FreeSurfer is used.</div>
+                        </div>
+                    </div>
+                    </div>
+                </div><!-- end sharedRunSection -->
+
+                <!-- ═══════════════════════════════════════════════════════════
+                     LOCAL RUN PANEL
+                ═══════════════════════════════════════════════════════════ -->
+                <div id="localRunPanel">
+                <div id="runnerActiveRunsNotice" class="alert py-2 px-3 small mb-3" style="display:none;"></div>
+                <div id="runnerOptionsLoadStatus" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;"></div>
+                <div id="runnerPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <strong>Launch Preflight</strong>
+                        <span id="runnerPreflightBadge" class="badge bg-secondary">Checking...</span>
+                    </div>
+                    <ul id="runnerPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
+                </div>
+
+                <div class="runner-action-bar">
+                    <div class="runner-action-bar-inner">
+                        <button class="btn btn-outline-primary" type="button" onclick="loadExistingConfig()"><i class="fas fa-folder-open me-2"></i>Load Config</button>
+                        <button class="btn btn-outline-success" type="button" onclick="handleSaveAndRun(false)"><i class="fas fa-save me-2"></i>Save Only</button>
+                        <button class="btn btn-danger px-4" id="saveStartBtn" type="button" onclick="handleSaveAndRun(true)"><i class="fas fa-play-circle me-2"></i>Save & Start Runner</button>
+                        <button class="btn btn-warning" id="runApp" style="display: none;" type="button" onclick="executeNow()"><i class="fas fa-bolt me-2"></i>Run (Cached)</button>
+                        <button class="btn btn-dark" id="killCurrentBtn" type="button" onclick="killApp('current')"><i class="fas fa-stop-circle me-2"></i>Stop Current Run</button>
+                        <button class="btn btn-outline-dark" id="killAllBtn" type="button" onclick="killApp('all')"><i class="fas fa-ban me-2"></i>Stop All Runs</button>
+                    </div>
+                </div>
+
+                <form id="runnerForm">
+                    <div class="section-header">2. Data Locations (Local)</div>
+                    <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <label id="bids_folder_label" class="form-label" title="Path to raw BIDS data (must contain dataset_description.json)">BIDS Dataset Folder</label>
+                            <div class="input-group">
+                                <input type="text" id="bids_folder" class="form-control" placeholder="/path/to/rawdata">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('bids_folder')">...</button>
+                            </div>
+                        </div>
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Where derivative results will be saved">Output Folder</label>
+                            <div class="input-group">
+                                <input type="text" id="output_folder" class="form-control" placeholder="/path/to/derivatives">
+                                <button type="button" class="btn btn-outline-secondary" id="output_folder_browse_btn" onclick="openBrowser('output_folder')">...</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Root derivatives directory used for versioned output layout">Derivatives Root (Versioned Mode)</label>
+                            <div class="input-group">
+                                <input type="text" id="pipeline_output_root" class="form-control" placeholder="/path/to/derivatives">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('pipeline_output_root')">...</button>
+                            </div>
+                        </div>
+                        <div class="col-md-3 mb-4">
+                            <label class="form-label" title="Pipeline/app folder name under derivatives root">Pipeline App</label>
+                            <select id="pipeline_app_name" class="form-select">
+                                <option value="">Auto-detect</option>
+                                <option value="fmriprep">fmriprep</option>
+                                <option value="freesurfer">freesurfer</option>
+                                <option value="fastsurfer">fastsurfer</option>
+                                <option value="qsiprep">qsiprep</option>
+                                <option value="qsirecon">qsirecon</option>
+                                <option value="mriqc">mriqc</option>
+                                <option value="cat12">cat12</option>
+                                <option value="nibabies">nibabies</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3 mb-4 d-flex align-items-end">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="pipeline_auto_versioning" checked>
+                                <label class="form-check-label" for="pipeline_auto_versioning">Auto Paths</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-12 mb-4">
+                            <div class="form-text" id="pipelineVersioningPreview">Versioned output preview: not configured.</div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Temporary space for intermediate files (recommended for performance)">Work/Temp Folder</label>
+                            <div class="input-group">
+                                <input type="text" id="tmp_folder" class="form-control" placeholder="/path/to/temp">
+                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('tmp_folder')">...</button>
+                            </div>
+                        </div>
+                    </div>
                     <!-- QSIRecon-specific panel: shown only when a qsirecon container is selected -->
                     <div id="qsireconSection" style="display:none;">
                         <div class="section-header">QSIRecon Settings</div>
@@ -1014,19 +1050,17 @@
                     </div>
                     <pre id="terminal"></pre>
                 </div>
-            </div>
-        </div>
-    </div>
+                </div><!-- end localRunPanel -->
 
-        <!-- HPC/SLURM TAB -->
-        <div id="hpcTab" class="tab-panel">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><i class="fas fa-server me-2"></i>HPC/SLURM Configuration</span>
-                    <button class="btn btn-sm btn-outline-info" onclick="checkHPCEnvironment()">
-                        <i class="fas fa-sync-alt me-1"></i>Check Environment
-                    </button>
-                </div>
+                <!-- ═══════════════════════════════════════════════════════════
+                     HPC RUN PANEL
+                ═══════════════════════════════════════════════════════════ -->
+                <div id="hpcRunPanel" style="display:none;">
+                    <div class="mb-3 d-flex gap-2 align-items-center flex-wrap">
+                        <button class="btn btn-sm btn-outline-info" onclick="checkHPCEnvironment()">
+                            <i class="fas fa-sync-alt me-1"></i>Check Environment
+                        </button>
+                    </div>
                 <div class="card-body">
                     <div id="hpcProjectScopeNotice" class="alert alert-warning py-2 px-3 small mb-3">
                         HPC settings are project-scoped. Load a project in Projects before editing or saving HPC configuration.
@@ -1055,6 +1089,120 @@
                         <button type="button" class="btn btn-sm btn-outline-primary ms-2" onclick="switchTab('projectsTab', document.getElementById('tabProjectsBtn'))">
                             Go To Projects
                         </button>
+                    </div>
+
+                    <!-- BIDS App Cohort Panel -->
+                    <div class="card border-primary mb-3">
+                        <div class="card-header bg-primary bg-opacity-10 border-primary d-flex justify-content-between align-items-center" style="cursor:pointer;" onclick="toggleCohortPanel()">
+                            <span><i class="fas fa-layer-group me-2"></i><strong>BIDS App Cohort</strong></span>
+                            <i class="fas fa-chevron-down" id="cohortPanelIcon" style="transition:transform 0.3s;"></i>
+                        </div>
+                        <div id="cohortPanelBody" class="card-body" style="display:none;">
+                            <p class="text-muted small mb-3">
+                                Orchestrate any BIDS app (fMRIPrep, QSIPrep, MRIQC, …) across multiple datasets
+                                via SLURM array jobs and DataLad. Edit the config below, then run Setup → Submit.
+                            </p>
+
+                            <div class="row mb-3">
+                                <div class="col-md-9">
+                                    <label class="form-label fw-semibold">Config File</label>
+                                    <div class="input-group">
+                                        <input type="text" class="form-control font-monospace" id="cohortConfigPath"
+                                               placeholder="configs/cohort_hpc_example.json">
+                                        <button class="btn btn-outline-secondary" type="button"
+                                                onclick="openBrowser('cohortConfigPath')">…</button>
+                                        <button class="btn btn-outline-primary" type="button"
+                                                onclick="loadCohortConfig()" title="Load config into editor">
+                                            <i class="fas fa-file-import"></i>
+                                        </button>
+                                    </div>
+                                    <small class="text-muted">Default: <code>configs/cohort_hpc_example.json</code></small>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold">Max concurrent jobs</label>
+                                    <input type="number" class="form-control" id="cohortMaxConcurrent"
+                                           value="50" min="1" max="500">
+                                    <small class="text-muted">Array %N throttle</small>
+                                </div>
+                            </div>
+
+                            <div class="row mb-3">
+                                <div class="col-md-12">
+                                    <label class="form-label fw-semibold">Dataset filter <span class="text-muted fw-normal">(optional — leave empty for all 39)</span></label>
+                                    <input type="text" class="form-control font-monospace" id="cohortDatasets"
+                                           placeholder="ds000031 ds000256 ds001454  …">
+                                    <small class="text-muted">Space-separated dataset IDs to process; blank = all</small>
+                                </div>
+                            </div>
+
+                            <div class="d-flex align-items-center gap-3 mb-3">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="cohortDryRun">
+                                    <label class="form-check-label" for="cohortDryRun">Dry run</label>
+                                </div>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="cohortResume">
+                                    <label class="form-check-label" for="cohortResume">Resume (skip existing)</label>
+                                </div>
+                            </div>
+
+                            <!-- JSON config editor -->
+                            <div class="card border-0 bg-light mb-3">
+                                <div class="card-header bg-transparent border-bottom d-flex justify-content-between align-items-center px-3 py-2"
+                                     style="cursor:pointer;" onclick="toggleCohortEditor()">
+                                    <span class="small fw-semibold"><i class="fas fa-code me-2 text-muted"></i>Edit Config JSON</span>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <span id="cohortEditorStatus" class="small text-muted"></span>
+                                        <i class="fas fa-chevron-down text-muted" id="cohortEditorIcon" style="transition:transform 0.3s;"></i>
+                                    </div>
+                                </div>
+                                <div id="cohortEditorBody" style="display:none;">
+                                    <div class="p-2">
+                                        <textarea id="cohortConfigEditor"
+                                                  class="form-control font-monospace"
+                                                  rows="20"
+                                                  spellcheck="false"
+                                                  style="font-size:0.82rem; white-space:pre; resize:vertical;"
+                                                  placeholder="Click the import button (↑) next to the config path to load the file here…"></textarea>
+                                    </div>
+                                    <div class="d-flex gap-2 px-3 pb-3">
+                                        <button class="btn btn-sm btn-success" onclick="saveCohortConfig()">
+                                            <i class="fas fa-save me-1"></i>Save to disk
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-secondary" onclick="validateCohortConfig()">
+                                            <i class="fas fa-check me-1"></i>Validate JSON
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="loadCohortConfig()">
+                                            <i class="fas fa-sync me-1"></i>Reload from disk
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="d-flex flex-wrap gap-2 mb-3">
+                                <button class="btn btn-outline-secondary" id="cohortSetupBtn"
+                                        onclick="runCohort('setup')" title="Pre-clone all datasets and create output repos">
+                                    <i class="fas fa-download me-1"></i>1. Setup
+                                </button>
+                                <button class="btn btn-primary" id="cohortSubmitBtn"
+                                        onclick="runCohort('submit')" title="Generate array scripts and submit SLURM jobs">
+                                    <i class="fas fa-rocket me-1"></i>2. Submit
+                                </button>
+                                <button class="btn btn-outline-info" id="cohortStatusBtn"
+                                        onclick="runCohort('status')" title="Check SLURM status of submitted jobs">
+                                    <i class="fas fa-tasks me-1"></i>3. Status
+                                </button>
+                                <button class="btn btn-outline-danger ms-auto" id="cohortCancelBtn"
+                                        onclick="cancelCohort()" style="display:none;">
+                                    <i class="fas fa-stop me-1"></i>Cancel
+                                </button>
+                            </div>
+
+                            <div id="cohortStatusBadge" class="mb-2" style="display:none;">
+                                <span class="badge" id="cohortBadge">idle</span>
+                                <small id="cohortStatusMsg" class="text-muted ms-2"></small>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- HPC Settings Editor (Advanced) -->
@@ -1173,8 +1321,10 @@
                         <pre id="hpcLogOutput" class="utility-log" style="min-height: 200px;"></pre>
                     </div>
                 </div>
-            </div>
-        </div>
+                </div><!-- end hpcRunPanel -->
+            </div><!-- card-body -->
+            </div><!-- card -->
+        </div><!-- runnerTab -->
 
         <div id="checkTab" class="tab-panel">
             <div class="card">
@@ -2671,8 +2821,10 @@
                 if (el.id === 'loadProjectPath' || el.id === 'newProjectName' || el.id === 'newProjectDesc') return false;
                 if (el.closest('#browserModal') || el.closest('#configModal')) return false;
                 if (el.closest('#runnerForm')) return true;
+                if (el.closest('#sharedRunSection')) return true;
+                if (el.closest('#hpcRunPanel')) return true;
                 if (el.closest('#checkTab')) return true;
-                if (el.closest('#hpcTab')) return true;
+
                 return false;
             };
 
@@ -6317,7 +6469,7 @@
         }
 
         function initializeTabCardAccordions() {
-            const panelIds = ['projectsTab', 'runnerTab', 'hpcTab', 'checkTab', 'buildTab'];
+            const panelIds = ['projectsTab', 'runnerTab', 'checkTab', 'buildTab'];
 
             panelIds.forEach((panelId) => {
                 const panel = document.getElementById(panelId);
@@ -6445,6 +6597,9 @@
 
             // Keep navbar status fresh without requiring user actions.
             setInterval(updateNavbarRunStatus, 3000);
+
+            // Restore run mode (local/hpc) from last session
+            switchRunMode(_currentRunMode);
         });
 
         // ============================================================================
@@ -6950,6 +7105,36 @@
             return script;
         }
 
+        // ── Run-mode toggle ───────────────────────────────────────────────────────
+        let _currentRunMode = localStorage.getItem('runMode') || 'local';
+
+        function switchRunMode(mode) {
+            _currentRunMode = mode;
+            localStorage.setItem('runMode', mode);
+
+            const localPanel = document.getElementById('localRunPanel');
+            const hpcPanel   = document.getElementById('hpcRunPanel');
+            const localBtn   = document.getElementById('modeLocalBtn');
+            const hpcBtn     = document.getElementById('modeHPCBtn');
+
+            if (mode === 'local') {
+                localPanel.style.display = '';
+                hpcPanel.style.display   = 'none';
+                localBtn.className = 'btn btn-primary px-4 py-2';
+                hpcBtn.className   = 'btn btn-outline-primary px-4 py-2';
+                // Refresh local preflight when switching to local
+                scheduleRunnerPreflightRefresh();
+            } else {
+                localPanel.style.display = 'none';
+                hpcPanel.style.display   = '';
+                localBtn.className = 'btn btn-outline-primary px-4 py-2';
+                hpcBtn.className   = 'btn btn-primary px-4 py-2';
+                // Refresh HPC preflight when switching to HPC
+                scheduleHpcPreflightRefresh();
+                updateHpcProjectScopeNotice();
+            }
+        }
+
         function logHPC(message, isError = false) {
             const output = document.getElementById('hpcLogOutput');
             const timestamp = new Date().toLocaleTimeString();
@@ -6963,6 +7148,188 @@
             document.getElementById('hpcLogOutput').textContent = '';
             logHPC('Log cleared');
         }
-        
+
+        // ── Cohort panel ────────────────────────────────────────────────────
+        let _cohortJobId = null;
+        let _cohortPollTimer = null;
+        let _cohortLastLogLen = 0;
+
+        function toggleCohortPanel() {
+            const body = document.getElementById('cohortPanelBody');
+            const icon = document.getElementById('cohortPanelIcon');
+            const open = body.style.display !== 'none';
+            body.style.display = open ? 'none' : 'block';
+            icon.style.transform = open ? '' : 'rotate(180deg)';
+        }
+
+        function toggleCohortEditor() {
+            const body = document.getElementById('cohortEditorBody');
+            const icon = document.getElementById('cohortEditorIcon');
+            const open = body.style.display !== 'none';
+            body.style.display = open ? 'none' : 'block';
+            icon.style.transform = open ? '' : 'rotate(180deg)';
+        }
+
+        function _cohortEditorStatus(msg, isError = false) {
+            const el = document.getElementById('cohortEditorStatus');
+            el.textContent = msg;
+            el.className = isError ? 'small text-danger' : 'small text-success';
+        }
+
+        async function loadCohortConfig() {
+            const path = document.getElementById('cohortConfigPath').value.trim();
+            const url = '/cohort/load_config' + (path ? `?path=${encodeURIComponent(path)}` : '');
+            try {
+                const r = await fetch(url);
+                const data = await r.json();
+                if (!r.ok || data.error) { _cohortEditorStatus(data.error || 'Load failed', true); return; }
+                // Pretty-print
+                const editor = document.getElementById('cohortConfigEditor');
+                editor.value = JSON.stringify(JSON.parse(data.content), null, 2);
+                if (!document.getElementById('cohortConfigPath').value.trim())
+                    document.getElementById('cohortConfigPath').value = data.path;
+                // Open editor panel
+                document.getElementById('cohortEditorBody').style.display = 'block';
+                document.getElementById('cohortEditorIcon').style.transform = 'rotate(180deg)';
+                _cohortEditorStatus('Loaded from disk');
+            } catch (e) {
+                _cohortEditorStatus('Network error', true);
+            }
+        }
+
+        function validateCohortConfig() {
+            const content = document.getElementById('cohortConfigEditor').value.trim();
+            if (!content) { _cohortEditorStatus('Editor is empty', true); return false; }
+            try {
+                JSON.parse(content);
+                _cohortEditorStatus('JSON is valid ✓');
+                return true;
+            } catch (e) {
+                _cohortEditorStatus(`Invalid JSON: ${e.message}`, true);
+                return false;
+            }
+        }
+
+        async function saveCohortConfig() {
+            if (!validateCohortConfig()) return;
+            const path = document.getElementById('cohortConfigPath').value.trim();
+            if (!path) { _cohortEditorStatus('Set a config file path first', true); return; }
+            const content = document.getElementById('cohortConfigEditor').value;
+            try {
+                const r = await fetch('/cohort/save_config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ path, content }),
+                });
+                const data = await r.json();
+                if (!r.ok || data.error) { _cohortEditorStatus(data.error || 'Save failed', true); return; }
+                _cohortEditorStatus('Saved ✓');
+                logHPC(`Config saved: ${data.path}`);
+            } catch (e) {
+                _cohortEditorStatus('Network error', true);
+            }
+        }
+
+        function _cohortSetBusy(busy, command) {
+            ['cohortSetupBtn','cohortSubmitBtn','cohortStatusBtn'].forEach(id => {
+                document.getElementById(id).disabled = busy;
+            });
+            document.getElementById('cohortCancelBtn').style.display = busy ? 'inline-flex' : 'none';
+            const badge = document.getElementById('cohortBadge');
+            const msg   = document.getElementById('cohortStatusMsg');
+            document.getElementById('cohortStatusBadge').style.display = 'block';
+            if (busy) {
+                badge.className = 'badge bg-warning text-dark';
+                badge.textContent = 'running';
+                msg.textContent   = command;
+            }
+        }
+
+        function _cohortSetDone(status, command) {
+            ['cohortSetupBtn','cohortSubmitBtn','cohortStatusBtn'].forEach(id => {
+                document.getElementById(id).disabled = false;
+            });
+            document.getElementById('cohortCancelBtn').style.display = 'none';
+            const badge = document.getElementById('cohortBadge');
+            const msg   = document.getElementById('cohortStatusMsg');
+            badge.className = status === 'completed'
+                ? 'badge bg-success' : status === 'cancelled'
+                ? 'badge bg-secondary' : 'badge bg-danger';
+            badge.textContent = status;
+            msg.textContent   = `${command} finished`;
+        }
+
+        async function runCohort(command) {
+            const configPath = document.getElementById('cohortConfigPath').value.trim();
+            const datasets   = document.getElementById('cohortDatasets').value.trim();
+            const dryRun     = document.getElementById('cohortDryRun').checked;
+
+            _cohortLastLogLen = 0;
+            _cohortSetBusy(true, command);
+            logHPC(`Starting cohort ${command}${dryRun ? ' (dry-run)' : ''}…`);
+
+            let resp;
+            try {
+                resp = await fetch('/cohort/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ command, config_path: configPath || null,
+                                          datasets, dry_run: dryRun }),
+                });
+            } catch (err) {
+                logHPC(`Network error: ${err}`, true);
+                _cohortSetDone('failed', command);
+                return;
+            }
+
+            const data = await resp.json();
+            if (!resp.ok || data.error) {
+                logHPC(data.error || 'Unknown error', true);
+                _cohortSetDone('failed', command);
+                return;
+            }
+
+            _cohortJobId = data.job_id;
+            logHPC(`Job started: ${_cohortJobId}`);
+            _cohortPollTimer = setInterval(() => _cohortPoll(command), 1500);
+        }
+
+        async function _cohortPoll(command) {
+            if (!_cohortJobId) return;
+            let data;
+            try {
+                const r = await fetch(`/cohort/job_status?job_id=${_cohortJobId}`);
+                data = await r.json();
+            } catch { return; }
+
+            const log = data.log_tail || '';
+            if (log.length > _cohortLastLogLen) {
+                const newText = log.slice(_cohortLastLogLen);
+                const out = document.getElementById('hpcLogOutput');
+                out.textContent += newText;
+                out.scrollTop = out.scrollHeight;
+                _cohortLastLogLen = log.length;
+            }
+
+            if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
+                clearInterval(_cohortPollTimer);
+                _cohortPollTimer = null;
+                _cohortSetDone(data.status, command);
+                logHPC(`Cohort ${command} ${data.status}` + (data.returncode != null ? ` (exit ${data.returncode})` : ''));
+            }
+        }
+
+        async function cancelCohort() {
+            if (!_cohortJobId) return;
+            await fetch('/cohort/cancel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ job_id: _cohortJobId }),
+            });
+            if (_cohortPollTimer) { clearInterval(_cohortPollTimer); _cohortPollTimer = null; }
+            _cohortSetDone('cancelled', 'cancel');
+            logHPC('Cohort job cancelled');
+        }
+
     </script>
 {% endblock %}

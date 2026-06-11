@@ -460,6 +460,278 @@ echo "=========================================="
         return section
 
 
+class DataLadArrayJobGenerator:
+    """Generate a SLURM array job script for large-cohort DataLad workflows.
+
+    Works with any BIDS app (fMRIPrep, QSIPrep, MRIQC, …).  A single array
+    job covers all subjects in one dataset; SLURM uses $SLURM_ARRAY_TASK_ID to
+    pick the subject from a plain-text list file.
+
+    Workflow per array task:
+      1. Resolve subject from list file via $SLURM_ARRAY_TASK_ID
+      2. Cheap dataset clone from HPC-local pre-clone (--reckless shared)
+      3. datalad get for that subject only
+      4. Clone output dataset, create per-subject branch
+      5. Run BIDS app via apptainer exec
+      6. datalad save + flock-protected push to origin
+      7. Cleanup scratch
+
+    Required config keys (top-level JSON sections):
+      paths.shared_input_base   – local HPC pre-clone root
+      paths.shared_output_base  – local HPC output root (sibling of SSH store)
+      paths.scratch_dir         – per-task scratch base
+      paths.container           – apptainer .sif path
+      paths.templateflow_dir    – (optional) host TemplateFlow directory
+      paths.fs_license          – (optional) host FreeSurfer license.txt
+      paths.log_dir             – base log directory
+      paths.subject_lists_dir   – directory holding <dataset_id>_subjects.txt
+      hpc.partition / time / mem / cpus / max_concurrent / modules / environment
+      bids_app.app_name         – used in job name and commit messages
+      bids_app.analysis_level   – passed as BIDS positional arg (default: participant)
+      bids_app.output_dir_name  – output subdirectory name (default: app_name)
+      bids_app.options          – flat list of extra CLI flags for the container
+    """
+
+    def __init__(
+        self,
+        config: Dict,
+        dataset_id: str,
+        subject_list_path: str,
+        n_subjects: int,
+    ) -> None:
+        self.config = config
+        self.dataset_id = _validate_shell_name(dataset_id, "dataset_id")
+        self.subject_list_path = subject_list_path
+        self.n_subjects = n_subjects
+
+        self.hpc = config.get("hpc", {})
+        self.paths = config.get("paths", {})
+        # Support both new generic "bids_app" section and legacy "fmriprep" section
+        self.bids_app = config.get("bids_app") or config.get("fmriprep") or {}
+        self._app_name = self.bids_app.get("app_name") or "bids_app"
+        self._out_dir_name = self.bids_app.get("output_dir_name") or self._app_name
+
+    # ── public ────────────────────────────────────────────────────────────────
+
+    def generate_script(self) -> str:
+        parts = [
+            self._header(),
+            self._resolve_subject(),
+            self._info_block(),
+            self._module_and_env(),
+            self._workdirs(),
+            self._clone_input(),
+            self._get_subject_data(),
+            self._clone_output(),
+            self._run_bids_app(),
+            self._save_and_push(),
+            self._cleanup(),
+            self._footer(),
+        ]
+        return "\n".join(parts)
+
+    # ── private sections ──────────────────────────────────────────────────────
+
+    def _header(self) -> str:
+        partition = _validate_sbatch_value(
+            self.hpc.get("partition", "compute"), "partition"
+        )
+        time_limit = _validate_sbatch_value(self.hpc.get("time", "24:00:00"), "time")
+        mem = _validate_sbatch_value(self.hpc.get("mem", "32G"), "mem")
+        cpus = int(self.hpc.get("cpus", 8))
+        max_concurrent = int(self.hpc.get("max_concurrent", 50))
+        array_spec = f"0-{self.n_subjects - 1}%{max_concurrent}"
+
+        log_dir = self.paths.get("log_dir", "$HOME/logs/bids_app")
+        out_log = f"{log_dir}/{self.dataset_id}/slurm-%A_%a.out"
+        err_log = f"{log_dir}/{self.dataset_id}/slurm-%A_%a.err"
+
+        header = f"""#!/bin/bash
+#SBATCH --job-name={self._app_name}_{self.dataset_id}
+#SBATCH --array={array_spec}
+#SBATCH --partition={partition}
+#SBATCH --time={time_limit}
+#SBATCH --mem={mem}
+#SBATCH --cpus-per-task={cpus}
+#SBATCH --output={out_log}
+#SBATCH --error={err_log}
+"""
+        for key, value in self.hpc.items():
+            if key.startswith("sbatch_"):
+                directive = _validate_sbatch_directive_name(
+                    key.replace("sbatch_", "").replace("_", "-")
+                )
+                val = _validate_sbatch_value(value, directive)
+                header += f"#SBATCH --{directive}={val}\n"
+        return header
+
+    def _resolve_subject(self) -> str:
+        quoted_list = _shell_quote(self.subject_list_path)
+        return f"""
+# Resolve subject from list file
+SUBJECT_LIST={quoted_list}
+SUBJECT=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$SUBJECT_LIST" | tr -d '[:space:]')
+if [[ -z "$SUBJECT" ]]; then
+    echo "ERROR: no subject for array task $SLURM_ARRAY_TASK_ID in $SUBJECT_LIST" >&2
+    exit 1
+fi
+SUBJECT_LABEL="${{SUBJECT#sub-}}"
+"""
+
+    def _info_block(self) -> str:
+        return """
+echo "========================================"
+echo "Array job:  ${SLURM_ARRAY_JOB_ID}[${SLURM_ARRAY_TASK_ID}]"
+echo "Subject:    sub-${SUBJECT_LABEL}"
+echo "Node:       ${SLURM_JOB_NODELIST}"
+echo "Started:    $(date)"
+echo "========================================"
+
+set -e
+set -u
+trap 'echo "FAILED at line $LINENO (task $SLURM_ARRAY_TASK_ID, sub-${SUBJECT_LABEL})" >&2' ERR
+"""
+
+    def _module_and_env(self) -> str:
+        lines = []
+        modules = self.hpc.get("modules", [])
+        if modules:
+            lines.append("# Load modules")
+            lines.append("module load " + " ".join(_shell_quote(m) for m in modules))
+            lines.append("")
+
+        env_vars = self.hpc.get("environment", {})
+        if env_vars:
+            lines.append("# Environment variables")
+            for key, value in env_vars.items():
+                key = str(key).strip()
+                if not _SAFE_ENV_KEY_PATTERN.fullmatch(key):
+                    raise ValueError(f"Invalid env var name: {key}")
+                lines.append(f"export {key}={_shell_quote(value)}")
+            lines.append("")
+
+        return "\n" + "\n".join(lines)
+
+    def _workdirs(self) -> str:
+        scratch = _shell_quote(self.paths.get("scratch_dir", "/scratch/$USER/bids_app"))
+        ds_id = _shell_quote(self.dataset_id)
+        log_dir = _shell_quote(
+            f"{self.paths.get('log_dir', '$HOME/logs/bids_app')}/{self.dataset_id}"
+        )
+        shared_out = _shell_quote(
+            f"{self.paths.get('shared_output_base', '/shared/derivatives')}"
+            f"/{self.dataset_id}"
+        )
+
+        return f"""
+# Working directories (unique per array task)
+WORK_DIR={scratch}/{ds_id}/${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}
+BIDS_DIR="${{WORK_DIR}}/bids"
+OUT_DIR="${{WORK_DIR}}/{self._out_dir_name}"
+TMP_DIR="${{WORK_DIR}}/tmp"
+PUSH_LOCK={shared_out}/.push.lock
+
+mkdir -p "${{BIDS_DIR}}" "${{OUT_DIR}}" "${{TMP_DIR}}" {log_dir}
+echo "Scratch: ${{WORK_DIR}}"
+"""
+
+    def _clone_input(self) -> str:
+        shared_input = _shell_quote(
+            f"{self.paths.get('shared_input_base', '/shared/input')}"
+            f"/{self.dataset_id}"
+        )
+        return f"""
+# Clone input dataset (cheap from local pre-clone)
+echo "--- Cloning input ---"
+datalad clone --reckless shared {shared_input} "${{BIDS_DIR}}"
+"""
+
+    def _get_subject_data(self) -> str:
+        return """
+# Retrieve this subject's files from annex
+echo "--- Getting sub-${SUBJECT_LABEL} ---"
+cd "${BIDS_DIR}"
+datalad get "sub-${SUBJECT_LABEL}/"
+"""
+
+    def _clone_output(self) -> str:
+        shared_out = _shell_quote(
+            f"{self.paths.get('shared_output_base', '/shared/derivatives')}"
+            f"/{self.dataset_id}/{self._out_dir_name}"
+        )
+        return f"""
+# Clone output dataset and create per-subject branch
+echo "--- Cloning output ---"
+datalad clone --reckless shared {shared_out} "${{OUT_DIR}}"
+cd "${{OUT_DIR}}"
+git checkout -b "sub-${{SUBJECT_LABEL}}"
+"""
+
+    def _run_bids_app(self) -> str:
+        app_name = self._app_name
+        analysis_level = self.bids_app.get("analysis_level", "participant")
+        options = self.bids_app.get("options", [])
+
+        container = _shell_quote(self.paths.get("container", "TODO_CONTAINER_PATH"))
+
+        # Build optional bind mounts (only add if path is set)
+        extra_binds = ""
+        tf = (self.paths.get("templateflow_dir") or "").strip()
+        if tf:
+            extra_binds += f"    -B {_shell_quote(tf)}:/templateflow:ro \\\n"
+        fs = (self.paths.get("fs_license") or "").strip()
+        if fs:
+            extra_binds += f"    -B {_shell_quote(fs)}:/fs/license.txt:ro \\\n"
+
+        # Build extra CLI flags from flat options list
+        extra_flags = ""
+        for opt in options:
+            extra_flags += f" \\\n    {_shell_quote(str(opt))}"
+
+        return f"""
+# Run BIDS app: {app_name}
+echo "--- Running {app_name} for sub-${{SUBJECT_LABEL}} ---"
+apptainer exec \\
+    --cleanenv \\
+    -B "${{BIDS_DIR}}":/bids:ro \\
+    -B "${{OUT_DIR}}":/output \\
+{extra_binds}    -B "${{TMP_DIR}}":/tmp \\
+    {container} \\
+    /bids /output {_shell_quote(analysis_level)} \\
+    --participant-label "${{SUBJECT_LABEL}}"{extra_flags} \\
+    -w /tmp/wdir
+
+echo "{app_name} finished for sub-${{SUBJECT_LABEL}}"
+"""
+
+    def _save_and_push(self) -> str:
+        app_name = self._app_name
+        return f"""
+# Save outputs and push to origin (flock prevents concurrent push conflicts)
+echo "--- Saving and pushing results ---"
+cd "${{OUT_DIR}}"
+datalad save -m "{app_name} sub-${{SUBJECT_LABEL}}"
+flock --verbose --timeout 300 "${{PUSH_LOCK}}" \\
+    datalad push --to origin
+git annex dead here
+"""
+
+    def _cleanup(self) -> str:
+        return """
+# Remove per-task scratch
+echo "--- Cleanup ---"
+rm -rf "${WORK_DIR}"
+"""
+
+    def _footer(self) -> str:
+        return """
+echo "========================================"
+echo "Completed sub-${SUBJECT_LABEL}"
+echo "End: $(date) | Duration: ${SECONDS}s"
+echo "========================================"
+"""
+
+
 def generate_script(
     config_path: str, subject: str, output_path: Optional[str] = None
 ) -> str:
@@ -508,6 +780,63 @@ def generate_script(
     return script
 
 
+def generate_array_script(
+    config_path: str,
+    dataset_id: str,
+    subject_list_path: str,
+    output_path: Optional[str] = None,
+) -> str:
+    """Generate a SLURM array job script for all subjects in one dataset.
+
+    Args:
+        config_path: Path to JSON config (cohort_hpc_example.json format)
+        dataset_id: Dataset identifier used as directory name and job label
+        subject_list_path: Path to plain-text file, one subject per line
+        output_path: Optional path to save the script
+
+    Returns:
+        Generated script content
+    """
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to load config: {e}")
+        sys.exit(1)
+
+    try:
+        with open(subject_list_path, "r") as f:
+            subjects = [line.strip() for line in f if line.strip()]
+    except Exception as e:
+        logging.error(f"Failed to read subject list: {e}")
+        sys.exit(1)
+
+    if not subjects:
+        logging.error(f"Subject list is empty: {subject_list_path}")
+        sys.exit(1)
+
+    generator = DataLadArrayJobGenerator(
+        config=config,
+        dataset_id=dataset_id,
+        subject_list_path=subject_list_path,
+        n_subjects=len(subjects),
+    )
+    script = generator.generate_script()
+
+    if output_path:
+        try:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w") as f:
+                f.write(script)
+            os.chmod(output_path, 0o755)
+            logging.info(f"Array script saved to: {output_path}")
+        except Exception as e:
+            logging.error(f"Failed to save script: {e}")
+            sys.exit(1)
+
+    return script
+
+
 def submit_job(script_path: str, dry_run: bool = False) -> Optional[str]:
     """Submit a SLURM job script.
 
@@ -549,43 +878,46 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate SLURM scripts with DataLad workflow"
     )
-
-    parser.add_argument(
-        "-c", "--config", required=True, help="Path to JSON config file"
-    )
-
-    parser.add_argument("-s", "--subject", required=True, help="Subject ID to process")
-
+    parser.add_argument("-c", "--config", required=True, help="Path to JSON config file")
     parser.add_argument("-o", "--output", help="Path to save generated script")
-
     parser.add_argument(
         "--submit", action="store_true", help="Submit the job to SLURM after generation"
     )
-
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be done without actually doing it",
+        "--dry-run", action="store_true", help="Show what would be done without executing"
+    )
+    parser.add_argument(
+        "--log-level", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Logging verbosity"
     )
 
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("-s", "--subject", help="Subject ID for per-subject script")
+    mode.add_argument(
+        "--array-mode", action="store_true",
+        help="Generate a SLURM array job script (requires --dataset-id and --subject-list)"
+    )
+
+    parser.add_argument("--dataset-id", help="Dataset accession ID (array mode)")
     parser.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Set logging level",
+        "--subject-list", help="Path to subject list file, one per line (array mode)"
     )
 
     args = parser.parse_args()
-
     setup_logging(args.log_level)
 
-    # Generate script
-    script = generate_script(args.config, args.subject, args.output)
+    if args.array_mode:
+        if not args.dataset_id or not args.subject_list:
+            parser.error("--array-mode requires --dataset-id and --subject-list")
+        script = generate_array_script(
+            args.config, args.dataset_id, args.subject_list, args.output
+        )
+    else:
+        script = generate_script(args.config, args.subject, args.output)
 
     if not args.output:
         print(script)
 
-    # Submit if requested
     if args.submit and args.output:
         submit_job(args.output, args.dry_run)
 
