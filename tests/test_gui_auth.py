@@ -4,7 +4,7 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 import prism_app_runner
-from gui_projects import ProjectStore
+from gui.gui_projects import ProjectStore
 
 
 @pytest.fixture

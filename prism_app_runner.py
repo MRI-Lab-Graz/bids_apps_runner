@@ -40,14 +40,14 @@ from typing import Any
 from datetime import datetime
 from pathlib import Path
 
-from gui_auth_routes import register_auth_handlers
-from gui_misc_routes import register_misc_routes
-from gui_project_routes import register_project_config_handlers
-from gui_projects import ProjectStore
-from gui_run_routes import register_run_routes
-from gui_system_routes import register_system_routes
-from gui_utility_routes import register_utility_routes
-from gui_security import (
+from gui.gui_auth_routes import register_auth_handlers
+from gui.gui_misc_routes import register_misc_routes
+from gui.gui_project_routes import register_project_config_handlers
+from gui.gui_projects import ProjectStore
+from gui.gui_run_routes import register_run_routes
+from gui.gui_system_routes import register_system_routes
+from gui.gui_utility_routes import register_utility_routes
+from gui.gui_security import (
     is_loopback_host as _is_loopback_host,
     load_gui_password_config,
     load_or_create_secret_key as _load_or_create_secret_key,
