@@ -52,4 +52,3 @@ def test_fetch_docker_tags_request_exception(monkeypatch):
         pass
     else:
         raise AssertionError("Expected RequestException to be raised")
-

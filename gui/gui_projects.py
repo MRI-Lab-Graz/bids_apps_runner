@@ -23,7 +23,9 @@ class ProjectStore:
         self.project_dir_resolver = project_dir_resolver
         self.timestamp_factory = timestamp_factory
 
-    def create_project(self, name: str, description: str = "") -> tuple[str, dict[str, Any]]:
+    def create_project(
+        self, name: str, description: str = ""
+    ) -> tuple[str, dict[str, Any]]:
         project_id = str(name or "").lower().replace(" ", "_").replace("-", "_")
         project_id = re.sub(r"[^a-z0-9_]", "", project_id)
         if not project_id:
@@ -61,7 +63,9 @@ class ProjectStore:
                 machine_defaults.get("default_apptainer_container") or ""
             ).strip()
 
-        default_tmp_folder = str(machine_defaults.get("default_tmp_folder") or "").strip()
+        default_tmp_folder = str(
+            machine_defaults.get("default_tmp_folder") or ""
+        ).strip()
 
         default_common = {
             "bids_folder": "",
@@ -120,7 +124,9 @@ class ProjectStore:
         with open(project_json_path, "r", encoding="utf-8") as f:
             project_json = json.load(f)
 
-        if isinstance(project_json, dict) and isinstance(project_json.get("config"), dict):
+        if isinstance(project_json, dict) and isinstance(
+            project_json.get("config"), dict
+        ):
             project_json["config"] = self.config_normalizer(project_json["config"])
 
         return project_json
@@ -168,7 +174,7 @@ class ProjectStore:
         return True
 
     def list_projects(self, limit: int | None = None) -> list[dict[str, Any]]:
-        projects = []
+        projects: list[dict[str, Any]] = []
 
         if not self.projects_dir.exists():
             return projects
@@ -189,7 +195,9 @@ class ProjectStore:
                 if isinstance(project_data, dict) and isinstance(
                     project_data.get("config"), dict
                 ):
-                    project_data["config"] = self.config_normalizer(project_data["config"])
+                    project_data["config"] = self.config_normalizer(
+                        project_data["config"]
+                    )
                 projects.append(project_data)
             except Exception as exc:
                 print(f"[ERROR] Failed to load project {project_dir.name}: {exc}")

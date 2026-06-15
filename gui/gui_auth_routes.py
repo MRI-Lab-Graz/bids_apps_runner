@@ -25,7 +25,9 @@ def register_auth_handlers(
         if not configured:
             return False
         provided_token = request_auth_token()
-        return bool(provided_token) and secrets.compare_digest(provided_token, configured)
+        return bool(provided_token) and secrets.compare_digest(
+            provided_token, configured
+        )
 
     def request_wants_json_response() -> bool:
         accept = str(request.headers.get("Accept") or "").lower()
@@ -80,7 +82,12 @@ def register_auth_handlers(
 
     def unauthenticated_response():
         if request_wants_json_response():
-            return jsonify({"error": "Authentication required", "login_url": url_for("login")}), 401
+            return (
+                jsonify(
+                    {"error": "Authentication required", "login_url": url_for("login")}
+                ),
+                401,
+            )
 
         next_path = request.full_path if request.query_string else request.path
         return redirect(url_for("login", next=next_path))
@@ -179,7 +186,10 @@ def register_auth_handlers(
             session["authenticated_at"] = int(time.time())
             rotate_csrf_token()
             if wants_json:
-                return jsonify({"message": "Login successful", "redirect": next_path}), 200
+                return (
+                    jsonify({"message": "Login successful", "redirect": next_path}),
+                    200,
+                )
             return redirect(next_path)
 
         if is_authenticated_session():

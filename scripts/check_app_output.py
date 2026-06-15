@@ -95,9 +95,9 @@ class BIDSChecker:
                                     m.strip().strip('"').strip("'")
                                     for m in mod_match.group(1).split(",")
                                 ]
-                                self.stats["metadata"][
-                                    "settings"
-                                ] = f"Modalities: {', '.join([m for m in mods if m])}"
+                                self.stats["metadata"]["settings"] = (
+                                    f"Modalities: {', '.join([m for m in mods if m])}"
+                                )
                     except Exception:
                         pass
                 elif log_files[0].suffix == ".log":
@@ -940,9 +940,9 @@ class QSIReconChecker(BIDSChecker):
             ]
 
             if missing_subjects:
-                self.stats["missing_subjects_by_pipeline"][
-                    recon_name
-                ] = missing_subjects
+                self.stats["missing_subjects_by_pipeline"][recon_name] = (
+                    missing_subjects
+                )
                 for missing_subj in missing_subjects:
                     self.add_missing_item(
                         f"QSIRecon subject missing from reconstruction pipeline:\n"
@@ -1328,9 +1328,7 @@ class BIDSOutputValidator:
         if checker_name not in self.PIPELINE_CHECKERS:
             raise ValueError(f"Unknown pipeline: {pipeline_selector}")
 
-        selector_name = (
-            f"{checker_name}@{variant}" if variant else checker_name
-        )
+        selector_name = f"{checker_name}@{variant}" if variant else checker_name
 
         if checker_name == "qsirecon":
             if variant:
@@ -1411,9 +1409,7 @@ class BIDSOutputValidator:
             if pipeline_name == "qsirecon":
                 # Classic qsirecon-* structure in derivatives root.
                 qsirecon_dirs = [
-                    d
-                    for d in self.derivatives_dir.glob("qsirecon*")
-                    if d.is_dir()
+                    d for d in self.derivatives_dir.glob("qsirecon*") if d.is_dir()
                 ]
                 if qsirecon_dirs:
                     _add(pipeline_name)
@@ -1474,7 +1470,9 @@ class BIDSOutputValidator:
         """Validate all discovered pipelines or a specific one."""
         if specific_pipeline:
             base_name, _variant = self._parse_pipeline_selector(specific_pipeline)
-            pipelines = [specific_pipeline] if base_name in self.PIPELINE_CHECKERS else []
+            pipelines = (
+                [specific_pipeline] if base_name in self.PIPELINE_CHECKERS else []
+            )
             if not pipelines:
                 raise ValueError(f"Unknown pipeline: {specific_pipeline}")
         else:

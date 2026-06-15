@@ -102,10 +102,12 @@ def _build_common_mounts(common, tmp_dir, bids_folder_override=None, skip_tmp=Fa
     mounts = []
     if not skip_tmp:
         mounts.append(f"{tmp_dir}:/tmp")
-    mounts.extend([
-        f"{common['output_folder']}:/output",
-        bids_mount,
-    ])
+    mounts.extend(
+        [
+            f"{common['output_folder']}:/output",
+            bids_mount,
+        ]
+    )
 
     # FreeSurfer license file (optional)
     if common.get("fs_license_file") and os.path.exists(common["fs_license_file"]):
@@ -163,7 +165,7 @@ def _fix_bids_uri_intendedfor_for_subject(bids_folder, subject):
                 # Strip bids:: and convert to legacy subject-relative path.
                 # bids-validator 1.x interprets non-URI IntendedFor as relative
                 # to the subject directory, so strip the leading sub-XXX/ component.
-                new_item = new_item[len("bids::"):]
+                new_item = new_item[len("bids::") :]
                 new_item = new_item.lstrip("/")
                 parts = new_item.split("/", 1)
                 if len(parts) > 1 and parts[0].startswith("sub-"):
@@ -583,8 +585,8 @@ def _derive_marker_namespace(config: Dict[str, Any]) -> str:
     output_folder = str(common.get("output_folder") or "").strip()
     output_hash = ""
     if output_folder:
-        output_hash = hashlib.sha1(
-            os.path.abspath(output_folder).encode("utf-8")
+        output_hash = hashlib.sha1(  # nosec B324 - used for path fingerprinting, not security
+            os.path.abspath(output_folder).encode("utf-8"), usedforsecurity=False
         ).hexdigest()[:10]
 
     parts = [active_pipeline or "default"]
@@ -655,7 +657,9 @@ def _resolve_project_json_path(config_path: Optional[str]) -> Optional[str]:
 
 
 def _read_project_subject_state(
-    project_json_path: Optional[str], subject: str, marker_namespace: Optional[str] = None
+    project_json_path: Optional[str],
+    subject: str,
+    marker_namespace: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Read per-subject runner state from project.json."""
     if not project_json_path:
@@ -762,7 +766,9 @@ def _write_project_subject_state(
     subjects_state[subject_id] = state
     if marker_namespace:
         namespaces = runner_state.get("namespaces", {})
-        ns_state = namespaces.get(marker_namespace, {}) if isinstance(namespaces, dict) else {}
+        ns_state = (
+            namespaces.get(marker_namespace, {}) if isinstance(namespaces, dict) else {}
+        )
         if isinstance(ns_state, dict):
             ns_state["updated_at"] = now_iso
     project_data["last_modified"] = now_iso
@@ -1152,8 +1158,9 @@ def _process_subject(
 
             base_cmd.extend(["-e", "TEMPLATEFLOW_HOME=/templateflow"])
 
-            for mnt in _build_common_mounts(common, tmp_dir, bids_mount_source,
-                                             skip_tmp=use_docker_tmpfs):
+            for mnt in _build_common_mounts(
+                common, tmp_dir, bids_mount_source, skip_tmp=use_docker_tmpfs
+            ):
                 base_cmd.extend(["-v", mnt])
 
             if use_docker_tmpfs:
@@ -1202,7 +1209,9 @@ def _process_subject(
             fs_inputs = _discover_fastsurfer_subject_inputs(bids_mount_source, subject)
             if not fs_inputs:
                 if dry_run:
-                    placeholder_subject = _normalize_subject_id(subject) or "sub-example"
+                    placeholder_subject = (
+                        _normalize_subject_id(subject) or "sub-example"
+                    )
                     fs_inputs = [
                         {
                             "sid": placeholder_subject,

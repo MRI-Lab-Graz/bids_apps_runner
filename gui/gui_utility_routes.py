@@ -21,7 +21,9 @@ def register_utility_routes(
     *,
     data_dir: Path,
     ensure_logs_dir: Callable[[], None],
-    prepare_apptainer_build: Callable[[dict[str, Any]], tuple[dict[str, Any] | None, Any]],
+    prepare_apptainer_build: Callable[
+        [dict[str, Any]], tuple[dict[str, Any] | None, Any]
+    ],
     run_apptainer_build_async: Callable[[str], None],
     apptainer_builds: dict[str, dict[str, Any]],
     apptainer_builds_lock,
@@ -45,7 +47,10 @@ def register_utility_routes(
             if engine == "docker":
                 cmd = ["docker", "pull", image]
             else:
-                return jsonify({"error": "Pull only implemented for Docker engine"}), 400
+                return (
+                    jsonify({"error": "Pull only implemented for Docker engine"}),
+                    400,
+                )
 
             def run_pull():
                 try:
@@ -74,9 +79,7 @@ def register_utility_routes(
                             print(msg, flush=True)
                             handle.write(msg + "\n")
                         else:
-                            msg = (
-                                f"\n[GUI] Docker pull failed for {image} with return code {process.returncode}"
-                            )
+                            msg = f"\n[GUI] Docker pull failed for {image} with return code {process.returncode}"
                             print(msg, flush=True)
                             handle.write(msg + "\n")
                 except Exception as exc:
@@ -105,11 +108,18 @@ def register_utility_routes(
         try:
             name = str(name).strip()
             if not name or "/" in name or "\\" in name or name in {".", ".."}:
-                return jsonify({"error": "Directory name must be a single path component"}), 400
+                return (
+                    jsonify(
+                        {"error": "Directory name must be a single path component"}
+                    ),
+                    400,
+                )
 
             new_dir = Path(os.path.expanduser(str(path))).resolve() / name
             new_dir.mkdir(parents=True, exist_ok=True)
-            return jsonify({"message": f"Directory created: {new_dir}", "path": str(new_dir)})
+            return jsonify(
+                {"message": f"Directory created: {new_dir}", "path": str(new_dir)}
+            )
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
@@ -120,7 +130,9 @@ def register_utility_routes(
         if error_response:
             return error_response
 
-        build_id = f"build_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        build_id = (
+            f"build_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        )
         with apptainer_builds_lock:
             apptainer_builds[build_id] = {
                 "id": build_id,
@@ -179,7 +191,9 @@ def register_utility_routes(
 
         log_tail = read_log_tail(log_file)
         if not output_image and status in {"completed", "failed"}:
-            match = re.search(r"Apptainer image built successfully at:\s*(.+)", log_tail)
+            match = re.search(
+                r"Apptainer image built successfully at:\s*(.+)", log_tail
+            )
             if match:
                 output_image = match.group(1).strip()
 
@@ -249,22 +263,29 @@ def register_utility_routes(
         try:
             import prism_datalad  # lazy – scripts/ is on sys.path at runtime
         except ImportError:
-            return jsonify({
-                "path": path,
-                "is_datalad": False,
-                "datalad_available": False,
-                "error": "prism_datalad module not found on server",
-            }), 500
+            return (
+                jsonify(
+                    {
+                        "path": path,
+                        "is_datalad": False,
+                        "datalad_available": False,
+                        "error": "prism_datalad module not found on server",
+                    }
+                ),
+                500,
+            )
 
         expanded = os.path.expanduser(path)
         is_ds = prism_datalad.is_datalad_dataset(expanded)
         dl_ok = prism_datalad.check_datalad_available()
 
-        return jsonify({
-            "path": expanded,
-            "is_datalad": is_ds,
-            "datalad_available": dl_ok,
-        })
+        return jsonify(
+            {
+                "path": expanded,
+                "is_datalad": is_ds,
+                "datalad_available": dl_ok,
+            }
+        )
 
     @app.route("/clone_openneuro", methods=["POST"])
     def clone_openneuro():
@@ -296,12 +317,17 @@ def register_utility_routes(
             return jsonify({"error": "prism_datalad module not found on server"}), 500
 
         if not prism_datalad.check_datalad_available():
-            return jsonify({
-                "error": (
-                    "DataLad is not available on the server. "
-                    "Install it with: pip install datalad (and ensure git-annex is on PATH)."
-                )
-            }), 400
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "DataLad is not available on the server. "
+                            "Install it with: pip install datalad (and ensure git-annex is on PATH)."
+                        )
+                    }
+                ),
+                400,
+            )
 
         # Validate / resolve URL before spawning the thread so we can return
         # a helpful error immediately rather than after a long delay.
@@ -311,12 +337,17 @@ def register_utility_routes(
             return jsonify({"error": str(exc)}), 400
 
         if os.path.exists(target):
-            return jsonify({
-                "error": (
-                    f"Target path already exists: {target}. "
-                    "Remove it or choose a different directory."
-                )
-            }), 400
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            f"Target path already exists: {target}. "
+                            "Remove it or choose a different directory."
+                        )
+                    }
+                ),
+                400,
+            )
 
         ensure_logs_dir()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -386,14 +417,16 @@ def register_utility_routes(
 
         threading.Thread(target=_run_clone, daemon=True).start()
 
-        return jsonify({
-            "success": True,
-            "clone_id": clone_id,
-            "status": "running",
-            "resolved_url": resolved_url,
-            "target": target,
-            "log_file": log_file,
-        })
+        return jsonify(
+            {
+                "success": True,
+                "clone_id": clone_id,
+                "status": "running",
+                "resolved_url": resolved_url,
+                "target": target,
+                "log_file": log_file,
+            }
+        )
 
     @app.route("/clone_openneuro_status", methods=["GET"])
     def clone_openneuro_status():
@@ -420,7 +453,10 @@ def register_utility_routes(
         if snapshot["success"]:
             try:
                 import prism_datalad
-                snapshot["is_datalad"] = prism_datalad.is_datalad_dataset(snapshot["target"])
+
+                snapshot["is_datalad"] = prism_datalad.is_datalad_dataset(
+                    snapshot["target"]
+                )
             except ImportError:
                 snapshot["is_datalad"] = None
 

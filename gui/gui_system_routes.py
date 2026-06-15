@@ -65,7 +65,9 @@ def register_system_routes(
             started_at = state.get("started_at")
             started_iso = None
             if isinstance(started_at, (int, float)):
-                started_iso = datetime.fromtimestamp(started_at).isoformat(timespec="seconds")
+                started_iso = datetime.fromtimestamp(started_at).isoformat(
+                    timespec="seconds"
+                )
 
             jobs.append(
                 {
@@ -139,7 +141,9 @@ def register_system_routes(
         settings_file_exists = global_settings_path.exists()
         deps = check_system_dependencies()
         doc = read_global_settings_doc()
-        effective = get_effective_machine_settings(machine_id=machine_id, dependencies=deps)
+        effective = get_effective_machine_settings(
+            machine_id=machine_id, dependencies=deps
+        )
         return (
             jsonify(
                 {
@@ -181,7 +185,9 @@ def register_system_routes(
             return jsonify({"error": f"Failed to save global settings: {exc}"}), 500
 
         deps = check_system_dependencies()
-        effective = get_effective_machine_settings(machine_id=machine_id, dependencies=deps)
+        effective = get_effective_machine_settings(
+            machine_id=machine_id, dependencies=deps
+        )
         return (
             jsonify(
                 {
@@ -204,7 +210,10 @@ def register_system_routes(
         response = {"diagnostics": diagnostics}
         if send_test:
             if not recipient:
-                return jsonify({"error": "recipient is required when send_test=true"}), 400
+                return (
+                    jsonify({"error": "recipient is required when send_test=true"}),
+                    400,
+                )
 
             subject = "BIDS App Runner SMTP diagnostic test"
             body = (

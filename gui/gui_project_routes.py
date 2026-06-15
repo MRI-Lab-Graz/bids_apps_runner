@@ -30,7 +30,10 @@ def register_project_config_handlers(
         try:
             raw_project_id = (request.args.get("project_id") or "").strip()
             if not raw_project_id:
-                return jsonify({"content": "", "filename": "none", "is_active": False}), 200
+                return (
+                    jsonify({"content": "", "filename": "none", "is_active": False}),
+                    200,
+                )
 
             try:
                 project_id = normalize_project_id(raw_project_id)
@@ -41,7 +44,9 @@ def register_project_config_handlers(
             cache_key = project_id
             cache_entry = log_cache.get(cache_key)
             current_time = time.time()
-            if cache_entry and (current_time - cache_entry["timestamp"] < log_cache_ttl):
+            if cache_entry and (
+                current_time - cache_entry["timestamp"] < log_cache_ttl
+            ):
                 return jsonify(
                     {
                         "content": cache_entry["content"],
@@ -51,23 +56,35 @@ def register_project_config_handlers(
                 )
 
             tracked_jobs = get_active_tracked_run_jobs()
-            has_active_job = any((job.get("project_id") or "") == project_id for job in tracked_jobs)
+            has_active_job = any(
+                (job.get("project_id") or "") == project_id for job in tracked_jobs
+            )
 
             log_files = (
-                sorted(list(project_dir.glob("*.log")), key=os.path.getmtime, reverse=True)
+                sorted(
+                    list(project_dir.glob("*.log")), key=os.path.getmtime, reverse=True
+                )
                 if project_dir.exists()
                 else []
             )
             if not log_files:
-                return jsonify({"content": "", "filename": "none", "is_active": False}), 200
+                return (
+                    jsonify({"content": "", "filename": "none", "is_active": False}),
+                    200,
+                )
 
             latest_log = log_files[0]
             log_mtime = os.path.getmtime(latest_log)
             is_recently_active = (current_time - log_mtime) < 300
             if not (has_active_job or is_recently_active):
-                return jsonify({"content": "", "filename": "none", "is_active": False}), 200
+                return (
+                    jsonify({"content": "", "filename": "none", "is_active": False}),
+                    200,
+                )
 
-            result = subprocess.run(["tail", "-n", "150", latest_log], capture_output=True, text=True)
+            result = subprocess.run(
+                ["tail", "-n", "150", latest_log], capture_output=True, text=True
+            )
             content = result.stdout
             ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
             content = ansi_escape.sub("", content)
@@ -83,7 +100,11 @@ def register_project_config_handlers(
             log_cache[cache_key] = {
                 "timestamp": current_time,
                 "content": content,
-                "filename": os.path.basename(latest_log) if (has_active_job or is_recently_active) else "none",
+                "filename": (
+                    os.path.basename(latest_log)
+                    if (has_active_job or is_recently_active)
+                    else "none"
+                ),
                 "is_active": has_active_job or is_recently_active,
             }
             return jsonify(
@@ -103,7 +124,16 @@ def register_project_config_handlers(
             limit = 5
             projects = manager.list_projects(limit=limit)
             total_projects = manager.count_projects()
-            return jsonify({"projects": projects, "limit": limit, "total_projects": total_projects}), 200
+            return (
+                jsonify(
+                    {
+                        "projects": projects,
+                        "limit": limit,
+                        "total_projects": total_projects,
+                    }
+                ),
+                200,
+            )
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
@@ -197,11 +227,15 @@ def register_project_config_handlers(
             combined_configs = set()
             default_dir = base_dir / "configs"
             if default_dir.exists():
-                combined_configs.update([item for item in os.listdir(default_dir) if item.endswith(".json")])
+                combined_configs.update(
+                    [item for item in os.listdir(default_dir) if item.endswith(".json")]
+                )
 
             user_dir = data_dir / "configs"
             if user_dir.exists():
-                combined_configs.update([item for item in os.listdir(user_dir) if item.endswith(".json")])
+                combined_configs.update(
+                    [item for item in os.listdir(user_dir) if item.endswith(".json")]
+                )
 
             return jsonify({"configs": sorted(list(combined_configs))})
         except Exception as exc:

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 from werkzeug.security import generate_password_hash
 
@@ -26,7 +24,9 @@ def isolated_project_store(tmp_path):
 def client(monkeypatch, isolated_project_store):
     monkeypatch.setattr(prism_app_runner, "GUI_LOGIN_ENABLED", True)
     monkeypatch.setattr(
-        prism_app_runner, "GUI_LOGIN_PASSWORD_HASH", generate_password_hash("secret-pass")
+        prism_app_runner,
+        "GUI_LOGIN_PASSWORD_HASH",
+        generate_password_hash("secret-pass"),
     )
     monkeypatch.setattr(prism_app_runner, "GUI_AUTH_TOKEN", "")
     monkeypatch.setattr(prism_app_runner, "ProjectManager", isolated_project_store)
@@ -120,7 +120,9 @@ def test_make_dir_rejects_path_traversal_name(client, tmp_path):
     )
 
     assert response.status_code == 400
-    assert response.get_json()["error"] == "Directory name must be a single path component"
+    assert (
+        response.get_json()["error"] == "Directory name must be a single path component"
+    )
 
 
 def test_build_apptainer_status_requires_build_id(client):
@@ -193,7 +195,9 @@ def test_list_containers_requires_folder(client):
 def test_remote_token_bypasses_login_and_csrf(monkeypatch, isolated_project_store):
     monkeypatch.setattr(prism_app_runner, "GUI_LOGIN_ENABLED", True)
     monkeypatch.setattr(
-        prism_app_runner, "GUI_LOGIN_PASSWORD_HASH", generate_password_hash("secret-pass")
+        prism_app_runner,
+        "GUI_LOGIN_PASSWORD_HASH",
+        generate_password_hash("secret-pass"),
     )
     monkeypatch.setattr(prism_app_runner, "GUI_AUTH_TOKEN", "remote-token")
     monkeypatch.setattr(prism_app_runner, "ProjectManager", isolated_project_store)

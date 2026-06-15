@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in __import__("sys").path:
@@ -15,7 +14,9 @@ import pilot_resource_estimator as pre
 
 def test_load_config_supports_project_wrapper(tmp_path):
     config_path = tmp_path / "project.json"
-    payload = {"config": {"common": {"jobs": 1}, "app": {"analysis_level": "participant"}}}
+    payload = {
+        "config": {"common": {"jobs": 1}, "app": {"analysis_level": "participant"}}
+    }
     config_path.write_text(json.dumps(payload), encoding="utf-8")
 
     data, resolved = pre.load_config(str(config_path))
@@ -72,7 +73,9 @@ def test_parse_nprocs_list_valid_and_invalid():
 def test_build_auto_nprocs_list(monkeypatch):
     monkeypatch.setattr(pre.os, "cpu_count", lambda: 10)
 
-    values, detected = pre.build_auto_nprocs_list(nprocs_min=2, nprocs_max=9, nprocs_step=3)
+    values, detected = pre.build_auto_nprocs_list(
+        nprocs_min=2, nprocs_max=9, nprocs_step=3
+    )
     assert values == [2, 5, 8, 9]
     assert detected == 10
 
@@ -85,7 +88,13 @@ def test_build_auto_nprocs_list(monkeypatch):
 
 def test_drop_flag_and_set_app_resource_options():
     options = ["--nprocs", "8", "--x", "1", "--nthreads=4", "--keep", "y"]
-    assert pre.drop_flag(options, "--nprocs") == ["--x", "1", "--nthreads=4", "--keep", "y"]
+    assert pre.drop_flag(options, "--nprocs") == [
+        "--x",
+        "1",
+        "--nthreads=4",
+        "--keep",
+        "y",
+    ]
 
     cfg = {"app": {"options": ["--nthreads", "16", "--foo", "bar", "--n-cpus=2"]}}
     pre.set_app_resource_options(cfg, nprocs=6, omp_nthreads=2)
@@ -123,7 +132,9 @@ def test_stop_gpu_monitor_terminates_process(monkeypatch, tmp_path):
             self.closed = True
 
     monkeypatch.setattr(pre.os, "getpgid", lambda pid: pid)
-    monkeypatch.setattr(pre.os, "killpg", lambda pgid, sig: events.append(("kill", pgid, sig)))
+    monkeypatch.setattr(
+        pre.os, "killpg", lambda pgid, sig: events.append(("kill", pgid, sig))
+    )
 
     handle = DummyHandle()
     pre.stop_gpu_monitor((DummyProc(), handle))
@@ -250,7 +261,9 @@ def test_main_success_single_run(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(pre, "parse_args", lambda: args)
-    monkeypatch.setattr(pre, "load_config", lambda _: (json.loads(json.dumps(config)), config_file))
+    monkeypatch.setattr(
+        pre, "load_config", lambda _: (json.loads(json.dumps(config)), config_file)
+    )
     monkeypatch.setattr(pre, "parse_nprocs_list", lambda raw: [4])
     monkeypatch.setattr(pre, "normalize_subject", lambda subj: "sub-001")
     monkeypatch.setattr(pre, "discover_subject", lambda cfg: "sub-999")
@@ -275,7 +288,9 @@ def test_main_success_single_run(monkeypatch, tmp_path):
 
     reports = {}
 
-    def _capture_report(report_path, args, subject, config_path, results, recommendation):
+    def _capture_report(
+        report_path, args, subject, config_path, results, recommendation
+    ):
         reports["report_path"] = report_path
         reports["subject"] = subject
         reports["results"] = results
@@ -319,7 +334,9 @@ def test_main_raises_when_all_runs_fail(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(pre, "parse_args", lambda: args)
-    monkeypatch.setattr(pre, "load_config", lambda _: (json.loads(json.dumps(config)), config_file))
+    monkeypatch.setattr(
+        pre, "load_config", lambda _: (json.loads(json.dumps(config)), config_file)
+    )
     monkeypatch.setattr(pre, "parse_nprocs_list", lambda raw: [2])
     monkeypatch.setattr(pre, "normalize_subject", lambda subj: "sub-001")
     monkeypatch.setattr(pre, "start_gpu_monitor", lambda *_: None)

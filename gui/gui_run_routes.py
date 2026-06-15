@@ -4,8 +4,8 @@ import os
 import platform
 import re
 import shutil
-import signal
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -41,9 +41,7 @@ def _get_docker_macos_shared_dirs():
                 or []
             )
             if dirs:
-                return [
-                    os.path.abspath(os.path.expanduser(str(d))) for d in dirs
-                ]
+                return [os.path.abspath(os.path.expanduser(str(d))) for d in dirs]
         except (OSError, json.JSONDecodeError, KeyError, TypeError):
             continue
     return None
@@ -86,13 +84,17 @@ def register_run_routes(
     resolve_project_dir: Callable[[str], Path],
     extract_runtime_config: Callable[[dict[str, Any], str | None], dict[str, Any]],
     normalize_runner_args: Callable[[Any], list[str]],
-    apply_max_usage_cap: Callable[[dict[str, Any], int], tuple[dict[str, Any], int, int]],
+    apply_max_usage_cap: Callable[
+        [dict[str, Any], int], tuple[dict[str, Any], int, int]
+    ],
     extract_fs_license_path: Callable[[list[str] | None], str | None],
     map_container_path_to_host: Callable[[str, list[dict[str, Any]]], str | None],
     compute_auto_nprocs_values: Callable[..., list[int]],
     is_process_alive: Callable[[Any], bool],
     is_pilot_process_running: Callable[[Path], bool],
-    pilot_progress_from_output_dir: Callable[[Path, int | None], tuple[int, int | None, int | None]],
+    pilot_progress_from_output_dir: Callable[
+        [Path, int | None], tuple[int, int | None, int | None]
+    ],
     read_log_tail: Callable[[str | Path], str],
     get_active_tracked_run_jobs: Callable[[], list[dict[str, Any]]],
     terminate_tracked_run: Callable[[dict[str, Any]], bool],
@@ -143,7 +145,9 @@ def register_run_routes(
             if not notify_email:
                 notify_email = str(common.get("notify_email", "")).strip()
 
-            if notify_email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", notify_email):
+            if notify_email and not re.match(
+                r"^[^@\s]+@[^@\s]+\.[^@\s]+$", notify_email
+            ):
                 return jsonify({"error": "Notification email format is invalid."}), 400
 
             engine = common.get("container_engine", "apptainer")
@@ -159,7 +163,9 @@ def register_run_routes(
                 paths_to_check["Container Image"] = common.get("container")
 
             if common.get("fs_license_file"):
-                paths_to_check["FreeSurfer License File"] = common.get("fs_license_file")
+                paths_to_check["FreeSurfer License File"] = common.get(
+                    "fs_license_file"
+                )
 
             missing = []
             for name, path in paths_to_check.items():
@@ -171,7 +177,8 @@ def register_run_routes(
                     jsonify(
                         {
                             "error": "Validation Failed",
-                            "details": "The following paths do not exist:\n" + "\n".join(missing),
+                            "details": "The following paths do not exist:\n"
+                            + "\n".join(missing),
                         }
                     ),
                     400,
@@ -184,12 +191,12 @@ def register_run_routes(
                 mounts_pre = app_cfg_pre.get("mounts", [])
 
                 docker_mount_candidates = {
-                    "BIDS Folder":         common.get("bids_folder"),
-                    "Output Folder":       common.get("output_folder"),
-                    "Work / Tmp Folder":   common.get("tmp_folder"),
-                    "FreeSurfer License":  common.get("fs_license_file"),
+                    "BIDS Folder": common.get("bids_folder"),
+                    "Output Folder": common.get("output_folder"),
+                    "Work / Tmp Folder": common.get("tmp_folder"),
+                    "FreeSurfer License": common.get("fs_license_file"),
                     "TemplateFlow Folder": common.get("templateflow_dir"),
-                    "Optional Folder":     common.get("optional_folder"),
+                    "Optional Folder": common.get("optional_folder"),
                 }
                 for i, m in enumerate(mounts_pre):
                     src = m.get("source") if isinstance(m, dict) else None
@@ -202,7 +209,9 @@ def register_run_routes(
                 )
 
                 if inaccessible:
-                    lines = [f"  • {label}: {path}" for label, path in inaccessible.items()]
+                    lines = [
+                        f"  • {label}: {path}" for label, path in inaccessible.items()
+                    ]
                     return (
                         jsonify(
                             {
@@ -280,7 +289,10 @@ def register_run_routes(
 
             if engine == "docker":
                 if not shutil.which("docker"):
-                    return jsonify({"error": "Docker requested but not found on system."}), 400
+                    return (
+                        jsonify({"error": "Docker requested but not found on system."}),
+                        400,
+                    )
                 try:
                     subprocess.run(
                         ["docker", "info"], capture_output=True, timeout=2, check=True
@@ -320,16 +332,26 @@ def register_run_routes(
                 try:
                     max_usage_percent = int(max_usage_percent)
                 except (TypeError, ValueError):
-                    return jsonify({"error": "max_usage_percent must be an integer"}), 400
+                    return (
+                        jsonify({"error": "max_usage_percent must be an integer"}),
+                        400,
+                    )
 
                 if max_usage_percent < 10 or max_usage_percent > 100:
-                    return jsonify({"error": "max_usage_percent must be between 10 and 100"}), 400
+                    return (
+                        jsonify(
+                            {"error": "max_usage_percent must be between 10 and 100"}
+                        ),
+                        400,
+                    )
 
                 capped_cfg, allowed_cores, host_cores = apply_max_usage_cap(
                     runtime_cfg, max_usage_percent
                 )
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                runtime_config_path = work_dir / f"runtime_config_capped_{timestamp}.json"
+                runtime_config_path = (
+                    work_dir / f"runtime_config_capped_{timestamp}.json"
+                )
                 with open(runtime_config_path, "w", encoding="utf-8") as handle:
                     json.dump(capped_cfg, handle, indent=2)
 
@@ -358,7 +380,9 @@ def register_run_routes(
             print(f"[GUI] Logging output to: {log_file_path}")
 
             with open(log_file_path, "w", encoding="utf-8") as log_handle:
-                log_handle.write(f"[{datetime.now().isoformat()}] Executing: {' '.join(cmd)}\n")
+                log_handle.write(
+                    f"[{datetime.now().isoformat()}] Executing: {' '.join(cmd)}\n"
+                )
                 log_handle.write(
                     f"[{datetime.now().isoformat()}] Working directory: {work_dir}\n"
                 )
@@ -377,7 +401,9 @@ def register_run_routes(
                     env=launch_env,
                 )
 
-            run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+            run_id = (
+                f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+            )
             with run_jobs_lock:
                 run_jobs[run_id] = {
                     "id": run_id,
@@ -450,7 +476,10 @@ def register_run_routes(
 
             script_path = base_dir / "scripts" / "pilot_resource_estimator.py"
             if not script_path.exists():
-                return jsonify({"error": f"Pilot estimator not found: {script_path}"}), 500
+                return (
+                    jsonify({"error": f"Pilot estimator not found: {script_path}"}),
+                    500,
+                )
 
             runtime_config_path = config_path
             with open(config_path, "r", encoding="utf-8") as handle:
@@ -461,7 +490,9 @@ def register_run_routes(
             )
             if runtime_cfg is not cfg_raw:
                 cfg_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                runtime_config_path = work_dir / f"pilot_runtime_config_{cfg_stamp}.json"
+                runtime_config_path = (
+                    work_dir / f"pilot_runtime_config_{cfg_stamp}.json"
+                )
                 with open(runtime_config_path, "w", encoding="utf-8") as handle:
                     json.dump(runtime_cfg, handle, indent=2)
 
@@ -488,7 +519,11 @@ def register_run_routes(
                 cmd.extend(["--nprocs", nprocs])
                 try:
                     expected_nprocs = sorted(
-                        set(int(value.strip()) for value in nprocs.split(",") if str(value).strip())
+                        set(
+                            int(value.strip())
+                            for value in nprocs.split(",")
+                            if str(value).strip()
+                        )
                     )
                 except ValueError:
                     expected_nprocs = []
@@ -508,12 +543,21 @@ def register_run_routes(
                     expected_nprocs = compute_auto_nprocs_values(
                         nprocs_min=nprocs_min,
                         nprocs_max=(
-                            None if nprocs_max in (None, "", "null") else int(nprocs_max)
+                            None
+                            if nprocs_max in (None, "", "null")
+                            else int(nprocs_max)
                         ),
                         nprocs_step=nprocs_step,
                     )
                 except (TypeError, ValueError):
-                    return jsonify({"error": "Invalid nprocs_min/nprocs_max/nprocs_step values"}), 400
+                    return (
+                        jsonify(
+                            {
+                                "error": "Invalid nprocs_min/nprocs_max/nprocs_step values"
+                            }
+                        ),
+                        400,
+                    )
 
             expected_runs = len(expected_nprocs)
             if force:
@@ -671,7 +715,9 @@ def register_run_routes(
                     ]
 
                 if candidate_jobs:
-                    target = max(candidate_jobs, key=lambda state: state.get("started_at", 0))
+                    target = max(
+                        candidate_jobs, key=lambda state: state.get("started_at", 0)
+                    )
 
                 if target is not None:
                     if terminate_tracked_run(target):
@@ -685,11 +731,32 @@ def register_run_routes(
 
                 if killed == 0:
                     if project_id:
-                        return jsonify({"message": f"No active tracked run found for project {project_id}."}), 200
-                    return jsonify({"message": "No active BIDS App Runner process found to stop."}), 200
+                        return (
+                            jsonify(
+                                {
+                                    "message": f"No active tracked run found for project {project_id}."
+                                }
+                            ),
+                            200,
+                        )
+                    return (
+                        jsonify(
+                            {
+                                "message": "No active BIDS App Runner process found to stop."
+                            }
+                        ),
+                        200,
+                    )
 
                 if project_id:
-                    return jsonify({"message": f"Stop signal sent to current run for project {project_id}."}), 200
+                    return (
+                        jsonify(
+                            {
+                                "message": f"Stop signal sent to current run for project {project_id}."
+                            }
+                        ),
+                        200,
+                    )
                 return jsonify({"message": "Stop signal sent to current run."}), 200
 
             for state in tracked_jobs:
@@ -708,9 +775,19 @@ def register_run_routes(
             killed += terminate_pid_groups(find_app_related_pids(include_marked=True))
 
             if killed == 0:
-                return jsonify({"message": "No active BIDS App Runner processes found."}), 200
+                return (
+                    jsonify({"message": "No active BIDS App Runner processes found."}),
+                    200,
+                )
 
-            return jsonify({"message": f"Stop signal sent to all runs ({killed} process target(s))."}), 200
+            return (
+                jsonify(
+                    {
+                        "message": f"Stop signal sent to all runs ({killed} process target(s))."
+                    }
+                ),
+                200,
+            )
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
@@ -748,7 +825,7 @@ def register_run_routes(
         data = request.get_json(silent=True) or {}
         script_content = data.get("script")
         subject = data.get("subject")
-        output_dir = data.get("output_dir", "/tmp/hpc_scripts")
+        output_dir = data.get("output_dir", os.path.join(tempfile.gettempdir(), "hpc_scripts"))
 
         if not script_content or not subject:
             return jsonify({"error": "script and subject are required"}), 400
@@ -761,7 +838,9 @@ def register_run_routes(
                 handle.write(script_content)
 
             os.chmod(output_path, 0o755)
-            return jsonify({"message": f"Script saved to {output_path}", "path": str(output_path)})
+            return jsonify(
+                {"message": f"Script saved to {output_path}", "path": str(output_path)}
+            )
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
@@ -804,7 +883,12 @@ def register_run_routes(
         except subprocess.CalledProcessError as exc:
             return jsonify({"error": f"Failed to submit job: {exc.stderr}"}), 500
         except FileNotFoundError:
-            return jsonify({"error": "sbatch not found - SLURM not available on this system"}), 400
+            return (
+                jsonify(
+                    {"error": "sbatch not found - SLURM not available on this system"}
+                ),
+                400,
+            )
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 

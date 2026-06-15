@@ -24,7 +24,6 @@ import argparse
 from pathlib import Path
 from typing import Dict, Optional
 
-
 _SAFE_SUBJECT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _SAFE_SHELL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SAFE_ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -38,7 +37,9 @@ def _shell_quote(value: object) -> str:
 
 
 def _validate_subject(subject: str) -> str:
-    normalized = subject.replace("sub-", "", 1) if subject.startswith("sub-") else subject
+    normalized = (
+        subject.replace("sub-", "", 1) if subject.startswith("sub-") else subject
+    )
     if not _SAFE_SUBJECT_PATTERN.fullmatch(normalized):
         raise ValueError(f"Invalid subject identifier: {subject}")
     return normalized
@@ -272,10 +273,10 @@ fi
 cd "$DS_DIR"
 echo ""
 """.format(
-        clone_method=clone_method,
-        quoted_input_repo=quoted_input_repo,
-        quoted_display_repo=quoted_display_repo,
-    )
+            clone_method=clone_method,
+            quoted_input_repo=quoted_input_repo,
+            quoted_display_repo=quoted_display_repo,
+        )
 
         return section
 
@@ -315,11 +316,11 @@ git submodule foreach --recursive git annex dead here 2>/dev/null || true
                 quoted_repo_display = _shell_quote(str(repo))
                 section += f"""
 if [ -d {quoted_repo} ]; then
-    printf '%s\n' {_shell_quote(f'Creating branch job in {repo}...')}
+    printf '%s\n' {_shell_quote(f"Creating branch job in {repo}...")}
     git -C {quoted_repo} checkout -b "$PRISM_JOB_BRANCH" 2>/dev/null || \\
     git -C {quoted_repo} checkout "$PRISM_JOB_BRANCH"
 else
-    printf '%s\n' {_shell_quote(f'WARNING: Output directory {repo} not found')}
+    printf '%s\n' {_shell_quote(f"WARNING: Output directory {repo} not found")}
 fi
 """
 
@@ -372,14 +373,18 @@ fi
         continuation = "\\"
         command_lines = [
             "datalad containers-run " + continuation,
-            f"   -m {_shell_quote(f'{container_name} sub-{self.subject}')} " + continuation,
+            f"   -m {_shell_quote(f'{container_name} sub-{self.subject}')} "
+            + continuation,
             "   --explicit " + continuation,
         ]
         command_lines.extend(
             [f"   -o {_shell_quote(output)} " + continuation for output in outputs]
         )
         command_lines.extend(
-            [f"   -i {_shell_quote(input_path)} " + continuation for input_path in inputs]
+            [
+                f"   -i {_shell_quote(input_path)} " + continuation
+                for input_path in inputs
+            ]
         )
         command_lines.append(f"   -n code/pipelines/{container_name} " + continuation)
         command_lines.append(f"   {container_cmd}{optional_args}")
@@ -390,7 +395,7 @@ fi
 echo "=========================================="
 echo "Container Execution"
 echo "=========================================="
-printf '%s\n' {_shell_quote(f'Running {container_name} for subject sub-{self.subject}...')}
+printf '%s\n' {_shell_quote(f"Running {container_name} for subject sub-{self.subject}...")}
 
 {run_command}
 
@@ -420,12 +425,12 @@ echo "=========================================="
             for repo in output_repos:
                 quoted_repo = _shell_quote(repo)
                 section += f"""
-printf '%s\n' {_shell_quote(f'Pushing results from {repo}...')}
+printf '%s\n' {_shell_quote(f"Pushing results from {repo}...")}
 flock --verbose "${{DS_LOCKFILE}}" datalad push -d {quoted_repo} --to origin
 if [ $? -eq 0 ]; then
-    printf '%s\n' {_shell_quote(f'Successfully pushed {repo}')}
+    printf '%s\n' {_shell_quote(f"Successfully pushed {repo}")}
 else
-    printf '%s\n' {_shell_quote(f'WARNING: Failed to push {repo}')}
+    printf '%s\n' {_shell_quote(f"WARNING: Failed to push {repo}")}
 fi
 """
 
@@ -637,8 +642,7 @@ echo "Scratch: ${{WORK_DIR}}"
 
     def _clone_input(self) -> str:
         shared_input = _shell_quote(
-            f"{self.paths.get('shared_input_base', '/shared/input')}"
-            f"/{self.dataset_id}"
+            f"{self.paths.get('shared_input_base', '/shared/input')}/{self.dataset_id}"
         )
         return f"""
 # Clone input dataset (cheap from local pre-clone)
@@ -878,24 +882,31 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate SLURM scripts with DataLad workflow"
     )
-    parser.add_argument("-c", "--config", required=True, help="Path to JSON config file")
+    parser.add_argument(
+        "-c", "--config", required=True, help="Path to JSON config file"
+    )
     parser.add_argument("-o", "--output", help="Path to save generated script")
     parser.add_argument(
         "--submit", action="store_true", help="Submit the job to SLURM after generation"
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="Show what would be done without executing"
+        "--dry-run",
+        action="store_true",
+        help="Show what would be done without executing",
     )
     parser.add_argument(
-        "--log-level", default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Logging verbosity"
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity",
     )
 
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("-s", "--subject", help="Subject ID for per-subject script")
     mode.add_argument(
-        "--array-mode", action="store_true",
-        help="Generate a SLURM array job script (requires --dataset-id and --subject-list)"
+        "--array-mode",
+        action="store_true",
+        help="Generate a SLURM array job script (requires --dataset-id and --subject-list)",
     )
 
     parser.add_argument("--dataset-id", help="Dataset accession ID (array mode)")

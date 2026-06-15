@@ -7,7 +7,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from flask import jsonify, render_template, request
 
@@ -43,9 +43,9 @@ def register_misc_routes(
                     "name": html_file.name,
                     "path": str(html_file),
                     "subject": html_file.name.split("_")[0].split(".")[0],
-                    "modified": datetime.fromtimestamp(html_file.stat().st_mtime).strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    ),
+                    "modified": datetime.fromtimestamp(
+                        html_file.stat().st_mtime
+                    ).strftime("%Y-%m-%d %H:%M:%S"),
                 }
             )
 
@@ -60,17 +60,30 @@ def register_misc_routes(
         quiet = bool(data.get("quiet"))
 
         if not bids_dir or not derivatives_dir:
-            return jsonify({"error": "Both BIDS and derivatives folders must be provided."}), 400
+            return (
+                jsonify(
+                    {"error": "Both BIDS and derivatives folders must be provided."}
+                ),
+                400,
+            )
 
         if verbose and quiet:
-            return jsonify({"error": "Verbose and quiet modes cannot both be enabled."}), 400
+            return (
+                jsonify({"error": "Verbose and quiet modes cannot both be enabled."}),
+                400,
+            )
 
         bids_path = Path(os.path.expanduser(bids_dir))
         derivatives_path = Path(os.path.expanduser(derivatives_dir))
         if not bids_path.exists():
             return jsonify({"error": f"BIDS folder does not exist: {bids_path}"}), 400
         if not derivatives_path.exists():
-            return jsonify({"error": f"Derivatives folder does not exist: {derivatives_path}"}), 400
+            return (
+                jsonify(
+                    {"error": f"Derivatives folder does not exist: {derivatives_path}"}
+                ),
+                400,
+            )
 
         ensure_logs_dir()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -148,7 +161,10 @@ def register_misc_routes(
         derivatives_dir = (data.get("derivatives_dir") or "").strip()
 
         if not bids_dir or not derivatives_dir:
-            return jsonify({"error": "Both BIDS and derivatives folders are required."}), 400
+            return (
+                jsonify({"error": "Both BIDS and derivatives folders are required."}),
+                400,
+            )
 
         try:
             bids_path = Path(os.path.expanduser(bids_dir))
@@ -191,7 +207,15 @@ def register_misc_routes(
                         400,
                     )
                 if platform.system() == "Darwin" and platform.machine() == "arm64":
-                    cmd = ["docker", "run", "--rm", "--platform", "linux/amd64", container, "--help"]
+                    cmd = [
+                        "docker",
+                        "run",
+                        "--rm",
+                        "--platform",
+                        "linux/amd64",
+                        container,
+                        "--help",
+                    ]
                 else:
                     cmd = ["docker", "run", "--rm", container, "--help"]
             else:
@@ -216,7 +240,9 @@ def register_misc_routes(
 
             usage_block = "\n".join(usage_lines)
             usage_all_flags = set(re.findall(r"--[a-zA-Z0-9-]+", usage_block))
-            usage_optional_flags = set(re.findall(r"\[\s*(--[a-zA-Z0-9-]+)", usage_block))
+            usage_optional_flags = set(
+                re.findall(r"\[\s*(--[a-zA-Z0-9-]+)", usage_block)
+            )
             usage_required_flags = usage_all_flags - usage_optional_flags
 
             deprecated_flags = set()
@@ -226,11 +252,17 @@ def register_misc_routes(
                 for dep_flag in re.findall(r"--[a-zA-Z0-9-]+", line):
                     deprecated_flags.add(dep_flag)
 
-            if "--subject-anatomical-reference" in output and "--longitudinal" in output:
+            if (
+                "--subject-anatomical-reference" in output
+                and "--longitudinal" in output
+            ):
                 deprecated_flags.add("--longitudinal")
 
             if result.returncode != 0:
-                print(f"[GUI] {engine.capitalize()} help returned exit code {result.returncode}", flush=True)
+                print(
+                    f"[GUI] {engine.capitalize()} help returned exit code {result.returncode}",
+                    flush=True,
+                )
 
             parts = re.split(r"\n(?=[A-Z][A-Za-z0-9\-\(\) ]+:)", output)
             sections = []
@@ -248,7 +280,10 @@ def register_misc_routes(
                     continue
 
                 header = lines[0].strip().rstrip(":")
-                if any(token in header.lower() for token in ["usage", "synopsis", "description"]):
+                if any(
+                    token in header.lower()
+                    for token in ["usage", "synopsis", "description"]
+                ):
                     continue
 
                 content = "\n".join(lines[1:])
@@ -276,15 +311,26 @@ def register_misc_routes(
                     choices = []
                     choice_match = re.search(r"\{([^}]+)\}", block)
                     if choice_match:
-                        choices = [choice.strip() for choice in choice_match.group(1).split(",")]
+                        choices = [
+                            choice.strip()
+                            for choice in choice_match.group(1).split(",")
+                        ]
                     else:
-                        choice_text_match = re.search(r"Possible choices:\s*([^\n]+)", block)
+                        choice_text_match = re.search(
+                            r"Possible choices:\s*([^\n]+)", block
+                        )
                         if choice_text_match:
                             choices = [
                                 choice.strip().strip(",")
-                                for choice in re.split(r"[,\s]+", choice_text_match.group(1))
+                                for choice in re.split(
+                                    r"[,\s]+", choice_text_match.group(1)
+                                )
                             ]
-                            choices = [choice for choice in choices if choice and not choice.startswith("-")]
+                            choices = [
+                                choice
+                                for choice in choices
+                                if choice and not choice.startswith("-")
+                            ]
 
                     block_lines = block.strip().split("\n")
                     description = ""
@@ -303,7 +349,9 @@ def register_misc_routes(
                     definition_line = block_lines[0] if block_lines else block
                     columns = re.split(r"\s{2,}", definition_line.strip())
                     signature = columns[0] if columns else definition_line.strip()
-                    sig_match = re.search(rf"{re.escape(flag)}(?:\s+[^\s].*)?$", signature)
+                    sig_match = re.search(
+                        rf"{re.escape(flag)}(?:\s+[^\s].*)?$", signature
+                    )
                     signature_tail = sig_match.group(0) if sig_match else signature
                     sig_tokens = signature_tail.split()
 
@@ -313,10 +361,14 @@ def register_misc_routes(
                     elif sig_tokens and sig_tokens[0] == flag and len(sig_tokens) > 1:
                         has_value = True
 
-                    is_multiple = bool(re.search(r"\[.*\.\.\..*\]|\.\.\.", signature_tail))
+                    is_multiple = bool(
+                        re.search(r"\[.*\.\.\..*\]|\.\.\.", signature_tail)
+                    )
                     display_name = flag.lstrip("-")
                     is_negated = False
-                    negation_match = re.search(r"^(no-|skip[-_]|without-|fs-no-)(.*)", display_name)
+                    negation_match = re.search(
+                        r"^(no-|skip[-_]|without-|fs-no-)(.*)", display_name
+                    )
                     if negation_match and not has_value:
                         is_negated = True
                         display_name = negation_match.group(2)
@@ -324,7 +376,9 @@ def register_misc_routes(
                     options.append(
                         {
                             "flag": flag,
-                            "name": display_name.replace("-", " ").replace("_", " ").title(),
+                            "name": display_name.replace("-", " ")
+                            .replace("_", " ")
+                            .title(),
                             "is_negated": is_negated,
                             "choices": choices,
                             "description": description,
@@ -335,7 +389,14 @@ def register_misc_routes(
                     )
 
                 if options:
-                    sections.append({"title": header, "options": sorted(options, key=lambda option: option["name"])})
+                    sections.append(
+                        {
+                            "title": header,
+                            "options": sorted(
+                                options, key=lambda option: option["name"]
+                            ),
+                        }
+                    )
 
             parsed_flags = {
                 option.get("flag")
@@ -349,9 +410,15 @@ def register_misc_routes(
                 and "--subject-anatomical-reference" in output
             ):
                 choices = []
-                choice_match = re.search(r"--subject-anatomical-reference\s+\{([^}]+)\}", output)
+                choice_match = re.search(
+                    r"--subject-anatomical-reference\s+\{([^}]+)\}", output
+                )
                 if choice_match:
-                    choices = [choice.strip() for choice in choice_match.group(1).split(",") if choice.strip()]
+                    choices = [
+                        choice.strip()
+                        for choice in choice_match.group(1).split(",")
+                        if choice.strip()
+                    ]
 
                 fallback_option = {
                     "flag": "--subject-anatomical-reference",
@@ -361,7 +428,8 @@ def register_misc_routes(
                     "description": "Replacement for deprecated --longitudinal behavior.",
                     "has_value": True,
                     "is_multiple": False,
-                    "required": "--subject-anatomical-reference" in usage_required_flags,
+                    "required": "--subject-anatomical-reference"
+                    in usage_required_flags,
                 }
 
                 target_section = None
@@ -371,11 +439,18 @@ def register_misc_routes(
                         break
 
                 if target_section is None:
-                    sections.append({"title": "Workflow configuration", "options": [fallback_option]})
+                    sections.append(
+                        {
+                            "title": "Workflow configuration",
+                            "options": [fallback_option],
+                        }
+                    )
                 else:
                     target_section_options = target_section.get("options", [])
                     target_section_options.append(fallback_option)
-                    target_section["options"] = sorted(target_section_options, key=lambda option: option["name"])
+                    target_section["options"] = sorted(
+                        target_section_options, key=lambda option: option["name"]
+                    )
 
             app_name = "BIDS App"
             doc_url = "https://bids-apps.neuroimaging.io/"
@@ -431,9 +506,16 @@ def register_misc_routes(
                     except OSError:
                         pass
 
-                    templates.append({"name": template_name, "resolutions": sorted(list(resolutions))})
+                    templates.append(
+                        {
+                            "name": template_name,
+                            "resolutions": sorted(list(resolutions)),
+                        }
+                    )
 
-            return jsonify({"templates": sorted(templates, key=lambda item: item["name"])})
+            return jsonify(
+                {"templates": sorted(templates, key=lambda item: item["name"])}
+            )
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
@@ -457,17 +539,39 @@ def register_misc_routes(
 
             items = []
             if current.parent != current:
-                items.append({"name": "..", "path": str(current.parent), "is_dir": True})
+                items.append(
+                    {"name": "..", "path": str(current.parent), "is_dir": True}
+                )
 
             for child in sorted(current.iterdir()):
-                if child.is_dir() and (include_hidden or not child.name.startswith(".")):
-                    items.append({"name": child.name, "path": str(child.absolute()), "is_dir": True})
-                elif include_files and child.is_file() and (include_hidden or not child.name.startswith(".")):
+                if child.is_dir() and (
+                    include_hidden or not child.name.startswith(".")
+                ):
+                    items.append(
+                        {
+                            "name": child.name,
+                            "path": str(child.absolute()),
+                            "is_dir": True,
+                        }
+                    )
+                elif (
+                    include_files
+                    and child.is_file()
+                    and (include_hidden or not child.name.startswith("."))
+                ):
                     if file_name and child.name != file_name:
                         continue
-                    if extensions and not any(child.name.endswith(extension) for extension in extensions):
+                    if extensions and not any(
+                        child.name.endswith(extension) for extension in extensions
+                    ):
                         continue
-                    items.append({"name": child.name, "path": str(child.absolute()), "is_dir": False})
+                    items.append(
+                        {
+                            "name": child.name,
+                            "path": str(child.absolute()),
+                            "is_dir": False,
+                        }
+                    )
 
             return jsonify({"current_path": str(current.absolute()), "items": items})
         except Exception as exc:

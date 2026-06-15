@@ -378,7 +378,9 @@ apptainer run \\
 """
 
             if common.get("templateflow_dir"):
-                script_content += f"\n    -B {common['templateflow_dir']}:/templateflow \\"
+                script_content += (
+                    f"\n    -B {common['templateflow_dir']}:/templateflow \\"
+                )
             if common.get("optional_folder"):
                 script_content += f"\n    -B {common['optional_folder']}:/base \\"
             if common.get("fs_license_file"):

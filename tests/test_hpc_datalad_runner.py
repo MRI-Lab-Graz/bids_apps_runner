@@ -56,7 +56,10 @@ def test_hpc_generator_quotes_shell_values():
     ).generate_script()
 
     assert "export TEMPLATEFLOW_HOME='/tmp/template flow'" in script
-    assert "flock --verbose \"$DS_LOCKFILE\" datalad clone 'ria+file:///tmp/repo name' \"$DS_DIR\"" in script
+    assert (
+        'flock --verbose "$DS_LOCKFILE" datalad clone \'ria+file:///tmp/repo name\' "$DS_DIR"'
+        in script
+    )
     assert "-i 'inputs/raw data'" in script
     assert "--fs-license-file '/tmp/license file.txt'" in script
 

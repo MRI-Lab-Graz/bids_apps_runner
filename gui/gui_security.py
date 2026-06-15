@@ -7,7 +7,6 @@ from typing import Any
 
 from werkzeug.security import generate_password_hash
 
-
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _CONFIG_FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*\.json$")
@@ -160,7 +159,9 @@ def resolve_config_storage_dir(
         except OSError:
             continue
 
-    if any(path_is_within(requested, root) or requested == root for root in allowed_roots):
+    if any(
+        path_is_within(requested, root) or requested == root for root in allowed_roots
+    ):
         return requested
 
     raise ValueError("Config folder must stay inside the runner config directories")

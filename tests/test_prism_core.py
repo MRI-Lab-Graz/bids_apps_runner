@@ -13,7 +13,9 @@ import prism_core
 
 
 def test_sanitize_pipeline_id_normalizes_text():
-    assert prism_core._sanitize_pipeline_id("  My Pipeline v1.0  ") == "my_pipeline_v1_0"
+    assert (
+        prism_core._sanitize_pipeline_id("  My Pipeline v1.0  ") == "my_pipeline_v1_0"
+    )
     assert prism_core._sanitize_pipeline_id(None) == "default"
 
 
@@ -200,7 +202,10 @@ def test_print_summary_formats_output(capsys):
 
 
 def test_run_command_dry_run_returns_none():
-    assert prism_core.run_command([sys.executable, "-c", "print('x')"], dry_run=True) is None
+    assert (
+        prism_core.run_command([sys.executable, "-c", "print('x')"], dry_run=True)
+        is None
+    )
 
 
 def test_run_command_success_returns_completed_process():

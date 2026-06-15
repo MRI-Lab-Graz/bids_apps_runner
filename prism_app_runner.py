@@ -4,12 +4,9 @@ import os
 import platform
 import sys
 import json
-import glob
 import copy
 import subprocess
 import time
-import logging
-import uuid
 import signal
 import gzip
 import struct
@@ -131,7 +128,9 @@ def _get_data_dir():
         return BASE_DIR
     except (PermissionError, OSError):
         if platform.system() == "Darwin":
-            data_dir = Path.home() / "Library" / "Application Support" / "BIDSAppsRunner"
+            data_dir = (
+                Path.home() / "Library" / "Application Support" / "BIDSAppsRunner"
+            )
         else:
             data_dir = Path.home() / ".bids_apps_runner"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -273,7 +272,11 @@ def _request_auth_token() -> str:
 
 def _find_available_port(host, start_port=5000, max_tries=50):
     bind_host = str(host or "127.0.0.1").strip() or "127.0.0.1"
-    family = socket.AF_INET6 if ":" in bind_host and bind_host != "localhost" else socket.AF_INET
+    family = (
+        socket.AF_INET6
+        if ":" in bind_host and bind_host != "localhost"
+        else socket.AF_INET
+    )
 
     for offset in range(max_tries):
         port = start_port + offset
@@ -458,7 +461,9 @@ def _coerce_project_config_shape(config):
     )
     selected_app = selected.get("app") if isinstance(selected.get("app"), dict) else {}
 
-    base_common = normalized.get("common") if isinstance(normalized.get("common"), dict) else {}
+    base_common = (
+        normalized.get("common") if isinstance(normalized.get("common"), dict) else {}
+    )
     merged_common = copy.deepcopy(base_common)
     merged_common.update(copy.deepcopy(selected_common))
 
@@ -477,7 +482,9 @@ ProjectManager = ProjectStore(
     PROJECTS_DIR,
     machine_settings_provider=_get_effective_machine_settings,
     config_normalizer=_coerce_project_config_shape,
-    project_dir_resolver=lambda project_id: _resolve_project_dir(PROJECTS_DIR, project_id),
+    project_dir_resolver=lambda project_id: _resolve_project_dir(
+        PROJECTS_DIR, project_id
+    ),
     timestamp_factory=lambda: datetime.now().isoformat(),
 )
 
@@ -702,7 +709,9 @@ def _extract_runtime_config(cfg, selected_pipeline_id=None):
             cfg["config"], preferred_pipeline_id=selected_pipeline_id
         )
     if isinstance(cfg, dict):
-        return _materialize_runtime_config(cfg, preferred_pipeline_id=selected_pipeline_id)
+        return _materialize_runtime_config(
+            cfg, preferred_pipeline_id=selected_pipeline_id
+        )
     return {}
 
 
@@ -1058,7 +1067,10 @@ def get_docker_tags():
                 response.status_code,
             )
     except requests.exceptions.SSLError:
-        return jsonify({"error": "TLS verification failed while contacting Docker Hub"}), 502
+        return (
+            jsonify({"error": "TLS verification failed while contacting Docker Hub"}),
+            502,
+        )
     except Exception as e:
         print(f"[DEBUG] Exception fetching tags for {repo}: {str(e)}", flush=True)
         return jsonify({"error": str(e)}), 500
@@ -1071,6 +1083,7 @@ GUI_SESSION_STARTED = False
 def _mark_gui_session_started():
     global GUI_SESSION_STARTED
     GUI_SESSION_STARTED = True
+
 
 # Marker propagated to child processes so stop-all can target app-launched jobs.
 APP_LAUNCH_ENV_KEY = "BIDS_APPS_RUNNER_LAUNCHED_BY_GUI"
@@ -1089,7 +1102,7 @@ APPTAINER_BUILDS: dict[str, dict[str, Any]] = {}
 APPTAINER_BUILDS_LOCK = threading.Lock()
 
 # Track pilot resource estimator jobs
-PILOT_JOBS = {}
+PILOT_JOBS: dict[str, dict[str, Any]] = {}
 PILOT_JOBS_LOCK = threading.Lock()
 
 
@@ -1119,7 +1132,9 @@ register_project_config_handlers(
     app,
     project_manager_getter=lambda: ProjectManager,
     normalize_project_id=_normalize_project_id,
-    resolve_project_dir=lambda project_id: _resolve_project_dir(PROJECTS_DIR, project_id),
+    resolve_project_dir=lambda project_id: _resolve_project_dir(
+        PROJECTS_DIR, project_id
+    ),
     normalize_json_filename=_normalize_json_filename,
     resolve_named_config_path=_resolve_named_config_path,
     resolve_config_storage_dir=lambda directory: _resolve_config_storage_dir(
@@ -1726,10 +1741,22 @@ def _prepare_apptainer_build(data):
         built_image = output_path / f"{Path(docker_repo).name}_{docker_tag}.sif"
         sandbox_dir = Path(per_build_dir) / "sandbox"
         cmd = [
-            ["apptainer", "build", "--sandbox", str(sandbox_dir),
-             f"docker://{docker_repo}:{docker_tag}"],
-            ["apptainer", "build", "--force", "--tmpdir", per_build_dir,
-             str(built_image), str(sandbox_dir)],
+            [
+                "apptainer",
+                "build",
+                "--sandbox",
+                str(sandbox_dir),
+                f"docker://{docker_repo}:{docker_tag}",
+            ],
+            [
+                "apptainer",
+                "build",
+                "--force",
+                "--tmpdir",
+                per_build_dir,
+                str(built_image),
+                str(sandbox_dir),
+            ],
         ]
 
     build_env["APPTAINER_TMPDIR"] = str(tmp_path)
@@ -1810,8 +1837,14 @@ def _run_apptainer_build_async(build_id):
                     # corruption, exit 134/139); the system one is typically more stable.
                     sandbox_dir = state.get("sandbox_dir")
                     output_image = state.get("output_image")
-                    is_sif_step = step_index == len(steps) - 1 and sandbox_dir and output_image
-                    if is_sif_step and Path(sandbox_dir).is_dir() and shutil.which("mksquashfs"):
+                    is_sif_step = (
+                        step_index == len(steps) - 1 and sandbox_dir and output_image
+                    )
+                    if (
+                        is_sif_step
+                        and Path(sandbox_dir).is_dir()
+                        and shutil.which("mksquashfs")
+                    ):
                         logf.write(
                             f"\napptainer build exited {return_code} — retrying with "
                             f"system mksquashfs fallback...\n\n"
@@ -1819,20 +1852,41 @@ def _run_apptainer_build_async(build_id):
                         logf.flush()
                         squashfs_path = Path(state["per_build_dir"]) / "rootfs.squashfs"
                         fallback_steps = [
-                            ["mksquashfs", sandbox_dir, str(squashfs_path),
-                             "-noappend", "-processors", "1"],
+                            [
+                                "mksquashfs",
+                                sandbox_dir,
+                                str(squashfs_path),
+                                "-noappend",
+                                "-processors",
+                                "1",
+                            ],
                             ["apptainer", "sif", "new", output_image],
-                            ["apptainer", "sif", "add",
-                             "--datatype", "4", "--parttype", "2", "--partfs", "1",
-                             "--partarch", "2", "--groupid", "1",
-                             output_image, str(squashfs_path)],
+                            [
+                                "apptainer",
+                                "sif",
+                                "add",
+                                "--datatype",
+                                "4",
+                                "--parttype",
+                                "2",
+                                "--partfs",
+                                "1",
+                                "--partarch",
+                                "2",
+                                "--groupid",
+                                "1",
+                                output_image,
+                                str(squashfs_path),
+                            ],
                         ]
                         fallback_names = ["mksquashfs", "sif new", "sif add"]
                         for fb_name, fb_cmd in zip(fallback_names, fallback_steps):
                             logf.write(f"Fallback ({fb_name}): {' '.join(fb_cmd)}\n\n")
                             logf.flush()
                             with APPTAINER_BUILDS_LOCK:
-                                if APPTAINER_BUILDS.get(build_id, {}).get("cancel_requested"):
+                                if APPTAINER_BUILDS.get(build_id, {}).get(
+                                    "cancel_requested"
+                                ):
                                     return_code = -1
                                     break
                             fb_proc = subprocess.Popen(
@@ -1861,7 +1915,9 @@ def _run_apptainer_build_async(build_id):
                     break
 
                 if len(steps) > 1:
-                    logf.write(f"\nStep {step_index + 1} finished (exit {return_code})\n\n")
+                    logf.write(
+                        f"\nStep {step_index + 1} finished (exit {return_code})\n\n"
+                    )
                     logf.flush()
 
         with APPTAINER_BUILDS_LOCK:
@@ -1930,6 +1986,7 @@ register_cohort_routes(
     ensure_logs_dir=_ensure_logs_dir,
 )
 
+
 def _extract_fs_license_path(options):
     """Extract FreeSurfer license path from app options."""
     if not options:
@@ -1963,7 +2020,9 @@ def _map_container_path_to_host(container_path, mounts):
 register_run_routes(
     app,
     resolve_config_path=resolve_config_path,
-    resolve_project_dir=lambda project_id: _resolve_project_dir(PROJECTS_DIR, project_id),
+    resolve_project_dir=lambda project_id: _resolve_project_dir(
+        PROJECTS_DIR, project_id
+    ),
     extract_runtime_config=_extract_runtime_config,
     normalize_runner_args=_normalize_runner_args,
     apply_max_usage_cap=_apply_max_usage_cap,
@@ -2023,7 +2082,10 @@ if __name__ == "__main__":
     if GUI_LOGIN_ENABLED:
         print("🔒 Browser login is enabled", flush=True)
         if GUI_BOOTSTRAP_PASSWORD:
-            print(f"🔑 Generated GUI password for this run: {GUI_BOOTSTRAP_PASSWORD}", flush=True)
+            print(
+                f"🔑 Generated GUI password for this run: {GUI_BOOTSTRAP_PASSWORD}",
+                flush=True,
+            )
     if GUI_AUTH_TOKEN:
         print(
             f"🔐 Remote requests must provide {GUI_AUTH_HEADER} or Authorization: Bearer <token>",

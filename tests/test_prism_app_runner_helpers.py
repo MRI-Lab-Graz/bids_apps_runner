@@ -62,8 +62,14 @@ def test_resolve_container_engine_fallback_paths():
 
 
 def test_version_and_extension_helpers():
-    assert prism_app_runner._strip_container_extension("fmriprep_24.1.0.sif") == "fmriprep_24.1.0"
-    assert prism_app_runner._strip_container_extension("mriqc-v23.0.0.IMG") == "mriqc-v23.0.0"
+    assert (
+        prism_app_runner._strip_container_extension("fmriprep_24.1.0.sif")
+        == "fmriprep_24.1.0"
+    )
+    assert (
+        prism_app_runner._strip_container_extension("mriqc-v23.0.0.IMG")
+        == "mriqc-v23.0.0"
+    )
     assert prism_app_runner._numeric_version_key("24.1.0rc1") == (24, 1, 0)
     assert prism_app_runner._numeric_version_key("latest") is None
 
@@ -123,9 +129,14 @@ def test_get_latest_version_from_dockerhub_selects_semver(monkeypatch):
                 ]
             }
 
-    monkeypatch.setattr(prism_app_runner.requests, "get", lambda *args, **kwargs: DummyResponse())
+    monkeypatch.setattr(
+        prism_app_runner.requests, "get", lambda *args, **kwargs: DummyResponse()
+    )
 
-    assert prism_app_runner.get_latest_version_from_dockerhub("nipreps/fmriprep") == "24.1.0"
+    assert (
+        prism_app_runner.get_latest_version_from_dockerhub("nipreps/fmriprep")
+        == "24.1.0"
+    )
 
 
 def test_get_latest_version_from_dockerhub_handles_errors(monkeypatch):
@@ -136,14 +147,20 @@ def test_get_latest_version_from_dockerhub_handles_errors(monkeypatch):
         def json():
             return {"results": []}
 
-    monkeypatch.setattr(prism_app_runner.requests, "get", lambda *args, **kwargs: ErrorResponse())
-    assert prism_app_runner.get_latest_version_from_dockerhub("nipreps/fmriprep") is None
+    monkeypatch.setattr(
+        prism_app_runner.requests, "get", lambda *args, **kwargs: ErrorResponse()
+    )
+    assert (
+        prism_app_runner.get_latest_version_from_dockerhub("nipreps/fmriprep") is None
+    )
 
     def _raise(*args, **kwargs):
         raise requests.RequestException("offline")
 
     monkeypatch.setattr(prism_app_runner.requests, "get", _raise)
-    assert prism_app_runner.get_latest_version_from_dockerhub("nipreps/fmriprep") is None
+    assert (
+        prism_app_runner.get_latest_version_from_dockerhub("nipreps/fmriprep") is None
+    )
 
 
 def test_normalize_project_id_rejects_traversal():

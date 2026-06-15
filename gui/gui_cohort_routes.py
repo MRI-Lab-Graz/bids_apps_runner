@@ -34,7 +34,9 @@ def _run_cohort_async(job_id: str, cmd: list[str], log_file: Path) -> None:
         returncode = process.wait()
         with _cohort_jobs_lock:
             _cohort_jobs[job_id]["returncode"] = returncode
-            _cohort_jobs[job_id]["status"] = "completed" if returncode == 0 else "failed"
+            _cohort_jobs[job_id]["status"] = (
+                "completed" if returncode == 0 else "failed"
+            )
             _cohort_jobs[job_id]["finished_at"] = time.time()
     except Exception as exc:
         logging.exception("Cohort job %s crashed", job_id)
@@ -63,13 +65,17 @@ def register_cohort_routes(
 
         config_path = (data.get("config_path") or str(default_config)).strip()
         dry_run = bool(data.get("dry_run", False))
-        datasets = [d.strip() for d in (data.get("datasets") or "").split() if d.strip()]
+        datasets = [
+            d.strip() for d in (data.get("datasets") or "").split() if d.strip()
+        ]
 
         if not Path(config_path).exists():
             return jsonify({"error": f"Config not found: {config_path}"}), 400
 
         ensure_logs_dir()
-        job_id = f"cohort_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        job_id = (
+            f"cohort_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        )
         log_file = log_dir / f"{job_id}.log"
 
         cmd = ["bash", str(cohort_script), command, "--config", config_path]
@@ -95,7 +101,9 @@ def register_cohort_routes(
             target=_run_cohort_async, args=(job_id, cmd, log_file), daemon=True
         ).start()
 
-        return jsonify({"job_id": job_id, "status": "starting", "log_file": str(log_file)})
+        return jsonify(
+            {"job_id": job_id, "status": "starting", "log_file": str(log_file)}
+        )
 
     @app.route("/cohort/job_status", methods=["GET"])
     def cohort_job_status():
@@ -117,14 +125,16 @@ def register_cohort_routes(
             except OSError:
                 pass
 
-        return jsonify({
-            "job_id": job_id,
-            "command": state.get("command"),
-            "status": state.get("status"),
-            "returncode": state.get("returncode"),
-            "error": state.get("error"),
-            "log_tail": log_tail,
-        })
+        return jsonify(
+            {
+                "job_id": job_id,
+                "command": state.get("command"),
+                "status": state.get("status"),
+                "returncode": state.get("returncode"),
+                "error": state.get("error"),
+                "log_tail": log_tail,
+            }
+        )
 
     @app.route("/cohort/cancel", methods=["POST"])
     def cohort_cancel():

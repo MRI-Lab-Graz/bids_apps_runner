@@ -93,7 +93,9 @@ def test_main_local_success(monkeypatch):
         "read_config",
         lambda path: {"common": {}, "app": {"analysis_level": "participant"}},
     )
-    monkeypatch.setattr(prism_runner, "detect_execution_mode", lambda cfg, force: "local")
+    monkeypatch.setattr(
+        prism_runner, "detect_execution_mode", lambda cfg, force: "local"
+    )
     monkeypatch.setattr(
         prism_runner, "validate_common_config", lambda cfg: calls.append("valid_common")
     )

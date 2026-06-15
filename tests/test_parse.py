@@ -74,4 +74,3 @@ More Notes:
 """
 
     assert parse_help_sections(output) == []
-

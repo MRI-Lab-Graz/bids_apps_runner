@@ -71,7 +71,9 @@ def _materialize_runtime_config(config: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(entry, dict):
             continue
         pipeline_id = _sanitize_pipeline_id(raw_id)
-        entry_common = entry.get("common") if isinstance(entry.get("common"), dict) else {}
+        entry_common = (
+            entry.get("common") if isinstance(entry.get("common"), dict) else {}
+        )
         entry_app = entry.get("app") if isinstance(entry.get("app"), dict) else {}
         normalized[pipeline_id] = {
             "common": copy.deepcopy(entry_common),
@@ -86,15 +88,19 @@ def _materialize_runtime_config(config: Dict[str, Any]) -> Dict[str, Any]:
         active = next(iter(normalized.keys()))
 
     selected = normalized.get(active, {})
-    selected_common = selected.get("common", {})
-    selected_app = selected.get("app", {})
+    _sc = selected.get("common", {})
+    selected_common: Dict[str, Any] = _sc if isinstance(_sc, dict) else {}
+    _sa = selected.get("app", {})
+    selected_app: Dict[str, Any] = _sa if isinstance(_sa, dict) else {}
 
-    base_common = config.get("common") if isinstance(config.get("common"), dict) else {}
-    merged_common = copy.deepcopy(base_common)
+    _raw_common = config.get("common")
+    base_common: Dict[str, Any] = _raw_common if isinstance(_raw_common, dict) else {}
+    merged_common: Dict[str, Any] = copy.deepcopy(base_common)
     merged_common.update(copy.deepcopy(selected_common))
 
-    base_app = config.get("app") if isinstance(config.get("app"), dict) else {}
-    merged_app = copy.deepcopy(base_app)
+    _raw_app = config.get("app")
+    base_app: Dict[str, Any] = _raw_app if isinstance(_raw_app, dict) else {}
+    merged_app: Dict[str, Any] = copy.deepcopy(base_app)
     merged_app.update(copy.deepcopy(selected_app))
 
     runtime = {}
