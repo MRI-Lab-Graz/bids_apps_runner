@@ -4133,45 +4133,32 @@
             }
             if (!container) return;
 
-            let detectedOutputResolution = null;
-            let detectedOutputResolutionInfo = null;
-            const bidsFolder = document.getElementById('bids_folder').value.trim();
-            if (bidsFolder) {
-                try {
-                    const nativeResp = await fetch('/get_dwi_native_resolution', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ bids_dir: bidsFolder })
-                    });
-                    const nativeData = await nativeResp.json();
-                    if (nativeResp.ok && nativeData.resolution_mm) {
-                        detectedOutputResolution = String(nativeData.resolution_mm);
-                        detectedOutputResolutionInfo = nativeData;
-                    }
-                } catch (e) {
-                    console.warn('Could not detect native DWI resolution:', e);
-                }
-            }
+            // Show the spinner and preflight loading indicator immediately —
+            // before any async work — so the user sees feedback right away.
+            const containerEl = document.getElementById('optionsContainer');
+            document.getElementById('dynamicOptionsSection').style.display = 'block';
+            containerEl.innerHTML = '<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div><div class="mt-2">Analyzing container...</div></div>';
+            beginRunnerOptionsLoad(`Loading options from ${container}`);
 
             // Per-app defaults for boolean flags.
             // These defaults apply only to dynamically-discovered (help-parsed) options.
             const defaultCheckedFlags = new Set();
             if (container.toLowerCase().includes('fmriprep')) {
-                // fMRIPrep: do not run FreeSurfer recon-all unless explicitly requested.
                 defaultCheckedFlags.add('--fs-no-reconall');
             }
 
-            const containerEl = document.getElementById('optionsContainer');
-            document.getElementById('dynamicOptionsSection').style.display = 'block';
-            containerEl.innerHTML = '<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div><div class="mt-2">Analyzing container...</div></div>';
-            beginRunnerOptionsLoad(`Loading options from ${container}`);
-            
+            let detectedOutputResolution = null;
+            let detectedOutputResolutionInfo = null;
+            const bidsFolder = document.getElementById('bids_folder').value.trim();
+
             try {
                 if (isStaleProjectLoad(loadToken)) {
                     endRunnerOptionsLoad('');
                     return;
                 }
 
+                // Cache hit path: render immediately — no DWI check needed because
+                // applySavedAppConfig will restore the user's saved output-resolution.
                 if (_isOptionHelpCacheUsable(cachedHelp, container, engine)) {
                     currentOptionHelpCache = cloneJson(cachedHelp);
                     _renderDynamicOptionsFromHelpData(
@@ -4179,12 +4166,31 @@
                         container,
                         {
                             quietSuccess,
-                            detectedOutputResolution,
-                            detectedOutputResolutionInfo,
+                            detectedOutputResolution: null,
+                            detectedOutputResolutionInfo: null,
                             restoredFromCache: true,
                         }
                     );
                     return;
+                }
+
+                // Fresh fetch: run DWI native-resolution check first so the detected
+                // resolution is available for output-resolution auto-fill when rendering.
+                if (bidsFolder) {
+                    try {
+                        const nativeResp = await fetch('/get_dwi_native_resolution', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ bids_dir: bidsFolder })
+                        });
+                        const nativeData = await nativeResp.json();
+                        if (nativeResp.ok && nativeData.resolution_mm) {
+                            detectedOutputResolution = String(nativeData.resolution_mm);
+                            detectedOutputResolutionInfo = nativeData;
+                        }
+                    } catch (e) {
+                        console.warn('Could not detect native DWI resolution:', e);
+                    }
                 }
 
                 if (engine === 'apptainer') checkAppVersion(loadToken);
