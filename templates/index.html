@@ -3282,6 +3282,21 @@
                 const uniqueDeprecated = Array.from(new Set(skippedDeprecated));
                 showStatus(`Ignored deprecated option(s): ${uniqueDeprecated.join(', ')}`, true);
             }
+
+            if (options.length === 0 && document.querySelectorAll('[data-flag]').length > 0) {
+                _showNoSavedOptionsNotice();
+            }
+        }
+
+        function _showNoSavedOptionsNotice() {
+            if (document.getElementById('no-saved-options-notice')) return;
+            const container = document.getElementById('optionsContainer');
+            if (!container) return;
+            const notice = document.createElement('div');
+            notice.id = 'no-saved-options-notice';
+            notice.style.cssText = 'background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:0.85rem;color:#856404;display:flex;justify-content:space-between;align-items:center;gap:8px;';
+            notice.innerHTML = '<span><strong>No saved options found</strong> for this pipeline. Configure options below and click <strong>Save</strong> to preserve them for future loads.</span><button onclick="this.parentNode.remove()" style="background:none;border:none;font-size:1.2rem;line-height:1;cursor:pointer;color:#856404;padding:0 2px;">&#x2715;</button>';
+            container.insertBefore(notice, container.firstChild);
         }
 
         function _isOptionHelpCacheUsable(cache, container, engine) {
@@ -4513,6 +4528,8 @@
                         setProjectDirty(false);
                     }
                     showStatus(resData.message);
+                    const _noOptsNotice = document.getElementById('no-saved-options-notice');
+                    if (_noOptsNotice) _noOptsNotice.remove();
                     if (shouldRun) executeNow();
                     else document.getElementById('runApp').style.display = 'inline-block';
                 } else {
