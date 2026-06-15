@@ -4194,6 +4194,17 @@
                         restoredFromCache: false,
                     }
                 );
+
+                // Restore saved option values into the freshly-rendered form.
+                // This matters when the user pulls a Docker image and clicks "Load Options"
+                // manually — restoreProjectLoadDetails only calls applySavedAppConfig once
+                // on project load, so we need to re-apply here after a fresh help fetch.
+                if (currentPipelineId && currentProjectPipelines && currentProjectPipelines[currentPipelineId]) {
+                    const savedPipelineApp = (currentProjectPipelines[currentPipelineId] || {}).app;
+                    if (savedPipelineApp) {
+                        applySavedAppConfig({ app: savedPipelineApp });
+                    }
+                }
             } catch (e) {
                 containerEl.innerHTML = `<div class="alert alert-danger m-4">Connection error. Could not retrieve container help.</div>`;
                 endRunnerOptionsLoad('Could not retrieve container options.', true);

@@ -82,11 +82,17 @@ def register_run_routes(
             if notify_email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", notify_email):
                 return jsonify({"error": "Notification email format is invalid."}), 400
 
+            engine = common.get("container_engine", "apptainer")
+
             paths_to_check = {
                 "BIDS Folder": common.get("bids_folder"),
-                "Container Image": common.get("container"),
                 "Templateflow Folder": common.get("templateflow_dir"),
             }
+
+            # Docker container values are image references (e.g. "nipreps/fmriprep:24.1.1"),
+            # not filesystem paths — only validate the container path for Apptainer.
+            if engine != "docker":
+                paths_to_check["Container Image"] = common.get("container")
 
             if common.get("fs_license_file"):
                 paths_to_check["FreeSurfer License File"] = common.get("fs_license_file")
@@ -165,7 +171,6 @@ def register_run_routes(
                             400,
                         )
 
-            engine = common.get("container_engine", "apptainer")
             if engine == "docker":
                 if not shutil.which("docker"):
                     return jsonify({"error": "Docker requested but not found on system."}), 400
