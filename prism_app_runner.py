@@ -2030,4 +2030,9 @@ if __name__ == "__main__":
             flush=True,
         )
 
+    # Open browser after a short delay so the server is ready to accept connections.
+    if _is_loopback_host(host):
+        url = f"http://{display_host}:{port}"
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+
     serve(app, host=host, port=port, threads=4)
