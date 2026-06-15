@@ -859,6 +859,17 @@
                             <input type="email" class="form-control" id="notify_email" placeholder="name@example.org">
                         </div>
                     </div>
+                    <div class="row">
+                        <div class="col-md-12 mb-3">
+                            <div class="form-check" id="gpu_toggle_wrap" title="When an NVIDIA GPU is detected the container engine receives --nv (Apptainer) or --gpus all (Docker). Uncheck to disable GPU passthrough for this pipeline.">
+                                <input class="form-check-input" type="checkbox" id="gpu_enabled" checked>
+                                <label class="form-check-label" for="gpu_enabled">
+                                    Enable GPU / CUDA passthrough (<code>--nv</code>)
+                                    <span id="gpu_status_badge" class="badge bg-secondary ms-1" style="font-size:0.7rem;">detecting…</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
 
                     <div class="section-header">4. Runner Overrides</div>
                     <div class="row">
@@ -2111,6 +2122,8 @@
                 document.getElementById('jobs').value = common.jobs || 1;
                 document.getElementById('analysis_level').value = app.analysis_level || 'participant';
                 syncRunnerSubjectFilterWithAnalysisLevel();
+                const gpuChk = document.getElementById('gpu_enabled');
+                if (gpuChk && !gpuChk.disabled) gpuChk.checked = !app.disable_gpu;
 
                 const engine = common.container_engine || 'apptainer';
                 document.getElementById('container_engine').value = engine;
@@ -2876,6 +2889,17 @@
                 const summary = `Host resources: ${hostCpuCount} cores, ${memGiB}, ${gpuInfo}`;
                 const summaryEl = document.getElementById('resourceSummaryText');
                 if (summaryEl) summaryEl.textContent = summary;
+
+                // Update GPU toggle based on hardware detection
+                const gpuBadge = document.getElementById('gpu_status_badge');
+                const gpuCheckbox = document.getElementById('gpu_enabled');
+                if (data.gpu_available) {
+                    if (gpuBadge) { gpuBadge.textContent = 'GPU detected'; gpuBadge.className = 'badge bg-success ms-1'; gpuBadge.style.fontSize = '0.7rem'; }
+                    if (gpuCheckbox) gpuCheckbox.disabled = false;
+                } else {
+                    if (gpuBadge) { gpuBadge.textContent = 'No GPU'; gpuBadge.className = 'badge bg-warning text-dark ms-1'; gpuBadge.style.fontSize = '0.7rem'; }
+                    if (gpuCheckbox) { gpuCheckbox.checked = false; gpuCheckbox.disabled = true; }
+                }
 
                 const maxField = document.getElementById('pilot_nprocs_max');
                 if (maxField && !maxField.value) {
@@ -4466,10 +4490,12 @@
                 jobs: parseInt(document.getElementById('jobs').value) || 1
             };
 
+            const gpuEnabledEl = document.getElementById('gpu_enabled');
             const activeApp = {
                 analysis_level: document.getElementById('analysis_level').value,
                 options: opts,
-                mounts: mounts
+                mounts: mounts,
+                ...(gpuEnabledEl && !gpuEnabledEl.disabled && !gpuEnabledEl.checked ? { disable_gpu: true } : {})
             };
 
             const existingPipelineApp = (
@@ -4862,6 +4888,8 @@
                 document.getElementById('jobs').value = activeCommon.jobs || 1;
                 document.getElementById('analysis_level').value = activeApp.analysis_level || 'participant';
                 syncRunnerSubjectFilterWithAnalysisLevel();
+                const gpuChk2 = document.getElementById('gpu_enabled');
+                if (gpuChk2 && !gpuChk2.disabled) gpuChk2.checked = !activeApp.disable_gpu;
                 document.getElementById('config_name').value = filename;
 
                 const validation = cfg.validation || {};

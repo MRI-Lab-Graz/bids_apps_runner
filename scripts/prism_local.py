@@ -38,6 +38,11 @@ import prism_datalad
 # ============================================================================
 
 
+def _gpu_available():
+    """Return True when an NVIDIA GPU is present on this host."""
+    return shutil.which("nvidia-smi") is not None
+
+
 def _sanitize_apptainer_args(apptainer_args):
     """Sanitize apptainer args to avoid invalid invocations."""
     if not apptainer_args:
@@ -1148,6 +1153,15 @@ def _process_subject(
         # use --tmpfs /tmp:exec (supports Unix sockets) + /work for work files.
         use_docker_tmpfs = engine == "docker" and _needs_tmpfs_for_docker(tmp_dir)
 
+        # GPU passthrough: enabled when an NVIDIA GPU is present unless the app
+        # config opts out with "disable_gpu": true.
+        gpu_enabled = _gpu_available() and not app.get("disable_gpu", False)
+        if gpu_enabled:
+            logging.info(
+                "NVIDIA GPU detected — enabling GPU passthrough "
+                "(set 'disable_gpu': true in app config to opt out)"
+            )
+
         if engine == "docker":
             base_cmd = ["docker", "run", "--rm"]
 
@@ -1155,6 +1169,9 @@ def _process_subject(
             if platform.system() == "Darwin" and platform.machine() == "arm64":
                 logging.info("Apple Silicon detected - adding platform flag")
                 base_cmd.extend(["--platform", "linux/amd64"])
+
+            if gpu_enabled:
+                base_cmd.extend(["--gpus", "all"])
 
             base_cmd.extend(["-e", "TEMPLATEFLOW_HOME=/templateflow"])
 
@@ -1186,12 +1203,12 @@ def _process_subject(
 
             if app.get("apptainer_args"):
                 safe_args = _sanitize_apptainer_args(app["apptainer_args"])
-                if fastsurfer_mode and "--nv" not in safe_args:
+                if (fastsurfer_mode or gpu_enabled) and "--nv" not in safe_args:
                     safe_args.append("--nv")
                 base_cmd.extend(safe_args)
             else:
                 base_cmd.append("--containall")
-                if fastsurfer_mode:
+                if fastsurfer_mode or gpu_enabled:
                     base_cmd.append("--nv")
 
             for mnt in _build_common_mounts(common, tmp_dir, bids_mount_source):

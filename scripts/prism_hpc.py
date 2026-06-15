@@ -369,6 +369,14 @@ apptainer run \\
             apptainer_args = [str(arg) for arg in app.get("apptainer_args", [])]
             if not apptainer_args:
                 apptainer_args = ["--containall"]
+            # Auto-add --nv when GPU SLURM resources are requested and not disabled
+            hpc_requests_gpu = any(
+                "gpu" in str(v).lower()
+                for k, v in hpc.items()
+                if k.startswith("sbatch_") and v
+            )
+            if hpc_requests_gpu and not app.get("disable_gpu", False) and "--nv" not in apptainer_args:
+                apptainer_args.append("--nv")
             for arg in apptainer_args:
                 script_content += f"    {arg} \\\n"
 
