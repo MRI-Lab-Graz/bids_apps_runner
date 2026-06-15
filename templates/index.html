@@ -2118,8 +2118,14 @@
                 if (engine === 'docker') {
                     const containerImage = common.container || '';
                     const parts = containerImage.split(':');
+                    const savedTag = parts[1] || 'latest';
                     document.getElementById('container_docker_repo').value = parts[0] || '';
-                    document.getElementById('container_docker_tag').value = parts[1] || 'latest';
+                    const tagSelectA = document.getElementById('container_docker_tag');
+                    if (!Array.from(tagSelectA.options).some(o => o.value === savedTag)) {
+                        tagSelectA.innerHTML = '';
+                        tagSelectA.add(new Option(savedTag, savedTag));
+                    }
+                    tagSelectA.value = savedTag;
                 } else {
                     const containerPath = common.container || '';
                     if (containerPath) {
@@ -3501,8 +3507,16 @@
                     // Parse docker image (e.g., "nipreps/fmriprep:23.1.0")
                     const containerImage = common.container || '';
                     const parts = containerImage.split(':');
+                    const savedTag = parts[1] || 'latest';
                     document.getElementById('container_docker_repo').value = parts[0] || '';
-                    document.getElementById('container_docker_tag').value = parts[1] || 'latest';
+                    // Seed the saved tag into the <select> — setting .value on an empty
+                    // select is silently ignored, so the option must exist first.
+                    const tagSelectB = document.getElementById('container_docker_tag');
+                    if (!Array.from(tagSelectB.options).some(o => o.value === savedTag)) {
+                        tagSelectB.innerHTML = '';
+                        tagSelectB.add(new Option(savedTag, savedTag));
+                    }
+                    tagSelectB.value = savedTag;
                 } else {
                     // Parse apptainer path (e.g., "/path/to/container.sif")
                     const containerPath = common.container || '';
