@@ -81,15 +81,31 @@ def _sanitize_apptainer_args(apptainer_args):
     return sanitized
 
 
-def _build_common_mounts(common, tmp_dir, bids_folder_override=None):
+def _needs_tmpfs_for_docker(tmp_dir: str) -> bool:
+    """Return True when the host tmp_dir is on a volume that doesn't support
+    Unix domain sockets (e.g. exFAT external drives at /Volumes on macOS).
+
+    fMRIPrep 25.x uses multiprocessing.Manager() which creates Unix sockets in
+    /tmp. exFAT external drives don't support them → OSError [Errno 95].
+    The fix: use Docker's in-memory tmpfs for /tmp (supports sockets) and
+    mount the external volume as /work for large intermediate files instead.
+    """
+    if platform.system() != "Darwin":
+        return False
+    return os.path.abspath(str(tmp_dir)).startswith("/Volumes/")
+
+
+def _build_common_mounts(common, tmp_dir, bids_folder_override=None, skip_tmp=False):
     """Build common mount points for the container."""
     bids_source = bids_folder_override or common["bids_folder"]
     bids_mount = f"{bids_source}:/bids:ro"
-    mounts = [
-        f"{tmp_dir}:/tmp",
+    mounts = []
+    if not skip_tmp:
+        mounts.append(f"{tmp_dir}:/tmp")
+    mounts.extend([
         f"{common['output_folder']}:/output",
         bids_mount,
-    ]
+    ])
 
     # FreeSurfer license file (optional)
     if common.get("fs_license_file") and os.path.exists(common["fs_license_file"]):
@@ -1122,6 +1138,10 @@ def _process_subject(
             )
             return False, "failed"
 
+        # Detect external-volume tmp dir before building base_cmd so we can
+        # use --tmpfs /tmp:exec (supports Unix sockets) + /work for work files.
+        use_docker_tmpfs = engine == "docker" and _needs_tmpfs_for_docker(tmp_dir)
+
         if engine == "docker":
             base_cmd = ["docker", "run", "--rm"]
 
@@ -1132,8 +1152,20 @@ def _process_subject(
 
             base_cmd.extend(["-e", "TEMPLATEFLOW_HOME=/templateflow"])
 
-            for mnt in _build_common_mounts(common, tmp_dir, bids_mount_source):
+            for mnt in _build_common_mounts(common, tmp_dir, bids_mount_source,
+                                             skip_tmp=use_docker_tmpfs):
                 base_cmd.extend(["-v", mnt])
+
+            if use_docker_tmpfs:
+                # External exFAT volume: in-memory tmpfs handles Unix sockets;
+                # actual nipype work files go to /work on the external drive.
+                logging.info(
+                    "External volume tmp dir detected (%s): "
+                    "using Docker --tmpfs /tmp:exec + /work mount for forkserver support",
+                    tmp_dir,
+                )
+                base_cmd.extend(["--tmpfs", "/tmp:exec"])
+                base_cmd.extend(["-v", f"{tmp_dir}:/work"])
 
             for mount in app.get("mounts", []):
                 if mount.get("source") and mount.get("target"):
@@ -1246,7 +1278,8 @@ def _process_subject(
                     subject,
                 )
 
-            cmd.extend(["-w", "/tmp"])
+            container_work_dir = "/work" if use_docker_tmpfs else "/tmp"
+            cmd.extend(["-w", container_work_dir])
             commands.append((cmd, subject))
 
         for cmd, run_id in commands:

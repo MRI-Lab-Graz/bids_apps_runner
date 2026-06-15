@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import signal
@@ -13,6 +14,69 @@ from pathlib import Path
 from typing import Any, Callable
 
 from flask import jsonify, request
+
+
+def _get_docker_macos_shared_dirs():
+    """Return Docker Desktop's file-sharing directory list on macOS, or None if unknown.
+
+    Docker Desktop stores its settings in one of several locations depending on
+    the version.  Returns a list of absolute path strings, or None when the
+    settings file cannot be read (caller should treat that as "can't determine").
+    """
+    if platform.system() != "Darwin":
+        return None
+
+    candidates = [
+        Path.home() / "Library/Group Containers/group.com.docker/settings-store.json",
+        Path.home() / "Library/Group Containers/group.com.docker/settings.json",
+        Path.home() / ".docker/desktop/settings.json",
+    ]
+    for p in candidates:
+        try:
+            with open(p, encoding="utf-8") as fh:
+                data = json.load(fh)
+            dirs = (
+                data.get("filesharingDirectories")
+                or data.get("filesharingdirectories")
+                or []
+            )
+            if dirs:
+                return [
+                    os.path.abspath(os.path.expanduser(str(d))) for d in dirs
+                ]
+        except (OSError, json.JSONDecodeError, KeyError, TypeError):
+            continue
+    return None
+
+
+def _docker_inaccessible_paths(mount_paths, shared_dirs):
+    """Return the subset of *mount_paths* that Docker cannot access on macOS.
+
+    Args:
+        mount_paths: dict mapping label → absolute path string
+        shared_dirs: list returned by _get_docker_macos_shared_dirs(), or None
+
+    Returns:
+        dict of label → path for paths that are NOT under any shared dir.
+        Empty dict means all paths are accessible (or we couldn't determine).
+    """
+    if shared_dirs is None:
+        return {}  # Can't determine — let Docker itself report the problem.
+
+    # Paths Docker always allows on macOS regardless of settings
+    always_ok = ("/private", "/tmp", "/var/folders", "/Users", "/Volumes")
+
+    bad = {}
+    for label, path in mount_paths.items():
+        if not path:
+            continue
+        abs_path = os.path.abspath(os.path.expanduser(str(path)))
+        if any(abs_path.startswith(ok) for ok in always_ok):
+            continue
+        if any(abs_path.startswith(d) for d in shared_dirs):
+            continue
+        bad[label] = abs_path
+    return bad
 
 
 def register_run_routes(
@@ -112,6 +176,49 @@ def register_run_routes(
                     ),
                     400,
                 )
+
+            # On macOS with Docker, verify every mount path is inside Docker
+            # Desktop's file-sharing list before attempting to run.
+            if engine == "docker" and platform.system() == "Darwin":
+                app_cfg_pre = runtime_cfg.get("app", {})
+                mounts_pre = app_cfg_pre.get("mounts", [])
+
+                docker_mount_candidates = {
+                    "BIDS Folder":         common.get("bids_folder"),
+                    "Output Folder":       common.get("output_folder"),
+                    "Work / Tmp Folder":   common.get("tmp_folder"),
+                    "FreeSurfer License":  common.get("fs_license_file"),
+                    "TemplateFlow Folder": common.get("templateflow_dir"),
+                    "Optional Folder":     common.get("optional_folder"),
+                }
+                for i, m in enumerate(mounts_pre):
+                    src = m.get("source") if isinstance(m, dict) else None
+                    if src:
+                        docker_mount_candidates[f"Custom Mount {i + 1} ({src})"] = src
+
+                shared_dirs = _get_docker_macos_shared_dirs()
+                inaccessible = _docker_inaccessible_paths(
+                    docker_mount_candidates, shared_dirs
+                )
+
+                if inaccessible:
+                    lines = [f"  • {label}: {path}" for label, path in inaccessible.items()]
+                    return (
+                        jsonify(
+                            {
+                                "error": "Docker File Sharing Not Configured",
+                                "details": (
+                                    "The following path(s) are not accessible to Docker Desktop on macOS.\n\n"
+                                    + "\n".join(lines)
+                                    + "\n\n"
+                                    "Fix options:\n"
+                                    "  1. Move the file/folder to your home directory (~/) or an external volume (/Volumes/…) — Docker can always access these.\n"
+                                    "  2. Add the path in Docker Desktop → Settings → Resources → File Sharing, then Apply & Restart."
+                                ),
+                            }
+                        ),
+                        400,
+                    )
 
             app_cfg = runtime_cfg.get("app", {})
             options = app_cfg.get("options", [])
