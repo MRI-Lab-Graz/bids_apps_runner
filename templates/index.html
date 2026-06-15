@@ -3532,6 +3532,19 @@
                         tagSelectB.add(new Option(savedTag, savedTag));
                     }
                     tagSelectB.value = savedTag;
+
+                    // Show loading placeholder immediately so the user sees feedback
+                    // while the background help-fetch (fetchAppOptions) runs.
+                    const _cachedHelpForPreview = (app && app.option_help_cache) ? app.option_help_cache : null;
+                    const _cacheUsable = _isOptionHelpCacheUsable(_cachedHelpForPreview, common.container || '', 'docker');
+                    if (!_cacheUsable) {
+                        const _sec = document.getElementById('dynamicOptionsSection');
+                        const _ctr = document.getElementById('optionsContainer');
+                        if (_sec && _ctr) {
+                            _sec.style.display = 'block';
+                            _ctr.innerHTML = '<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div><div class="mt-2 text-muted small">Loading options for ' + (parts[0] || 'container') + ':' + savedTag + '...</div></div>';
+                        }
+                    }
                 } else {
                     // Parse apptainer path (e.g., "/path/to/container.sif")
                     const containerPath = common.container || '';
@@ -4212,6 +4225,15 @@
                     },
                 };
                 _persistActivePipelineOptionHelpCache(currentOptionHelpCache);
+
+                // Silently persist cache to disk so the next project load is instant.
+                if (lastProjectId && currentPipelineId) {
+                    fetch(`/patch_option_cache/${encodeURIComponent(lastProjectId)}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ pipeline_id: currentPipelineId, cache: currentOptionHelpCache }),
+                    }).catch(() => {});
+                }
 
                 _renderDynamicOptionsFromHelpData(
                     currentOptionHelpCache.payload,

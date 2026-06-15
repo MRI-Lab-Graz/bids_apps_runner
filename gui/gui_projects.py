@@ -152,6 +152,31 @@ class ProjectStore:
 
         return True
 
+    def patch_pipeline_option_cache(
+        self, project_id: Any, pipeline_id: str, cache: dict[str, Any]
+    ) -> bool:
+        try:
+            project_dir = self.project_dir_resolver(project_id)
+        except ValueError:
+            return False
+        project_json_path = project_dir / "project.json"
+        if not project_json_path.exists():
+            return False
+        with open(project_json_path, "r", encoding="utf-8") as f:
+            project_json = json.load(f)
+        cfg = project_json.get("config", {})
+        pipelines = cfg.get("pipelines", {})
+        if pipeline_id not in pipelines:
+            return False
+        pipeline = pipelines[pipeline_id]
+        if not isinstance(pipeline.get("app"), dict):
+            pipeline["app"] = {}
+        pipeline["app"]["option_help_cache"] = cache
+        project_json["last_modified"] = self.timestamp_factory()
+        with open(project_json_path, "w", encoding="utf-8") as f:
+            json.dump(project_json, f, indent=2)
+        return True
+
     def update_project_log(self, project_id: Any, log_filename: str) -> bool:
         try:
             project_dir = self.project_dir_resolver(project_id)

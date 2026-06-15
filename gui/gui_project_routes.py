@@ -183,6 +183,25 @@ def register_project_config_handlers(
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
+    @app.route("/patch_option_cache/<project_id>", methods=["POST"])
+    def patch_option_cache(project_id):
+        try:
+            manager = project_manager_getter()
+            normalize_project_id(project_id)
+            data = request.get_json(silent=True) or {}
+            pipeline_id = data.get("pipeline_id", "")
+            cache = data.get("cache")
+            if not pipeline_id or not isinstance(cache, dict):
+                return jsonify({"error": "pipeline_id and cache are required"}), 400
+            success = manager.patch_pipeline_option_cache(project_id, pipeline_id, cache)
+            if not success:
+                return jsonify({"error": "Project or pipeline not found"}), 404
+            return jsonify({"message": "Cache saved"}), 200
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
     @app.route("/delete_project/<project_id>", methods=["DELETE"])
     def delete_project(project_id):
         try:

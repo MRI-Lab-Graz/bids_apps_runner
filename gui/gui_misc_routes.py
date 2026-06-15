@@ -264,7 +264,6 @@ def register_misc_routes(
                     flush=True,
                 )
 
-            parts = re.split(r"\n(?=[A-Z][A-Za-z0-9\-\(\) ]+:)", output)
             sections = []
             exclude = {
                 "--help",
@@ -274,20 +273,45 @@ def register_misc_routes(
                 "--bids-filter-file",
             }
 
-            for part in parts:
-                lines = part.strip().split("\n")
-                if not lines:
-                    continue
+            # Build (header, content) pairs by detecting unindented lines that end
+            # with ':' as section boundaries. This handles lowercase headers such
+            # as 'options:' (Python 3.10+ argparse) and headers that contain
+            # special characters such as 'Specific options for "other" fieldmaps:'.
+            parsed_sections_raw: list[tuple[str, str]] = []
+            _cur_header: str | None = None
+            _cur_content: list[str] = []
+            for _line in output.splitlines():
+                _stripped = _line.rstrip()
+                if (
+                    _stripped
+                    and not _stripped[0].isspace()
+                    and _stripped[0] != "-"
+                    and _stripped.endswith(":")
+                ):
+                    if _cur_header is not None:
+                        parsed_sections_raw.append(
+                            (_cur_header, "\n".join(_cur_content))
+                        )
+                    _cur_header = _stripped[:-1].strip()
+                    _cur_content = []
+                else:
+                    _cur_content.append(_line)
+            if _cur_header is not None:
+                parsed_sections_raw.append((_cur_header, "\n".join(_cur_content)))
 
-                header = lines[0].strip().rstrip(":")
+            for header, content in parsed_sections_raw:
                 if any(
                     token in header.lower()
-                    for token in ["usage", "synopsis", "description"]
+                    for token in [
+                        "usage",
+                        "synopsis",
+                        "description",
+                        "positional",
+                    ]
                 ):
                     continue
 
-                content = "\n".join(lines[1:])
-                if "--" not in part:
+                if "--" not in content:
                     continue
 
                 options = []
