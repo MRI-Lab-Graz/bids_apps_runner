@@ -498,6 +498,7 @@ def register_misc_routes(
                     "app_info": {"name": app_name, "url": doc_url},
                     "deprecated_flags": sorted(list(deprecated_flags)),
                     "raw_help": output if not sections else None,
+                    "parser_version": 2,
                 }
             )
         except Exception as exc:

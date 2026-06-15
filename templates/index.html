@@ -3299,12 +3299,16 @@
             container.insertBefore(notice, container.firstChild);
         }
 
+        const _OPTION_CACHE_MIN_PARSER_VERSION = 2;
+
         function _isOptionHelpCacheUsable(cache, container, engine) {
             if (!cache || typeof cache !== 'object') return false;
             if ((cache.container || '') !== (container || '')) return false;
             if ((cache.engine || '') !== (engine || '')) return false;
             const payload = cache.payload;
-            return !!(payload && typeof payload === 'object' && Array.isArray(payload.sections));
+            if (!payload || typeof payload !== 'object' || !Array.isArray(payload.sections)) return false;
+            if ((payload.parser_version || 0) < _OPTION_CACHE_MIN_PARSER_VERSION) return false;
+            return true;
         }
 
         function _getActivePipelineOptionHelpCache() {
@@ -4222,6 +4226,7 @@
                         deprecated_flags: data.deprecated_flags || [],
                         sections: data.sections || [],
                         raw_help: data.raw_help || '',
+                        parser_version: data.parser_version || 1,
                     },
                 };
                 _persistActivePipelineOptionHelpCache(currentOptionHelpCache);
