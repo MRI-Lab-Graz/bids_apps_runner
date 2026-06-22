@@ -4,16 +4,25 @@
 # Orchestrate any BIDS app across multiple datasets on a SLURM/DataLad HPC.
 # Works with fMRIPrep, QSIPrep, MRIQC, or any other BIDS-app container.
 #
-# Two-phase workflow
+# Two-phase workflow, built on the `datalad-slurm` extension
+# (https://github.com/knuedd/datalad-slurm) so that no datalad/git
+# operations ever happen inside a parallel SLURM job -- only in this
+# script, sequentially, before and after submission.
 # ──────────────────
 # Phase 1 – setup (run once, needs DataLad + network access)
 #   • Pre-clones every dataset to shared HPC storage (fast subsequent clones)
 #   • Creates the per-dataset output DataLad repos on the DataLad SSH server
+#   • Prefetches all subject data (`datalad get`) so array tasks never call it
 #
 # Phase 2 – submit (run after setup, submits SLURM array jobs)
 #   • Builds subject lists from pre-cloned datasets
-#   • Generates a SLURM array job script per dataset (via hpc_datalad_runner.py)
-#   • Submits each array job; records job IDs in submission.log
+#   • Generates a plain SLURM array job script per dataset (via
+#     hpc_datalad_runner.py) -- the script itself contains no datalad/git calls
+#   • `datalad slurm-schedule`s the array job (declares one -o per subject,
+#     submits via sbatch itself); records job IDs in submission.log
+#   • Chains a dependent finish job (--dependency=afterany) that runs
+#     `datalad slurm-finish` (one commit covering the whole array) + push,
+#     once the array completes
 #
 # Usage
 # ─────
@@ -29,10 +38,12 @@
 #
 # Prerequisites
 # ─────────────
-#   • jq       (JSON parsing)
-#   • python3  (hpc_datalad_runner.py)
-#   • datalad  (available via module or PATH)
-#   • sbatch   (SLURM, only needed for submit phase)
+#   • jq             (JSON parsing)
+#   • python3        (hpc_datalad_runner.py)
+#   • datalad        (available via module or PATH)
+#   • datalad-slurm   extension (pip install git+https://github.com/knuedd/datalad-slurm.git;
+#                      not on PyPI -- provides slurm-schedule/slurm-finish)
+#   • sbatch         (SLURM, only needed for submit phase)
 #   • ssh access to the DataLad server (only needed for setup phase)
 #
 # Edit the TODO values in your config JSON before running.
@@ -110,6 +121,18 @@ resolve_config() {
     else
         DATASETS=("${ALL_DATASETS[@]}")
     fi
+
+    APP_OUT_DIR="$(jq -r '.bids_app.output_dir_name // .bids_app.app_name // "output"' "$CONFIG")"
+    APP_NAME="$(jq -r '.bids_app.app_name // "bids_app"' "$CONFIG")"
+    LOG_DIR_BASE="$(cfg '.paths.log_dir')"
+    mapfile -t HPC_MODULES < <(jq -r '.hpc.modules[]? // empty' "$CONFIG")
+}
+
+# Sets OUTPUT_CLONE and PUSH_LOCK_DIR for dataset $1 (depends on resolve_config)
+resolve_output_clone() {
+    local ds="$1"
+    OUTPUT_CLONE="${SHARED_OUTPUT_BASE}/${ds}/${APP_OUT_DIR}"
+    PUSH_LOCK_DIR="${SHARED_OUTPUT_BASE}/${ds}"
 }
 
 # ── Phase 1: setup ────────────────────────────────────────────────────────────
@@ -126,11 +149,8 @@ cmd_setup() {
         local input_url="${INPUT_URL_TPL/\{dataset_id\}/$DS}"
         local input_clone="${SHARED_INPUT_BASE}/${DS}"
         local output_url="${OUTPUT_URL_TPL/\{dataset_id\}/$DS}"
-        # Derive output_dir_name from bids_app config (default: same as app_name or "output")
-        local app_out_dir
-        app_out_dir="$(jq -r '.bids_app.output_dir_name // .bids_app.app_name // "output"' "$CONFIG")"
-        local output_clone="${SHARED_OUTPUT_BASE}/${DS}/${app_out_dir}"
-        local push_lock_dir="${SHARED_OUTPUT_BASE}/${DS}"
+        resolve_output_clone "$DS"
+        local output_clone="$OUTPUT_CLONE"
 
         log "[$DS] --- setup ---"
 
@@ -140,7 +160,7 @@ cmd_setup() {
         else
             log "[$DS] Cloning input from ${input_url}"
             run datalad clone "$input_url" "$input_clone" \
-                || { warn "[$DS] Input clone failed – skipping"; ((failed++)); continue; }
+                || { warn "[$DS] Input clone failed – skipping"; failed=$((failed + 1)); continue; }
         fi
 
         # 2. Create output dataset on DataLad server (requires SSH access)
@@ -162,11 +182,15 @@ cmd_setup() {
             log "[$DS] Cloning output from ${output_url}"
             run mkdir -p "$(dirname "$output_clone")"
             run datalad clone "$output_url" "$output_clone" \
-                || { warn "[$DS] Output clone failed – skipping"; ((failed++)); continue; }
+                || { warn "[$DS] Output clone failed – skipping"; failed=$((failed + 1)); continue; }
         fi
 
-        # 4. Ensure push lock directory exists
-        run mkdir -p "$push_lock_dir"
+        # 4. Prefetch all subject data now, since array tasks no longer call
+        #    `datalad get` themselves (datalad-slurm keeps all git/annex
+        #    operations outside the job).
+        log "[$DS] Prefetching subject data..."
+        run bash -c "cd '${input_clone}' && datalad get sub-*/ 2>/dev/null" \
+            || warn "[$DS] Prefetch failed or found no sub-* dirs yet"
 
         log "[$DS] Setup complete"
     done
@@ -193,6 +217,9 @@ cmd_submit() {
         local subj_list="${SUBJ_LISTS_DIR}/${DS}_subjects.txt"
         local array_script="${scripts_dir}/${DS}_bids_array.sh"
         local input_clone="${SHARED_INPUT_BASE}/${DS}"
+        resolve_output_clone "$DS"
+        local output_clone="$OUTPUT_CLONE"
+        local finish_script="${scripts_dir}/${DS}_bids_finish.sh"
 
         log "[$DS] --- submit ---"
 
@@ -202,20 +229,20 @@ cmd_submit() {
         else
             if [[ ! -d "$input_clone" ]]; then
                 warn "[$DS] Input not cloned at ${input_clone} – run setup first"
-                ((failed++)); continue
+                failed=$((failed + 1)); continue
             fi
             log "[$DS] Building subject list..."
             run bash -c "ls -d ${input_clone}/sub-*/ 2>/dev/null \
                 | xargs -I{} basename {} \
                 | sort > ${subj_list}" \
-                || { warn "[$DS] Failed to build subject list"; ((failed++)); continue; }
+                || { warn "[$DS] Failed to build subject list"; failed=$((failed + 1)); continue; }
         fi
 
         local n_subjects
         n_subjects=$(wc -l < "$subj_list" | tr -d ' ')
         if [[ "$n_subjects" -eq 0 ]]; then
             warn "[$DS] Subject list is empty – skipping"
-            ((failed++)); continue
+            failed=$((failed + 1)); continue
         fi
         log "[$DS] ${n_subjects} subjects"
 
@@ -230,21 +257,81 @@ cmd_submit() {
                 --dataset-id "$DS" \
                 --subject-list "$subj_list" \
                 --output "$array_script" \
-                || { warn "[$DS] Script generation failed"; ((failed++)); continue; }
+                || { warn "[$DS] Script generation failed"; failed=$((failed + 1)); continue; }
         fi
 
-        # Submit
-        if $DRY_RUN; then
-            echo "[DRY-RUN] sbatch ${array_script}  # ${n_subjects} subjects"
-            ((submitted++))
-        else
-            local job_id
-            job_id=$(sbatch "$array_script" 2>&1 | grep -oP '\d+$') \
-                || { warn "[$DS] sbatch failed"; ((failed++)); continue; }
-            echo "${DS} ${job_id} ${n_subjects}" >> "$submission_log"
-            log "[$DS] Submitted array job ${job_id} (${n_subjects} subjects)"
-            ((submitted++))
+        if [[ ! -d "${output_clone}/.datalad" ]]; then
+            warn "[$DS] Output not cloned at ${output_clone} – run setup first"
+            failed=$((failed + 1)); continue
         fi
+
+        # Build one non-overlapping -o flag per subject (wildcards are
+        # forbidden by `datalad slurm-schedule`).
+        local -a output_flags=()
+        while IFS= read -r subj; do
+            [[ -n "$subj" ]] && output_flags+=(-o "$subj")
+        done < "$subj_list"
+
+        if $DRY_RUN; then
+            echo "[DRY-RUN] (cd ${output_clone} && datalad -f json slurm-schedule ${output_flags[*]} -m '...' sbatch ${array_script})"
+            echo "[DRY-RUN]   then sbatch a dependent finish job: datalad slurm-finish && datalad push --to origin"
+            submitted=$((submitted + 1))
+            continue
+        fi
+
+        # Schedule the array job. Nothing inside the job touches git --
+        # slurm-schedule declares/prepares the per-subject outputs and
+        # submits via sbatch itself; we parse the SLURM job id back out of
+        # its JSON result.
+        local schedule_stdout job_id
+        schedule_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
+            "${output_flags[@]}" \
+            -m "${APP_NAME} array for ${DS} (${n_subjects} subjects)" \
+            sbatch "$array_script") \
+            || { warn "[$DS] datalad slurm-schedule failed"; failed=$((failed + 1)); continue; }
+
+        job_id=$(printf '%s\n' "$schedule_stdout" \
+            | jq -r 'select(.action=="slurm-schedule") | .slurm_run_info.slurm_job_id // empty' \
+            | tail -1)
+        if [[ -z "$job_id" ]]; then
+            warn "[$DS] Could not determine SLURM job id from slurm-schedule output"
+            failed=$((failed + 1)); continue
+        fi
+        log "[$DS] Scheduled array job ${job_id} (${n_subjects} subjects)"
+
+        # Chain a finish job: once the whole array completes, this is the
+        # only step that touches git -- one `datalad slurm-finish` commit
+        # covering every subject's output, then a single push.
+        local module_load_line=""
+        if [[ ${#HPC_MODULES[@]} -gt 0 ]]; then
+            module_load_line="module load ${HPC_MODULES[*]}"
+        fi
+        mkdir -p "${LOG_DIR_BASE}/${DS}"
+        cat > "$finish_script" <<EOF
+#!/bin/bash
+#SBATCH --job-name=finish_${DS}
+#SBATCH --dependency=afterany:${job_id}
+#SBATCH --partition=$(cfg '.hpc.partition')
+#SBATCH --time=00:30:00
+#SBATCH --mem=2G
+#SBATCH --cpus-per-task=1
+#SBATCH --output=${LOG_DIR_BASE}/${DS}/finish-%j.out
+#SBATCH --error=${LOG_DIR_BASE}/${DS}/finish-%j.err
+set -euo pipefail
+${module_load_line}
+cd "${output_clone}"
+datalad slurm-finish -m "Finish ${APP_NAME} array job ${job_id} for ${DS}"
+datalad push --to origin
+EOF
+        chmod +x "$finish_script"
+
+        local finish_job_id
+        finish_job_id=$(sbatch "$finish_script" 2>&1 | grep -oP '\d+$') \
+            || { warn "[$DS] Failed to submit dependent finish job"; failed=$((failed + 1)); continue; }
+
+        echo "${DS} ${job_id} ${n_subjects} ${finish_job_id}" >> "$submission_log"
+        log "[$DS] Submitted finish job ${finish_job_id} (runs after ${job_id} completes)"
+        submitted=$((submitted + 1))
     done
 
     log ""
@@ -263,15 +350,20 @@ cmd_status() {
 
     log "Reading: ${log_file}"
     echo ""
-    printf "%-20s %-12s %-10s %s\n" "DATASET" "JOB_ARRAY" "SUBJECTS" "SLURM_STATUS"
-    printf "%-20s %-12s %-10s %s\n" "-------" "---------" "--------" "------------"
+    printf "%-20s %-12s %-10s %-16s %s\n" "DATASET" "JOB_ARRAY" "SUBJECTS" "ARRAY_STATUS" "FINISH_STATUS"
+    printf "%-20s %-12s %-10s %-16s %s\n" "-------" "---------" "--------" "------------" "-------------"
 
-    while read -r ds job_id n_subjects; do
-        local status
+    while read -r ds job_id n_subjects finish_job_id; do
+        local status finish_status
         status=$(squeue --job "$job_id" --noheader --format="%T" 2>/dev/null \
             | sort -u | tr '\n' ',' | sed 's/,$//')
         [[ -z "$status" ]] && status="DONE/UNKNOWN"
-        printf "%-20s %-12s %-10s %s\n" "$ds" "$job_id" "$n_subjects" "$status"
+        finish_status="-"
+        if [[ -n "$finish_job_id" ]]; then
+            finish_status=$(squeue --job "$finish_job_id" --noheader --format="%T" 2>/dev/null)
+            [[ -z "$finish_status" ]] && finish_status="DONE/UNKNOWN"
+        fi
+        printf "%-20s %-12s %-10s %-16s %s\n" "$ds" "$job_id" "$n_subjects" "$status" "$finish_status"
     done < "$log_file"
 }
 

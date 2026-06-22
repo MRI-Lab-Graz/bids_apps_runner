@@ -258,15 +258,15 @@ bids_apps_runner/
 ├── scripts/
 │   ├── prism_runner.py           # Main entry point
 │   ├── build_apptainer.sh        # Container builder
-│   ├── hpc_batch_submit.py       # Batch job submission
-│   ├── hpc_datalad_runner.py     # DataLad integration
+│   ├── submit_bids_cohort.sh     # SLURM/datalad-slurm cohort orchestration
+│   ├── hpc_datalad_runner.py     # SLURM compute-script generation
 │   ├── check_app_output.py       # Output validation
 │   └── install.sh                # Setup script
 │
 ├── configs/
 │   ├── config_example.json       # Template
 │   ├── config_hpc.json           # HPC template
-│   └── config_hpc_datalad.json   # HPC + DataLad template
+│   └── cohort_hpc_example.json   # HPC + DataLad (datalad-slurm) template
 │
 ├── docs/
 │   ├── HPC_QUICK_REFERENCE.md

@@ -1,355 +1,155 @@
-# HPC/DataLad Examples (Current)
+# HPC/DataLad Examples
 
-These examples focus on CLI usage. The GUI no longer generates or submits SLURM scripts.
+See [README_HPC_DATALAD.md](README_HPC_DATALAD.md) for the full workflow and config schema.
 
-## Example 1: Run with DataLad config
-
-```bash
-python scripts/prism_runner.py -c configs/config_hpc_datalad.json --hpc
-```
-
-## Example 2: Force local mode
+## Example 1: Full cohort run
 
 ```bash
-python scripts/prism_runner.py -c configs/config_hpc_datalad.json --local
+# Edit configs/cohort_hpc_example.json (datasets, paths, hpc, bids_app), then:
+./scripts/submit_bids_cohort.sh setup   -c configs/cohort_hpc_example.json
+./scripts/submit_bids_cohort.sh submit  -c configs/cohort_hpc_example.json
+./scripts/submit_bids_cohort.sh status
 ```
 
-## Example 3: Validate outputs after run
+## Example 2: Dry run before committing
 
 ```bash
-python scripts/check_app_output.py /path/to/bids /path/to/derivatives --output-json missing.json
+./scripts/submit_bids_cohort.sh submit -c configs/cohort_hpc_example.json --dry-run
 ```
 
-job_ids = '${JOB_IDS}'.rstrip(',').split(',')
+Prints the subject-list build, the generated-script command, the `datalad slurm-schedule`
+invocation, and the dependent finish-job submission -- without touching the cluster or the
+dataset.
 
-response = requests.post('http://localhost:8080/get_hpc_job_status',
-  json={'job_ids': job_ids})
-
-jobs = response.json()['jobs']
-for job in jobs:
-    print(f\"Job {job['job_id']}: {job['status']} ({job['time']})\")
-"
-```
-
-### Watch Queue
+## Example 3: One dataset only, resuming a partial run
 
 ```bash
-# Continuously monitor
+./scripts/submit_bids_cohort.sh submit -c configs/cohort_hpc_example.json \
+  -d dataset_001 --resume
+```
+
+`--resume` skips subject-list building and script generation if they already exist for that
+dataset (useful after fixing a config typo without rebuilding everything).
+
+## Example 4: Watch the queue
+
+```bash
 watch -n 5 "squeue -u \$USER"
+./scripts/submit_bids_cohort.sh status   # array + finish job state per dataset
 ```
 
----
-
-## Example 5: Handle Job Failures and Resubmit
-
-### Identify Failed Jobs
+## Example 5: A single ad-hoc subject, outside the cohort config
 
 ```bash
-# Check SLURM error logs
-for log in logs/slurm-*.err; do
-    if [ -s "$log" ]; then
-        echo "Job failed: $log"
-        cat "$log" | head -20
-    fi
-done
+python3 scripts/hpc_datalad_runner.py \
+  -c configs/cohort_hpc_example.json \
+  -s sub-001 \
+  -o scripts/generated/sub-001.sh
+
+cd /shared/derivatives/dataset_001/fmriprep
+datalad slurm-schedule -o sub-001 -m "fmriprep sub-001 (ad hoc)" \
+  sbatch /path/to/scripts/generated/sub-001.sh
+
+# once SLURM shows it COMPLETED:
+datalad slurm-finish && datalad push --to origin
 ```
 
-### Extract Subject from Failed Job
+## Example 6: Inspect the generated compute script
 
 ```bash
-# Get subject from failed script
-SCRIPT=$(find scripts -name "job_*.sh" -newer $TIMESTAMP)
-SUBJECT=$(basename $SCRIPT | sed 's/job_\(.*\)\.sh/\1/')
-
-# Regenerate and resubmit
-python hpc_datalad_runner.py -c config.json -s "$SUBJECT" -o "scripts/retry_${SUBJECT}.sh" --submit
+python3 scripts/hpc_datalad_runner.py \
+  -c configs/cohort_hpc_example.json \
+  --array-mode --dataset-id dataset_001 \
+  --subject-list /shared/subject_lists/dataset_001_subjects.txt
+# (no -o: prints the script to stdout instead of saving it)
 ```
 
----
+The script contains no `datalad`/`git` calls -- only module loads, scratch setup, an
+`apptainer exec`, and cleanup. All provenance recording happens in `submit_bids_cohort.sh`
+via `datalad slurm-schedule`/`datalad slurm-finish`, not in the job.
 
-## Example 6: Stream Data with DataLad
-
-### Clone and Stream Data
+## Example 7: Recovering from a failed subject
 
 ```bash
-# On HPC compute node (happens automatically in SLURM script)
-cd /tmp/bids_work
+# Check sacct/squeue for the failing array task, fix the underlying issue, then either:
 
-# Clone with lock file
-flock --verbose /tmp/datalad.lock datalad clone \
-  https://github.com/mylab/bids.git ds
+# (a) close it out without committing its (partial/broken) output:
+cd /shared/derivatives/dataset_001/fmriprep
+datalad slurm-finish --close-failed-jobs
 
-cd ds
+# (b) or commit whatever it did manage to write:
+datalad slurm-finish --commit-failed-jobs
 
-# Get only structure (no actual data)
-datalad get -n -r -R1 .
-
-# When container runs, DataLad tracks which files are accessed
-# After processing, push results back with lock file
-flock --verbose /tmp/datalad.lock datalad push -d fmriprep --to origin
+# Then re-run just that subject (Example 5) and schedule/finish it on its own.
 ```
 
-### Monitor Data Transfer
+## Example 8: Minimal vs. production config
 
-```bash
-# Watch transfer progress
-watch -n 1 "ls -lh ds/sub-001/ | head -20"
-
-# Check git-annex status
-cd ds
-git annex status
-```
-
----
-
-## Example 7: Production Setup with Error Handling
-
-### Complete Workflow Script
-
-```bash
-#!/bin/bash
-
-set -e
-set -u
-
-CONFIG="/path/to/config_hpc_datalad.json"
-SCRIPT_DIR="./scripts"
-LOGS_DIR="./logs"
-MAX_JOBS=100
-BATCH_SIZE=20  # Submit in batches to avoid queue overload
-
-echo "Starting batch submission..."
-
-# Generate scripts for all subjects
-python hpc_batch_submit.py \
-  -c "$CONFIG" \
-  --script-dir "$SCRIPT_DIR" \
-  --logs-dir "$LOGS_DIR" \
-  --generate-only
-
-SCRIPTS=$(ls "$SCRIPT_DIR"/job_*.sh | sort)
-TOTAL=$(echo "$SCRIPTS" | wc -l)
-
-echo "Generated $TOTAL job scripts"
-echo ""
-
-# Submit in batches
-SUBMITTED=0
-for SCRIPT in $SCRIPTS; do
-    if [ $SUBMITTED -ge $MAX_JOBS ]; then
-        echo "Reached max jobs limit ($MAX_JOBS)"
-        break
-    fi
-    
-    JOB_ID=$(sbatch "$SCRIPT" | awk '{print $NF}')
-    echo "Submitted: $SCRIPT -> $JOB_ID"
-    
-    SUBMITTED=$((SUBMITTED + 1))
-    
-    # Rate limiting
-    if [ $((SUBMITTED % BATCH_SIZE)) -eq 0 ]; then
-        echo "Submitted $SUBMITTED/$TOTAL jobs, waiting before next batch..."
-        sleep 5
-    fi
-done
-
-echo ""
-echo "Total submitted: $SUBMITTED"
-echo ""
-echo "Monitor with: squeue -u \$USER"
-echo "View logs with: tail -f logs/slurm-*.out"
-```
-
----
-
-## Example 8: Config for Different Use Cases
-
-### Minimal Config (Quick Test)
+### Minimal (quick test)
 
 ```json
 {
-  "common": {"work_dir": "/tmp/work"},
+  "datasets": ["smoketest"],
+  "paths": {
+    "shared_input_base": "/tmp/bids_input",
+    "shared_output_base": "/tmp/bids_output",
+    "scratch_dir": "/tmp/bids_scratch",
+    "container": "/opt/mriqc.sif",
+    "log_dir": "/tmp/bids_logs",
+    "subject_lists_dir": "/tmp/bids_lists"
+  },
   "datalad": {
-    "input_repo": "git@github.com:lab/data.git",
-    "output_repos": ["git@github.com:lab/results.git"]
+    "input_url_template": "ria+ssh://server/data/{dataset_id}",
+    "output_url_template": "ria+ssh://server/derivatives/{dataset_id}"
   },
-  "hpc": {
-    "partition": "quick",
-    "time": "01:00:00",
-    "mem": "16G",
-    "cpus": 4
-  },
-  "container": {
-    "name": "mriqc",
-    "image": "/opt/mriqc.sif",
-    "outputs": ["mriqc"],
-    "bids_args": {"analysis_level": "participant"}
-  }
+  "hpc": {"partition": "quick", "time": "01:00:00", "mem": "16G", "cpus": 4},
+  "bids_app": {"app_name": "mriqc", "analysis_level": "participant"}
 }
 ```
 
-### Production Config (Full Pipeline)
+### Production
 
 ```json
 {
-  "common": {
-    "work_dir": "/scratch/pipeline/work",
-    "log_dir": "/scratch/pipeline/logs"
+  "datasets": ["dataset_001", "dataset_002"],
+  "paths": {
+    "shared_input_base": "/scratch/pipeline/input",
+    "shared_output_base": "/scratch/pipeline/derivatives",
+    "scratch_dir": "/scratch/pipeline/work",
+    "container": "/opt/containers/fmriprep_24.0.0.sif",
+    "templateflow_dir": "/scratch/pipeline/templateflow",
+    "fs_license": "/scratch/pipeline/license.txt",
+    "log_dir": "/scratch/pipeline/logs",
+    "subject_lists_dir": "/scratch/pipeline/subject_lists"
   },
   "datalad": {
-    "input_repo": "git@hpc:/data/datasets/bids.git",
-    "output_repos": [
-      "git@hpc:/data/results/fmriprep.git",
-      "git@hpc:/data/results/freesurfer.git"
-    ],
-    "clone_method": "clone",
-    "lock_file": "/scratch/.pipeline.lock"
+    "input_url_template": "ria+ssh://datalad-server/data/{dataset_id}",
+    "output_url_template": "ria+ssh://datalad-server/derivatives/{dataset_id}"
   },
   "hpc": {
     "partition": "gpu_v100",
     "time": "36:00:00",
     "mem": "128G",
     "cpus": 32,
-    "job_name": "fmriprep_prod",
-    "output_log": "/scratch/pipeline/logs/slurm-%j.out",
-    "error_log": "/scratch/pipeline/logs/slurm-%j.err",
-    "modules": [
-      "cuda/11.8",
-      "datalad/0.19.0",
-      "git-annex/10.20230127"
-    ],
+    "max_concurrent": 50,
+    "modules": ["cuda/11.8", "datalad/0.19.0", "apptainer/1.2.0"],
     "environment": {
       "CUDA_VISIBLE_DEVICES": "0,1",
-      "OMP_NUM_THREADS": "8",
-      "APPTAINER_CACHEDIR": "/scratch/containers/.cache"
+      "OMP_NUM_THREADS": "8"
     }
   },
-  "container": {
-    "name": "fmriprep",
-    "image": "/opt/containers/fmriprep_24.0.0.sif",
-    "outputs": ["fmriprep", "freesurfer"],
-    "inputs": ["sourcedata"],
-    "bids_args": {
-      "bids_folder": "sourcedata",
-      "output_folder": ".",
-      "analysis_level": "participant",
-      "n_cpus": 32,
-      "mem-mb": 120000,
-      "skip-bids-validation": true,
-      "output-spaces": "MNI152NLin2009cAsym",
-      "use-aroma": true,
-      "cifti-output": true,
-      "fmap-bspline": true
-    }
+  "bids_app": {
+    "app_name": "fmriprep",
+    "analysis_level": "participant",
+    "output_dir_name": "fmriprep",
+    "options": [
+      "--skip-bids-validation",
+      "--n_cpus", "32",
+      "--mem-mb", "120000",
+      "--output-spaces", "MNI152NLin2009cAsym",
+      "--use-aroma",
+      "--cifti-output"
+    ]
   }
 }
 ```
-
----
-
-## Troubleshooting Guide
-
-### Issue: "datalad clone" takes forever
-
-**Solution:**
-```bash
-# Check network connectivity
-ssh -T git@github.com
-git ls-remote https://github.com/mylab/bids.git
-
-# Try with verbose output
-datalad clone -v https://github.com/mylab/bids.git test_ds
-```
-
-### Issue: "Permission denied" on push
-
-**Solution:**
-```bash
-# Ensure SSH keys are configured
-ssh-keyscan github.com >> ~/.ssh/known_hosts
-
-# Test SSH access
-ssh -T git@github.com
-
-# Verify remote URL
-cd /path/to/repo
-git remote -v
-```
-
-### Issue: Job runs out of memory
-
-**Solution:**
-```json
-{
-  "hpc": {
-    "mem": "256G",
-    "cpus": 64
-  },
-  "container": {
-    "bids_args": {
-      "mem-mb": 250000,
-      "n_cpus": 64
-    }
-  }
-}
-```
-
-### Issue: Container not found
-
-**Solution:**
-```bash
-# Verify container exists
-ls -lh /opt/containers/fmriprep.sif
-
-# Check if readable
-file /opt/containers/fmriprep.sif
-
-# Update config with absolute path
-# In JSON: "image": "/absolute/path/to/container.sif"
-```
-
----
-
-## Performance Optimization
-
-### Tips for Large-Scale Processing
-
-1. **Use fast storage for work_dir**
-   ```bash
-   # Instead of NFS: /home/user/work
-   # Use: /scratch/user/work (local SSD)
-   ```
-
-2. **Pre-clone input dataset once**
-   ```bash
-   datalad clone <input_repo> /shared/bids-cached
-   # Then reference in script without re-cloning
-   ```
-
-3. **Submit jobs in waves**
-   ```bash
-   # Don't submit all 1000 at once
-   # Submit 100-200 at a time with delays between batches
-   ```
-
-4. **Use fast lock file location**
-   ```json
-   {
-     "datalad": {
-       "lock_file": "/scratch/local/.datalad.lock"
-     }
-   }
-   ```
-
-5. **Optimize container arguments**
-   ```json
-   {
-     "container": {
-       "bids_args": {
-         "n_cpus": 16,
-         "mem-mb": 30000,
-         "output-spaces": "MNI152NLin2009cAsym"
-       }
-     }
-   }
-   ```

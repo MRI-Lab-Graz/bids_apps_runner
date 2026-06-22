@@ -1,252 +1,142 @@
-# HPC/DataLad Integration Guide (Current)
-
-This guide describes DataLad usage with the CLI. The GUI does not submit jobs for DataLad.
+# HPC/DataLad Integration Guide
 
 ## Overview
 
-Use DataLad when input/output datasets are stored in Git/Annex and you want per-subject streaming on HPC.
-The SLURM settings live in project.json under hpc and can be edited in the GUI (Advanced), but execution remains CLI-driven.
+`submit_bids_cohort.sh` runs any BIDS app (fMRIPrep, QSIPrep, MRIQC, ...) across one or more
+datasets on a SLURM cluster, with DataLad managing dataset provenance. It's built around the
+[`datalad-slurm`](https://github.com/knuedd/datalad-slurm) extension
+(see also the [DataLad handbook chapter on SLURM](https://handbook.datalad.org/en/latest/beyond_basics/101-174-slurm.html)),
+which keeps every datalad/git operation **outside** the parallel SLURM job:
 
-## DataLad Configuration (project.json or config file)
+- SLURM array jobs are plain compute scripts (apptainer only) -- they never touch git.
+- `datalad slurm-schedule` runs once, before submission, to declare each subject's output
+  path and submit the array job via `sbatch` itself.
+- `datalad slurm-finish` runs once, after the array completes, to commit every subject's
+  output in a single commit; a `datalad push` follows.
 
-```json
-"datalad": {
-  "input_repo": "https://github.com/your-lab/bids-dataset.git",
-  "output_repo": "https://github.com/your-lab/derivatives.git",
-  "clone_method": "clone",
-  "get_data": true,
-  "branch_per_subject": true,
-  "output_branch": "results",
-  "merge_strategy": "merge",
-  "auto_push": false
-}
-```
+This avoids the classic problem of many parallel jobs each cloning/branching/pushing a shared
+git-annex dataset (lock contention, races, "concurrent git access" warnings) -- there's simply
+no git happening while jobs run.
 
-## SLURM Configuration
+### Prerequisites
 
-```json
-"hpc": {
-  "partition": "compute",
-  "time": "24:00:00",
-  "mem": "32G",
-  "cpus": 8,
-  "modules": ["datalad/0.19.0", "apptainer/1.2.0"],
-  "environment": {
-    "APPTAINER_CACHEDIR": "/tmp/.apptainer"
-  }
-}
-```
+- `datalad` and the [`datalad-slurm`](https://github.com/knuedd/datalad-slurm) extension
+  (not on PyPI: `pip install git+https://github.com/knuedd/datalad-slurm.git`)
+- `jq`, `python3`, `sbatch`/`squeue` (SLURM), SSH access to your DataLad server for setup
+- `apptainer` (or another container runtime your config's `paths.container` expects)
 
-## CLI Execution
-
-```bash
-python scripts/prism_runner.py -c configs/config_hpc_datalad.json --hpc
-```
-
-The runner auto-detects SLURM and uses the hpc/datalad sections to configure execution.
-  "job_id": "12345"
-}
-```
-
-Cancels a SLURM job via `scancel`.
-
-## Command-Line Usage
-
-### Generate Script
-
-```bash
-python hpc_datalad_runner.py \
-  -c config_hpc_datalad.json \
-  -s sub-001 \
-  -o scripts/job_sub-001.sh
-```
-
-### Generate and Submit
-
-```bash
-python hpc_datalad_runner.py \
-  -c config_hpc_datalad.json \
-  -s sub-001 \
-  -o scripts/job_sub-001.sh \
-  --submit
-```
-
-### Dry Run
-
-```bash
-python hpc_datalad_runner.py \
-  -c config_hpc_datalad.json \
-  -s sub-001 \
-  --dry-run
-```
-
-## Generated Script Structure
-
-The generated SLURM scripts follow this structure:
-
-1. **SLURM Header** - Resource directives
-2. **Environment Setup** - Module loading, variables, work directory
-3. **DataLad Clone** - Clone central repository with lock file
-4. **Get Structure** - Retrieve directory structure without data
-5. **Git Setup** - Create job-specific branches
-6. **Container Run** - Execute via `datalad containers-run`
-7. **Push Results** - Commit and push results back with lock file
-8. **Cleanup** - Remove temporary files
-9. **Completion** - Log final status
-
-## Example Workflow
-
-### Step 1: Prepare Configuration
+## Config (`configs/cohort_hpc_example.json` schema)
 
 ```json
 {
-  "common": {
-    "work_dir": "/scratch/user/bids_work"
+  "datasets": ["dataset_001"],
+  "paths": {
+    "shared_input_base":  "/shared/input",
+    "shared_output_base": "/shared/derivatives",
+    "scratch_dir":         "/scratch/$USER/bids_app",
+    "container":           "/containers/fmriprep_24.0.0.sif",
+    "templateflow_dir":    "/shared/templateflow",
+    "fs_license":          "/shared/license.txt",
+    "log_dir":             "$HOME/logs/bids_app",
+    "subject_lists_dir":   "/shared/subject_lists"
   },
   "datalad": {
-    "input_repo": "git@github.com:mylab/bids-dataset.git",
-    "output_repos": ["git@github.com:mylab/fmriprep-outputs.git"]
+    "input_url_template":  "ria+ssh://server/data/{dataset_id}",
+    "output_url_template": "ria+ssh://server/derivatives/{dataset_id}"
   },
   "hpc": {
-    "partition": "gpu",
-    "time": "12:00:00",
-    "mem": "64G",
-    "cpus": 16,
-    "modules": ["cuda/12.0", "datalad/0.19.0"]
+    "partition": "compute",
+    "time": "24:00:00",
+    "mem": "32G",
+    "cpus": 8,
+    "max_concurrent": 50,
+    "modules": ["datalad/TODO", "apptainer/TODO"],
+    "environment": {"DATALAD_RESULT_RENDERER": "disabled"}
   },
-  "container": {
-    "name": "fmriprep",
-    "image": "/opt/containers/fmriprep_24.0.0.sif",
-    "outputs": ["fmriprep"],
-    "bids_args": {
-      "bids_folder": "sourcedata",
-      "output_folder": ".",
-      "n_cpus": 16,
-      "mem-mb": 60000
-    }
+  "bids_app": {
+    "app_name": "fmriprep",
+    "analysis_level": "participant",
+    "output_dir_name": "fmriprep",
+    "options": ["--skip-bids-validation", "--n_cpus", "8"]
   }
 }
 ```
 
-### Step 2: Generate Jobs for All Subjects
+There is exactly one config schema; `hpc_datalad_runner.py` and `submit_bids_cohort.sh` both
+read it. `paths.scratch_dir` is the only per-task isolated directory you need to think about --
+it's where each array task's compute scratch (`$SLURM_ARRAY_JOB_ID`/`$SLURM_ARRAY_TASK_ID`)
+lives. Everything else (`shared_input_base`, `shared_output_base`) is one persistent dataset
+clone, shared and bind-mounted by every task -- safe because tasks only write to their own
+`sub-XXX/` subdirectory and never call git.
+
+## Workflow
 
 ```bash
-# Discover subjects from the BIDS dataset
-SUBJECTS=$(datalad ls -r /path/to/cloned/dataset | grep "sub-" | cut -d/ -f1 | sort -u)
-
-# Generate scripts for each
-for subject in $SUBJECTS; do
-    python hpc_datalad_runner.py -c config.json -s "$subject" -o "scripts/job_${subject}.sh"
-done
-
-# Submit all jobs
-for script in scripts/job_*.sh; do
-    sbatch "$script"
-done
+./scripts/submit_bids_cohort.sh setup   [-c CONFIG] [-d DATASET_ID]
+./scripts/submit_bids_cohort.sh submit  [-c CONFIG] [-d DATASET_ID] [--dry-run] [--resume]
+./scripts/submit_bids_cohort.sh status
 ```
 
-### Step 3: Monitor Jobs
+**`setup`** (run once, needs network/SSH access): clones the input dataset and the output
+dataset to shared HPC storage, creates the output dataset on the DataLad server if needed, and
+prefetches (`datalad get`) all discovered subjects so array tasks never need to.
+
+**`submit`**: builds a subject list, generates the plain compute script
+(`hpc_datalad_runner.py --array-mode`), then:
+1. `datalad slurm-schedule -o sub-001 -o sub-002 ... sbatch <script>` from inside the output
+   clone -- one explicit, non-overlapping `-o` per subject (wildcards are rejected).
+2. Submits a dependent finish job (`--dependency=afterany:<job_id>`) that runs
+   `datalad slurm-finish && datalad push --to origin` once the array completes.
+
+Both job IDs (array + finish) are recorded in `logs/submission_<timestamp>.log`.
+
+**`status`**: shows `squeue` state for both the array job and its finish job per dataset.
+
+### A single ad-hoc subject
+
+`hpc_datalad_runner.py -s sub-001 -o job.sh` generates the same kind of plain script as a
+one-task array (`--array=0-0`); there's no separate single-subject code path. To actually run
+it through the datalad-slurm pipeline rather than a bare `sbatch`, schedule it the same way
+`submit_bids_cohort.sh` does:
 
 ```bash
-# Watch all jobs
-watch 'squeue -u $USER'
-
-# Check specific job
-squeue -j 12345
-
-# View job logs
-tail -f logs/slurm-12345.out
+cd /shared/derivatives/dataset_001/fmriprep
+datalad slurm-schedule -o sub-001 -m "fmriprep sub-001" sbatch job.sh
+# later, once it's done:
+datalad slurm-finish && datalad push --to origin
 ```
 
-### Step 4: Pull Results
-
-After jobs complete:
-
-```bash
-cd /path/to/results
-
-# Pull all results from output repositories
-datalad pull
-
-# Or specifically
-datalad pull -d fmriprep
-```
-
-## DataLad Requirements
-
-The input and output repositories must be DataLad datasets with:
-- `.datalad/config` file
-- Git/Git-annex initialized
-- Special remote configured for `origin`
-
-### Prepare Input Dataset
-
-```bash
-cd /path/to/bids
-datalad create --force
-git remote add origin https://github.com/mylab/bids-dataset.git
-datalad push
-```
-
-### Prepare Output Dataset
-
-```bash
-cd /path/to/derivatives
-datalad create --force
-git remote add origin https://github.com/mylab/derivatives-outputs.git
-datalad save
-datalad push
-```
+`hpc_datalad_runner.py --submit` (plain `sbatch`, no `datalad slurm-schedule`) exists only for
+testing the compute script itself -- outputs from a job submitted that way are never recorded
+in the dataset.
 
 ## Troubleshooting
 
-### "datalad clone" hangs
+### `datalad slurm-schedule` refuses with "conflicting outputs"
 
-Check lock file:
-```bash
-ls -la /tmp/datalad.lock
-# If stale, remove it
-rm /tmp/datalad.lock
-```
+Another scheduled-but-not-yet-finished job already declared one of your `-o` paths. Run
+`datalad slurm-finish --list-open-jobs` in the output clone to see what's still open.
 
-### Job fails to get data
+### `datalad slurm-finish` says jobs are "not complete"
 
-Check DataLad configuration:
-```bash
-cd /path/to/dataset
-datalad status
-datalad sibling
-```
+It checks `sacct` for every array task. If some tasks failed, re-run with
+`--close-failed-jobs` (drops them without committing) or `--commit-failed-jobs` (commits
+whatever they did write). Pending/running tasks must finish first -- it won't wait for you.
 
 ### Permission denied on push
 
-Ensure SSH keys are configured:
 ```bash
-ssh-keyscan github.com >> ~/.ssh/known_hosts
-ssh -T git@github.com
+ssh-keyscan <your-datalad-server> >> ~/.ssh/known_hosts
+ssh -T <your-datalad-server>
 ```
 
-### Out of memory errors
+### Job runs out of memory
 
-Increase memory in HPC section:
-```json
-{
-  "hpc": {
-    "mem": "64G"
-  }
-}
-```
-
-## Performance Tips
-
-1. **Pre-clone input dataset**: Clone the central dataset once to avoid repeated clones
-2. **Use fast storage**: Put work_dir on fast storage (not NFS if possible)
-3. **Adjust batch size**: Submit jobs in batches to avoid queue overload
-4. **Monitor lock file**: Ensure lock file is on fast, reliable storage
+Raise `hpc.mem` / `hpc.cpus` in the config and regenerate.
 
 ## References
 
 - [DataLad Documentation](https://handbook.datalad.org/)
-- [DataLad Containers](https://docs.datalad.org/en/stable/generated/datalad.interfaces.containers.html)
+- [DataLad SLURM chapter](https://handbook.datalad.org/en/latest/beyond_basics/101-174-slurm.html)
+- [`datalad-slurm` extension](https://github.com/knuedd/datalad-slurm)
 - [SLURM Documentation](https://slurm.schedmd.com/)
-- [Git-Annex Manual](https://git-annex.branchable.com/manual/)
