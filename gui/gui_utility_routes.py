@@ -15,6 +15,16 @@ from flask import jsonify, request
 _clone_jobs: dict[str, dict[str, Any]] = {}
 _clone_jobs_lock = threading.Lock()
 
+# Hardwired lab DataLad server: one lab, one server, one base path for now.
+# REMOTE_DATASET_SSH_HOST must match a Host entry in ~/.ssh/config (it carries
+# the right User/IdentityFile and matches the known_hosts key) -- the bare
+# short hostname (e.g. "it035016") only resolves/verifies in an interactive
+# shell with a DNS search domain; non-interactive SSH needs the configured alias.
+REMOTE_DATASET_SSH_HOST = "datalad-server"
+REMOTE_DATASET_BASE_PATH = "/datalad/mri/MRI-Lab_Repository"
+LOCAL_DATASET_BASE_DIR = "/usr/people/mrilabgraz/data"
+_STUDY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+
 
 def register_utility_routes(
     app,
@@ -142,6 +152,7 @@ def register_utility_routes(
                 "output_image": prepared["output_image"],
                 "per_build_dir": prepared["per_build_dir"],
                 "sandbox_dir": prepared.get("sandbox_dir"),
+                "binary": prepared.get("binary"),
                 "keep_temp": prepared["keep_temp"],
                 "timeout_seconds": prepared["timeout_seconds"],
                 "cwd": prepared["cwd"],
@@ -427,6 +438,232 @@ def register_utility_routes(
                 "log_file": log_file,
             }
         )
+
+    @app.route("/list_remote_studies", methods=["GET"])
+    def list_remote_studies():
+        """List study folders on the lab's (hardwired) DataLad server.
+
+        Response:
+          studies – sorted list of directory names under REMOTE_DATASET_BASE_PATH
+        """
+        try:
+            result = subprocess.run(
+                [
+                    "ssh",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "ConnectTimeout=10",
+                    REMOTE_DATASET_SSH_HOST,
+                    "find "
+                    + REMOTE_DATASET_BASE_PATH
+                    + r" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode != 0:
+                return (
+                    jsonify(
+                        {
+                            "error": result.stderr.strip()
+                            or "Failed to list studies on the remote server."
+                        }
+                    ),
+                    502,
+                )
+            studies = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            return jsonify({"studies": studies})
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": "Timed out contacting the remote DataLad server."}), 504
+        except FileNotFoundError:
+            return jsonify({"error": "ssh not found on this host."}), 500
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @app.route("/connect_remote_dataset", methods=["POST"])
+    def connect_remote_dataset():
+        """Clone (metadata only) a study from the lab's DataLad server, so it
+        can be used as a local BIDS Dataset Folder. File content is not
+        downloaded here -- it's fetched on demand later, per subject, when
+        the BIDS app run/SLURM job actually touches that subject's data.
+
+        Request body (JSON):
+          study (required) – study folder name under REMOTE_DATASET_BASE_PATH,
+                              as returned by /list_remote_studies
+
+        Response:
+          clone_id  – poll /connect_remote_dataset_status?clone_id=<id> for progress
+        """
+        data = request.get_json(silent=True) or {}
+        study = (data.get("study") or "").strip()
+
+        if not study:
+            return jsonify({"error": "study is required"}), 400
+        if not _STUDY_NAME_PATTERN.match(study):
+            return jsonify({"error": "Invalid study name."}), 400
+
+        source_url = f"{REMOTE_DATASET_SSH_HOST}:{REMOTE_DATASET_BASE_PATH}/{study}"
+        target = f"{LOCAL_DATASET_BASE_DIR}/{study}"
+
+        try:
+            import prism_datalad
+        except ImportError:
+            return jsonify({"error": "prism_datalad module not found on server"}), 500
+
+        if not prism_datalad.check_datalad_available():
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "DataLad is not available on the server. "
+                            "Install it with: pip install datalad (and ensure git-annex is on PATH)."
+                        )
+                    }
+                ),
+                400,
+            )
+
+        already_cloned = False
+        if os.path.exists(target):
+            if prism_datalad.is_datalad_dataset(target):
+                already_cloned = True
+            elif os.listdir(target):
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                f"Target path already exists and is not a DataLad "
+                                f"dataset: {target}. Remove it or choose a different directory."
+                            )
+                        }
+                    ),
+                    400,
+                )
+
+        ensure_logs_dir()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = str(
+            Path(data_dir) / f"nohup_bids_runner_remote_clone_{timestamp}.log"
+        )
+        clone_id = f"remoteclone_{timestamp}_{uuid.uuid4().hex[:8]}"
+
+        with _clone_jobs_lock:
+            _clone_jobs[clone_id] = {
+                "clone_id": clone_id,
+                "source_url": source_url,
+                "target": target,
+                "log_file": log_file,
+                "status": "completed" if already_cloned else "running",
+                "phase": "cloning",
+                "returncode": 0 if already_cloned else None,
+                "error": None,
+                "started_at": time.time(),
+                "finished_at": time.time() if already_cloned else None,
+            }
+
+        def _run_connect():
+            # Metadata-only clone -- no `datalad get` here. Actual file content
+            # is downloaded later, on demand, when the BIDS app run/SLURM job
+            # touches each subject (see prism_local.get_subject_data and the
+            # cohort pipeline's prefetch step), not up front at connect time.
+            try:
+                with open(log_file, "w", encoding="utf-8") as fh:
+                    fh.write(
+                        f"[{datetime.now():%Y-%m-%d %H:%M:%S}] "
+                        f"Cloning {source_url} -> {target}\n\n"
+                    )
+                    fh.flush()
+                    proc = subprocess.Popen(
+                        ["datalad", "clone", source_url, target],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    )
+                    for line in proc.stdout or []:
+                        fh.write(line)
+                        fh.flush()
+                    returncode = proc.wait()
+
+                    status = "completed" if returncode == 0 else "failed"
+                    fh.write(
+                        f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] "
+                        f"Clone {status} (exit code {returncode})\n"
+                    )
+
+                with _clone_jobs_lock:
+                    job = _clone_jobs.get(clone_id, {})
+                    job["status"] = status
+                    job["returncode"] = returncode
+                    job["finished_at"] = time.time()
+                    if returncode != 0:
+                        job["error"] = f"datalad clone exited with code {returncode}"
+
+            except Exception as exc:
+                err = str(exc)
+                try:
+                    with open(log_file, "a", encoding="utf-8") as fh:
+                        fh.write(f"\n[ERROR] {err}\n")
+                except OSError:
+                    pass
+                with _clone_jobs_lock:
+                    job = _clone_jobs.get(clone_id, {})
+                    job["status"] = "failed"
+                    job["error"] = err
+                    job["finished_at"] = time.time()
+
+        if already_cloned:
+            with open(log_file, "w", encoding="utf-8") as fh:
+                fh.write(
+                    f"[{datetime.now():%Y-%m-%d %H:%M:%S}] "
+                    f"{target} is already a DataLad clone -- nothing to do.\n"
+                )
+        else:
+            threading.Thread(target=_run_connect, daemon=True).start()
+
+        return jsonify(
+            {
+                "success": True,
+                "clone_id": clone_id,
+                "status": "completed" if already_cloned else "running",
+                "target": target,
+                "log_file": log_file,
+                "already_cloned": already_cloned,
+            }
+        )
+
+    @app.route("/connect_remote_dataset_status", methods=["GET"])
+    def connect_remote_dataset_status():
+        """Poll the status of a remote dataset connect/clone job.
+
+        Query params:
+          clone_id  (required)
+        """
+        clone_id = (request.args.get("clone_id") or "").strip()
+        if not clone_id:
+            return jsonify({"error": "clone_id is required"}), 400
+
+        with _clone_jobs_lock:
+            job = _clone_jobs.get(clone_id)
+            if job is None:
+                return jsonify({"error": "Job not found"}), 404
+            snapshot = dict(job)
+
+        snapshot["log_tail"] = read_log_tail(snapshot.get("log_file", ""))
+        snapshot["success"] = snapshot.get("status") == "completed"
+
+        if snapshot["success"]:
+            try:
+                import prism_datalad
+
+                snapshot["is_datalad"] = prism_datalad.is_datalad_dataset(
+                    snapshot["target"]
+                )
+            except ImportError:
+                snapshot["is_datalad"] = None
+
+        return jsonify(snapshot)
 
     @app.route("/clone_openneuro_status", methods=["GET"])
     def clone_openneuro_status():

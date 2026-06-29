@@ -44,7 +44,11 @@ from gui.gui_project_routes import register_project_config_handlers
 from gui.gui_projects import ProjectStore
 from gui.gui_run_routes import register_run_routes
 from gui.gui_system_routes import register_system_routes
-from gui.gui_utility_routes import register_utility_routes
+from gui.gui_utility_routes import (
+    register_utility_routes,
+    REMOTE_DATASET_SSH_HOST,
+    REMOTE_DATASET_BASE_PATH,
+)
 from gui.gui_security import (
     is_loopback_host as _is_loopback_host,
     load_gui_password_config,
@@ -713,6 +717,89 @@ def _extract_runtime_config(cfg, selected_pipeline_id=None):
             cfg, preferred_pipeline_id=selected_pipeline_id
         )
     return {}
+
+
+class CohortConfigError(ValueError):
+    """Raised when a project's settings can't be used for a SLURM array run."""
+
+
+def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50):
+    """Build a cohort_hpc-schema dict (datasets/paths/datalad/hpc/bids_app)
+    straight from a project's already-materialized runtime config -- the
+    same dict Local and single-job HPC execution already use. This is the
+    single point where "what to run" (container, flags, folders) carries
+    over unchanged into the SLURM array/datalad-slurm path; only execution
+    mechanics (resource requests, shared-storage bookkeeping) are added here.
+    """
+    common = runtime_cfg.get("common", {})
+    app = runtime_cfg.get("app", {})
+    hpc = runtime_cfg.get("hpc", {})
+
+    bids_folder = str(common.get("bids_folder") or "").rstrip("/")
+    output_folder = str(common.get("output_folder") or "").rstrip("/")
+    if not bids_folder:
+        raise CohortConfigError("BIDS Dataset Folder is not set on this project.")
+    if not output_folder:
+        raise CohortConfigError("Output Folder is not set on this project.")
+    if str(common.get("container_engine") or "apptainer") == "docker":
+        raise CohortConfigError(
+            "SLURM array execution only supports Apptainer/Singularity containers, "
+            "not Docker. Switch the container engine for this project."
+        )
+    for label, value in (
+        ("partition", hpc.get("partition")),
+        ("time", hpc.get("time")),
+        ("mem", hpc.get("mem")),
+        ("cpus", hpc.get("cpus")),
+    ):
+        if not value:
+            raise CohortConfigError(
+                f"HPC setting '{label}' is not set. Fill in Advanced: SLURM "
+                "Settings and save before running a SLURM array."
+            )
+
+    dataset_id = os.path.basename(bids_folder) or "dataset"
+    app_name = str(common.get("pipeline_app_name") or "").strip() or "bids_app"
+    cohort_log_dir = Path(project_dir) / "logs" / "cohort"
+
+    return {
+        "datasets": [dataset_id],
+        "paths": {
+            "input_dir": bids_folder,
+            "output_dir": output_folder,
+            "scratch_dir": common.get("tmp_folder") or "",
+            "container": common.get("container") or "",
+            "templateflow_dir": common.get("templateflow_dir") or "",
+            "fs_license": common.get("fs_license_file") or "",
+            "log_dir": str(cohort_log_dir),
+            "subject_lists_dir": str(cohort_log_dir / "subject_lists"),
+        },
+        "datalad": {
+            "input_url_template": (
+                f"{REMOTE_DATASET_SSH_HOST}:{REMOTE_DATASET_BASE_PATH}/{{dataset_id}}"
+            ),
+            "output_url_template": (
+                f"ssh://{REMOTE_DATASET_SSH_HOST}"
+                f"/{REMOTE_DATASET_BASE_PATH.lstrip('/')}"
+                f"/{{dataset_id}}/derivatives/{app_name}"
+            ),
+        },
+        "hpc": {
+            "partition": hpc.get("partition"),
+            "time": hpc.get("time"),
+            "mem": hpc.get("mem"),
+            "cpus": hpc.get("cpus"),
+            "max_concurrent": int(max_concurrent or 50),
+            "modules": hpc.get("modules") or [],
+            "environment": hpc.get("environment") or {},
+        },
+        "bids_app": {
+            "app_name": app_name,
+            "analysis_level": app.get("analysis_level") or "participant",
+            "output_dir_name": os.path.basename(output_folder) or app_name,
+            "options": app.get("options") or [],
+        },
+    }
 
 
 def _drop_flag_with_value(options, flag):
@@ -1643,6 +1730,16 @@ def _read_log_tail(log_path, max_bytes=65536):
         return ""
 
 
+def _resolve_apptainer_binary():
+    """Return the available container build binary ("apptainer" preferred,
+    falling back to "singularity"), or None if neither is on PATH."""
+    if shutil.which("apptainer") is not None:
+        return "apptainer"
+    if shutil.which("singularity") is not None:
+        return "singularity"
+    return None
+
+
 def _prepare_apptainer_build(data):
     output_dir = (data.get("output_dir") or "").strip()
     tmp_dir = (data.get("tmp_dir") or "").strip()
@@ -1695,6 +1792,7 @@ def _prepare_apptainer_build(data):
     sandbox_dir = None
     build_env = os.environ.copy()
     cache_dir = None
+    apptainer_bin = None
 
     if dockerfile:
         dockerfile_path = Path(os.path.expanduser(dockerfile))
@@ -1730,9 +1828,12 @@ def _prepare_apptainer_build(data):
                     400,
                 ),
             )
-        if shutil.which("apptainer") is None:
+        apptainer_bin = _resolve_apptainer_binary()
+        if apptainer_bin is None:
             return None, (
-                jsonify({"error": "Apptainer is not available on this host."}),
+                jsonify(
+                    {"error": "Neither Apptainer nor Singularity is available on this host."}
+                ),
                 500,
             )
         per_build_dir = tempfile.mkdtemp(prefix="apptainer_build_", dir=str(tmp_path))
@@ -1742,14 +1843,14 @@ def _prepare_apptainer_build(data):
         sandbox_dir = Path(per_build_dir) / "sandbox"
         cmd = [
             [
-                "apptainer",
+                apptainer_bin,
                 "build",
                 "--sandbox",
                 str(sandbox_dir),
                 f"docker://{docker_repo}:{docker_tag}",
             ],
             [
-                "apptainer",
+                apptainer_bin,
                 "build",
                 "--force",
                 "--tmpdir",
@@ -1775,6 +1876,7 @@ def _prepare_apptainer_build(data):
         "output_image": str(built_image) if built_image else None,
         "per_build_dir": per_build_dir,
         "sandbox_dir": str(sandbox_dir) if sandbox_dir else None,
+        "binary": apptainer_bin,
         "keep_temp": keep_temp,
         "timeout_seconds": timeout_seconds,
         "cwd": str(BASE_DIR),
@@ -1851,6 +1953,7 @@ def _run_apptainer_build_async(build_id):
                         )
                         logf.flush()
                         squashfs_path = Path(state["per_build_dir"]) / "rootfs.squashfs"
+                        apptainer_bin = state.get("binary") or "apptainer"
                         fallback_steps = [
                             [
                                 "mksquashfs",
@@ -1860,9 +1963,9 @@ def _run_apptainer_build_async(build_id):
                                 "-processors",
                                 "1",
                             ],
-                            ["apptainer", "sif", "new", output_image],
+                            [apptainer_bin, "sif", "new", output_image],
                             [
-                                "apptainer",
+                                apptainer_bin,
                                 "sif",
                                 "add",
                                 "--datatype",
@@ -1984,6 +2087,12 @@ register_cohort_routes(
     base_dir=BASE_DIR,
     log_dir=LOG_DIR,
     ensure_logs_dir=_ensure_logs_dir,
+    resolve_project_dir=lambda project_id: _resolve_project_dir(
+        PROJECTS_DIR, project_id
+    ),
+    load_project=ProjectManager.load_project,
+    extract_runtime_config=_extract_runtime_config,
+    derive_cohort_config=_derive_cohort_config,
 )
 
 

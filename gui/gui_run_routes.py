@@ -368,7 +368,13 @@ def register_run_routes(
             script_path = base_dir / "scripts" / "run_bids_apps.py"
             abs_config_path = os.path.abspath(str(runtime_config_path))
 
-            cmd = [python_exe, str(script_path), "-c", abs_config_path]
+            # --local forces prism_runner's local execution path even if this
+            # project also carries a saved "hpc" section (e.g. SLURM settings
+            # used by the separate single-job/array submission routes) --
+            # without it, prism_runner would auto-detect "HPC mode" from that
+            # section's mere presence and route into the unrelated legacy
+            # per-subject prism_hpc.py path instead of running locally here.
+            cmd = [python_exe, str(script_path), "-c", abs_config_path, "--local"]
             if runner_args:
                 cmd.extend(runner_args)
 
@@ -818,7 +824,166 @@ def register_run_routes(
 
     @app.route("/generate_hpc_script", methods=["POST"])
     def generate_hpc_script():
-        return jsonify({"error": "Script generation is now handled client-side"}), 400
+        """Generate (and save) a SLURM batch script for this project's BIDS app run.
+
+        Reuses the exact same entry point as a local run
+        (``scripts/run_bids_apps.py -c <config>``) so a SLURM job behaves
+        identically to "Save & Start Runner" — just submitted through sbatch
+        on a compute node instead of executed directly here.
+
+        Request body (JSON):
+          config_path (required) – path to project.json / config.json
+          project_id  (optional) – used to resolve the project's logs dir
+          pipeline_id (optional) – pipeline preset to select from a multi-pipeline project
+          hpc (required) – { partition, time, mem, cpus, job_name, output_pattern,
+                              error_pattern, modules, environment }
+
+        Response:
+          script               – generated script content
+          script_path          – saved location (pass to /submit_hpc_job)
+          runtime_config_path  – resolved runtime config snapshot used by the job
+        """
+        data = request.get_json(silent=True) or {}
+        config_path_raw = data.get("config_path")
+        project_id = data.get("project_id")
+        pipeline_id = (data.get("pipeline_id") or "").strip()
+        hpc = data.get("hpc") or {}
+
+        if not config_path_raw:
+            return jsonify({"error": "config_path is required"}), 400
+
+        partition = str(hpc.get("partition") or "").strip()
+        time_limit = str(hpc.get("time") or "").strip()
+        mem = str(hpc.get("mem") or "").strip()
+        try:
+            cpus = int(hpc.get("cpus") or 0)
+        except (TypeError, ValueError):
+            cpus = 0
+
+        if not partition or not time_limit or not mem or cpus < 1:
+            return (
+                jsonify(
+                    {
+                        "error": "hpc.partition, hpc.time, hpc.mem and hpc.cpus (>=1) are required"
+                    }
+                ),
+                400,
+            )
+
+        def _sanitize_token(value, fallback):
+            cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip())
+            cleaned = cleaned.strip("_")
+            return cleaned or fallback
+
+        try:
+            config_path = resolve_config_path(config_path_raw)
+
+            with open(config_path, "r", encoding="utf-8") as handle:
+                cfg_raw = json.load(handle)
+
+            runtime_cfg = extract_runtime_config(
+                cfg_raw, selected_pipeline_id=pipeline_id or None
+            )
+            common = runtime_cfg.get("common", {})
+
+            engine = common.get("container_engine", "apptainer")
+            missing = []
+            bids_folder = common.get("bids_folder")
+            if not bids_folder or not os.path.exists(bids_folder):
+                missing.append(f"BIDS Folder: {bids_folder}")
+            if engine != "docker":
+                container = common.get("container")
+                if not container or not os.path.exists(container):
+                    missing.append(f"Container Image: {container}")
+            if missing:
+                return (
+                    jsonify(
+                        {
+                            "error": "Validation Failed",
+                            "details": "The following paths do not exist:\n"
+                            + "\n".join(missing),
+                        }
+                    ),
+                    400,
+                )
+
+            if project_id:
+                work_dir = resolve_project_dir(str(project_id)) / "logs"
+            else:
+                work_dir = data_dir / "logs"
+            work_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            runtime_config_path = work_dir / f"runtime_config_hpc_{timestamp}.json"
+            with open(runtime_config_path, "w", encoding="utf-8") as handle:
+                json.dump(runtime_cfg, handle, indent=2)
+
+            job_name = _sanitize_token(hpc.get("job_name"), "bids-app")
+            output_pattern = (
+                str(hpc.get("output_pattern") or "").strip().replace("\n", " ")
+                or f"{work_dir}/slurm_{job_name}_%j.out"
+            )
+            error_pattern = (
+                str(hpc.get("error_pattern") or "").strip().replace("\n", " ")
+                or f"{work_dir}/slurm_{job_name}_%j.err"
+            )
+            modules = [str(m).strip() for m in (hpc.get("modules") or []) if str(m).strip()]
+            environment = hpc.get("environment") or {}
+
+            lines = [
+                "#!/bin/bash",
+                f"#SBATCH --partition={partition}",
+                f"#SBATCH --time={time_limit}",
+                f"#SBATCH --mem={mem}",
+                f"#SBATCH --cpus-per-task={cpus}",
+                f"#SBATCH --job-name={job_name}",
+                f"#SBATCH --output={output_pattern}",
+                f"#SBATCH --error={error_pattern}",
+                "",
+                "set -euo pipefail",
+                "",
+            ]
+            if modules:
+                lines.append("# Load required modules")
+                lines.extend(f"module load {m}" for m in modules)
+                lines.append("")
+            if environment:
+                lines.append("# Environment variables")
+                lines.extend(
+                    f'export {key}="{val}"' for key, val in environment.items()
+                )
+                lines.append("")
+
+            lines.append(f'cd "{work_dir}"')
+            run_script = base_dir / "scripts" / "run_bids_apps.py"
+            # --local forces prism_runner's local execution path even though this
+            # project's config carries an "hpc" section (SLURM resource settings)
+            # for *this* script's own #SBATCH headers — without it, prism_runner
+            # would auto-detect "HPC mode" from that section and route into the
+            # unrelated cohort/datalad-slurm execution path, which expects a very
+            # different config shape and would fail validation.
+            lines.append(
+                f'"{python_exe}" "{run_script}" -c "{runtime_config_path}" --local'
+            )
+            script_content = "\n".join(lines) + "\n"
+
+            script_path = work_dir / f"hpc_job_{job_name}_{timestamp}.sh"
+            with open(script_path, "w", encoding="utf-8") as handle:
+                handle.write(script_content)
+            os.chmod(script_path, 0o755)
+
+            return jsonify(
+                {
+                    "success": True,
+                    "script": script_content,
+                    "script_path": str(script_path),
+                    "runtime_config_path": str(runtime_config_path),
+                }
+            )
+        except FileNotFoundError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
 
     @app.route("/save_hpc_script", methods=["POST"])
     def save_hpc_script():

@@ -43,6 +43,16 @@ def _gpu_available():
     return shutil.which("nvidia-smi") is not None
 
 
+def _apptainer_binary():
+    """Apptainer preferred, falling back to Singularity; defaults to "apptainer"
+    if neither is found so the resulting error names the expected tool."""
+    if shutil.which("apptainer"):
+        return "apptainer"
+    if shutil.which("singularity"):
+        return "singularity"
+    return "apptainer"
+
+
 def _sanitize_apptainer_args(apptainer_args):
     """Sanitize apptainer args to avoid invalid invocations."""
     if not apptainer_args:
@@ -1199,7 +1209,7 @@ def _process_subject(
         else:
             # Apptainer/Singularity
             action = "exec" if fastsurfer_mode else "run"
-            base_cmd = ["apptainer", action]
+            base_cmd = [_apptainer_binary(), action]
 
             if app.get("apptainer_args"):
                 safe_args = _sanitize_apptainer_args(app["apptainer_args"])

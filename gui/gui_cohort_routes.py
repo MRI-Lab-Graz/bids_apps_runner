@@ -52,9 +52,60 @@ def register_cohort_routes(
     base_dir: Path,
     log_dir: Path,
     ensure_logs_dir: Callable[[], None],
+    resolve_project_dir: Callable[[str], Path],
+    load_project: Callable[[str], dict[str, Any] | None],
+    extract_runtime_config: Callable[[dict[str, Any], str | None], dict[str, Any]],
+    derive_cohort_config: Callable[..., dict[str, Any]],
 ) -> None:
     cohort_script = base_dir / "scripts" / "submit_bids_cohort.sh"
-    default_config = base_dir / "configs" / "cohort_hpc_example.json"
+
+    def _build_cohort_config(project_id, pipeline_id, max_concurrent):
+        """Load the project, derive its cohort config, and validate it's
+        actually runnable. Returns (cohort_cfg, error_response_or_None)."""
+        if not project_id:
+            return None, (jsonify({"error": "project_id is required"}), 400)
+
+        project_json = load_project(project_id)
+        if project_json is None:
+            return None, (jsonify({"error": f"Project not found: {project_id}"}), 404)
+
+        runtime_cfg = extract_runtime_config(project_json, pipeline_id or None)
+        project_dir = resolve_project_dir(project_id)
+
+        try:
+            cohort_cfg = derive_cohort_config(
+                runtime_cfg,
+                project_dir=project_dir,
+                max_concurrent=max_concurrent,
+            )
+        except ValueError as exc:
+            return None, (jsonify({"error": str(exc)}), 400)
+
+        container = cohort_cfg["paths"]["container"]
+        if not container or not os.path.exists(container):
+            return None, (
+                jsonify({"error": f"Container Image not found: {container}"}),
+                400,
+            )
+
+        return cohort_cfg, None
+
+    @app.route("/cohort/preview_config", methods=["GET"])
+    def cohort_preview_config():
+        """Return the cohort config that would be generated for a project,
+        without running anything -- lets the GUI show "what will actually
+        run" before Setup/Submit, since the config is no longer hand-edited.
+        """
+        project_id = (request.args.get("project_id") or "").strip()
+        pipeline_id = (request.args.get("pipeline_id") or "").strip()
+        max_concurrent = request.args.get("max_concurrent")
+
+        cohort_cfg, error_response = _build_cohort_config(
+            project_id, pipeline_id, max_concurrent
+        )
+        if error_response:
+            return error_response
+        return jsonify({"config": cohort_cfg})
 
     @app.route("/cohort/run", methods=["POST"])
     def cohort_run():
@@ -63,14 +114,25 @@ def register_cohort_routes(
         if command not in {"setup", "submit", "status"}:
             return jsonify({"error": f"Invalid command: {command}"}), 400
 
-        config_path = (data.get("config_path") or str(default_config)).strip()
+        project_id = (data.get("project_id") or "").strip()
+        pipeline_id = (data.get("pipeline_id") or "").strip()
         dry_run = bool(data.get("dry_run", False))
-        datasets = [
-            d.strip() for d in (data.get("datasets") or "").split() if d.strip()
-        ]
+        max_concurrent = data.get("max_concurrent")
 
-        if not Path(config_path).exists():
-            return jsonify({"error": f"Config not found: {config_path}"}), 400
+        cohort_cfg, error_response = _build_cohort_config(
+            project_id, pipeline_id, max_concurrent
+        )
+        if error_response:
+            return error_response
+
+        project_dir = resolve_project_dir(project_id)
+        cohort_dir = project_dir / "logs" / "cohort"
+        cohort_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        generated_config_path = cohort_dir / f"cohort_config_{timestamp}.json"
+        generated_config_path.write_text(
+            json.dumps(cohort_cfg, indent=2) + "\n", encoding="utf-8"
+        )
 
         ensure_logs_dir()
         job_id = (
@@ -78,11 +140,9 @@ def register_cohort_routes(
         )
         log_file = log_dir / f"{job_id}.log"
 
-        cmd = ["bash", str(cohort_script), command, "--config", config_path]
+        cmd = ["bash", str(cohort_script), command, "--config", str(generated_config_path)]
         if dry_run:
             cmd.append("--dry-run")
-        for ds in datasets:
-            cmd += ["-d", ds]
 
         with _cohort_jobs_lock:
             _cohort_jobs[job_id] = {
@@ -90,6 +150,7 @@ def register_cohort_routes(
                 "command": command,
                 "status": "starting",
                 "log_file": str(log_file),
+                "config_path": str(generated_config_path),
                 "pid": None,
                 "returncode": None,
                 "error": None,
@@ -102,7 +163,12 @@ def register_cohort_routes(
         ).start()
 
         return jsonify(
-            {"job_id": job_id, "status": "starting", "log_file": str(log_file)}
+            {
+                "job_id": job_id,
+                "status": "starting",
+                "log_file": str(log_file),
+                "config_path": str(generated_config_path),
+            }
         )
 
     @app.route("/cohort/job_status", methods=["GET"])
@@ -158,40 +224,3 @@ def register_cohort_routes(
                 pass
 
         return jsonify({"job_id": job_id, "status": "cancelled"})
-
-    @app.route("/cohort/load_config", methods=["GET"])
-    def cohort_load_config():
-        path = (request.args.get("path") or "").strip()
-        if not path:
-            path = str(default_config)
-        target = Path(path)
-        if not target.exists():
-            return jsonify({"error": f"File not found: {path}"}), 404
-        try:
-            content = target.read_text(encoding="utf-8")
-            json.loads(content)  # validate before sending
-        except (OSError, json.JSONDecodeError) as exc:
-            return jsonify({"error": str(exc)}), 400
-        return jsonify({"path": str(target), "content": content})
-
-    @app.route("/cohort/save_config", methods=["POST"])
-    def cohort_save_config():
-        data = request.get_json(silent=True) or {}
-        path = (data.get("path") or "").strip()
-        content = data.get("content", "")
-        if not path:
-            return jsonify({"error": "path required"}), 400
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError as exc:
-            return jsonify({"error": f"Invalid JSON: {exc}"}), 400
-        try:
-            target = Path(path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(
-                json.dumps(parsed, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            return jsonify({"error": str(exc)}), 500
-        return jsonify({"path": str(target), "saved": True})

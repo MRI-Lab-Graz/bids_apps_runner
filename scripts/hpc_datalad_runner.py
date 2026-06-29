@@ -213,6 +213,15 @@ echo "========================================"
 set -e
 set -u
 trap 'echo "FAILED at line $LINENO (task $SLURM_ARRAY_TASK_ID, sub-${SUBJECT_LABEL})" >&2' ERR
+
+if command -v apptainer &> /dev/null; then
+    APPTAINER_BIN=apptainer
+elif command -v singularity &> /dev/null; then
+    APPTAINER_BIN=singularity
+else
+    echo "ERROR: neither apptainer nor singularity found on this node" >&2
+    exit 1
+fi
 """
 
     def _module_and_env(self) -> str:
@@ -251,11 +260,21 @@ trap 'echo "FAILED at line $LINENO (task $SLURM_ARRAY_TASK_ID, sub-${SUBJECT_LAB
         log_dir = _shell_quote(
             f"{self.paths.get('log_dir', '$HOME/logs/bids_app')}/{self.dataset_id}"
         )
+        # input_dir/output_dir, when given, are used verbatim -- this lets a
+        # caller point directly at an existing project's bids_folder/output_folder
+        # (e.g. the GUI's project-derived config) without it having to fit the
+        # shared_input_base/shared_output_base + dataset_id composition below.
+        input_dir = self.paths.get("input_dir")
         bids_dir = _shell_quote(
-            f"{self.paths.get('shared_input_base', '/shared/input')}/{self.dataset_id}"
+            input_dir
+            if input_dir
+            else f"{self.paths.get('shared_input_base', '/shared/input')}/{self.dataset_id}"
         )
+        output_dir = self.paths.get("output_dir")
         out_dir = _shell_quote(
-            f"{self.paths.get('shared_output_base', '/shared/derivatives')}"
+            output_dir
+            if output_dir
+            else f"{self.paths.get('shared_output_base', '/shared/derivatives')}"
             f"/{self.dataset_id}/{self._out_dir_name}"
         )
 
@@ -294,7 +313,7 @@ echo "Scratch: ${{WORK_DIR}}"
         return f"""
 # Run BIDS app: {app_name}
 echo "--- Running {app_name} for sub-${{SUBJECT_LABEL}} ---"
-apptainer exec \\
+"$APPTAINER_BIN" exec \\
     --cleanenv \\
     -B "${{BIDS_DIR}}":/bids:ro \\
     -B "${{OUT_DIR}}":/output \\

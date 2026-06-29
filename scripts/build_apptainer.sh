@@ -167,9 +167,13 @@ echo "Using output dir: $OUTPUT_DIR"
 echo "Using temp dir:   $APPTAINER_TMPDIR"
 echo
 
-# Check if Apptainer is installed
-if ! command -v apptainer &> /dev/null; then
-    echo "Error: Apptainer is not installed. Please install Apptainer before running this script."
+# Check if Apptainer (or its predecessor, Singularity) is installed
+if command -v apptainer &> /dev/null; then
+    APPTAINER_BIN="apptainer"
+elif command -v singularity &> /dev/null; then
+    APPTAINER_BIN="singularity"
+else
+    echo "Error: Neither Apptainer nor Singularity is installed. Please install one before running this script."
     exit 1
 fi
 
@@ -305,7 +309,7 @@ if [ -n "$DOCKERFILE" ]; then
     echo "   This may take a while. Please wait..."
 
     # --force allows rebuilding if a prior image file already exists
-    apptainer build --force --tmpdir="$APPTAINER_RUN_TMPDIR" "$OUTPUT_PATH" "docker-daemon://${IMAGE_NAME}:latest" &> "$LOG_FILE" &
+    "$APPTAINER_BIN" build --force --tmpdir="$APPTAINER_RUN_TMPDIR" "$OUTPUT_PATH" "docker-daemon://${IMAGE_NAME}:latest" &> "$LOG_FILE" &
     BUILD_PID=$!
     spinner $BUILD_PID
 
@@ -402,7 +406,7 @@ LOG_FILE="${OUTPUT_PATH%.sif}.log"
 echo "🚀 Starting Apptainer build for ${DOCKER_REPO}:${TAG}..."
 echo "   This may take a while. Please wait..."
 
-apptainer build --force --tmpdir="$APPTAINER_RUN_TMPDIR" "$OUTPUT_PATH" "docker://${DOCKER_REPO}:${TAG}" &> "$LOG_FILE" &
+"$APPTAINER_BIN" build --force --tmpdir="$APPTAINER_RUN_TMPDIR" "$OUTPUT_PATH" "docker://${DOCKER_REPO}:${TAG}" &> "$LOG_FILE" &
 BUILD_PID=$!
 spinner $BUILD_PID
 

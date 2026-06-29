@@ -3,6 +3,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -191,6 +192,13 @@ def register_misc_routes(
         if engine == "apptainer" and not os.path.exists(container):
             return jsonify({"error": f"Apptainer image not found at: {container}"}), 400
 
+        apptainer_bin = shutil.which("apptainer") or shutil.which("singularity")
+        if engine == "apptainer" and apptainer_bin is None:
+            return (
+                jsonify({"error": "Neither Apptainer nor Singularity is available on this host."}),
+                400,
+            )
+
         try:
             print(f"[GUI] Fetching help for {container} using {engine}...", flush=True)
             if engine == "docker":
@@ -219,7 +227,7 @@ def register_misc_routes(
                 else:
                     cmd = ["docker", "run", "--rm", container, "--help"]
             else:
-                cmd = ["apptainer", "run", "--containall", container, "--help"]
+                cmd = [apptainer_bin, "run", "--containall", container, "--help"]
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             output = result.stdout + result.stderr

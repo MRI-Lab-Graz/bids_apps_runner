@@ -107,8 +107,15 @@ resolve_config() {
     require_jq
     [[ -f "$CONFIG" ]] || die "Config not found: $CONFIG"
 
-    SHARED_INPUT_BASE="$(cfg '.paths.shared_input_base')"
-    SHARED_OUTPUT_BASE="$(cfg '.paths.shared_output_base')"
+    SHARED_INPUT_BASE="$(jq -r '.paths.shared_input_base // ""' "$CONFIG")"
+    SHARED_OUTPUT_BASE="$(jq -r '.paths.shared_output_base // ""' "$CONFIG")"
+    # input_dir/output_dir, when present, are used verbatim in place of the
+    # shared_input_base/shared_output_base + dataset_id composition below --
+    # this lets a caller (e.g. the GUI) point directly at an existing
+    # project's bids_folder/output_folder so paths are identical to local
+    # execution instead of having to fit this script's own layout convention.
+    INPUT_DIR_OVERRIDE="$(jq -r '.paths.input_dir // ""' "$CONFIG")"
+    OUTPUT_DIR_OVERRIDE="$(jq -r '.paths.output_dir // ""' "$CONFIG")"
     SUBJ_LISTS_DIR="$(cfg '.paths.subject_lists_dir')"
     OUTPUT_URL_TPL="$(cfg '.datalad.output_url_template')"
     # Support both new generic key and legacy openneuro_url_template
@@ -128,11 +135,26 @@ resolve_config() {
     mapfile -t HPC_MODULES < <(jq -r '.hpc.modules[]? // empty' "$CONFIG")
 }
 
+# Sets INPUT_CLONE for dataset $1 (depends on resolve_config)
+resolve_input_clone() {
+    local ds="$1"
+    if [[ -n "$INPUT_DIR_OVERRIDE" ]]; then
+        INPUT_CLONE="$INPUT_DIR_OVERRIDE"
+    else
+        INPUT_CLONE="${SHARED_INPUT_BASE}/${ds}"
+    fi
+}
+
 # Sets OUTPUT_CLONE and PUSH_LOCK_DIR for dataset $1 (depends on resolve_config)
 resolve_output_clone() {
     local ds="$1"
-    OUTPUT_CLONE="${SHARED_OUTPUT_BASE}/${ds}/${APP_OUT_DIR}"
-    PUSH_LOCK_DIR="${SHARED_OUTPUT_BASE}/${ds}"
+    if [[ -n "$OUTPUT_DIR_OVERRIDE" ]]; then
+        OUTPUT_CLONE="$OUTPUT_DIR_OVERRIDE"
+        PUSH_LOCK_DIR="$(dirname "$OUTPUT_DIR_OVERRIDE")"
+    else
+        OUTPUT_CLONE="${SHARED_OUTPUT_BASE}/${ds}/${APP_OUT_DIR}"
+        PUSH_LOCK_DIR="${SHARED_OUTPUT_BASE}/${ds}"
+    fi
 }
 
 # ── Phase 1: setup ────────────────────────────────────────────────────────────
@@ -140,14 +162,18 @@ cmd_setup() {
     check_todos
     resolve_config
 
-    mkdir -p "$SHARED_INPUT_BASE" "$SHARED_OUTPUT_BASE" "$SUBJ_LISTS_DIR"
+    local mkdir_targets=("$SUBJ_LISTS_DIR")
+    [[ -n "$SHARED_INPUT_BASE" ]] && mkdir_targets+=("$SHARED_INPUT_BASE")
+    [[ -n "$SHARED_OUTPUT_BASE" ]] && mkdir_targets+=("$SHARED_OUTPUT_BASE")
+    mkdir -p "${mkdir_targets[@]}"
 
     log "Setting up ${#DATASETS[@]} dataset(s)..."
     local failed=0
 
     for DS in "${DATASETS[@]}"; do
         local input_url="${INPUT_URL_TPL/\{dataset_id\}/$DS}"
-        local input_clone="${SHARED_INPUT_BASE}/${DS}"
+        resolve_input_clone "$DS"
+        local input_clone="$INPUT_CLONE"
         local output_url="${OUTPUT_URL_TPL/\{dataset_id\}/$DS}"
         resolve_output_clone "$DS"
         local output_clone="$OUTPUT_CLONE"
@@ -166,8 +192,17 @@ cmd_setup() {
         # 2. Create output dataset on DataLad server (requires SSH access)
         #    The server-side path must exist; adjust the remote command for your setup.
         #    Example assumes 'datalad create' on server via SSH; skip if already done.
+        #    NOTE: this creates a *plain* dataset, not a real RIA-store layout, so
+        #    output_url_template must use ssh:// (plain git+annex over ssh), not
+        #    ria+ssh:// -- the latter requires a proper RIA store and will fail
+        #    with "RIA URI not recognized" against a plain `datalad create`.
         log "[$DS] Creating output dataset on DataLad server..."
-        local server_path="${output_url#ria+ssh://}"   # strip ria+ssh://
+        local server_path
+        case "$output_url" in
+            ssh://*)     server_path="${output_url#ssh://}" ;;
+            ria+ssh://*) server_path="${output_url#ria+ssh://}" ;;
+            *) die "[$DS] output_url_template must start with ssh:// (or ria+ssh:// for a real RIA store): $output_url" ;;
+        esac
         local ssh_host="${server_path%%/*}"
         local remote_path="/${server_path#*/}"
         run ssh "$ssh_host" \
@@ -216,7 +251,8 @@ cmd_submit() {
     for DS in "${DATASETS[@]}"; do
         local subj_list="${SUBJ_LISTS_DIR}/${DS}_subjects.txt"
         local array_script="${scripts_dir}/${DS}_bids_array.sh"
-        local input_clone="${SHARED_INPUT_BASE}/${DS}"
+        resolve_input_clone "$DS"
+        local input_clone="$INPUT_CLONE"
         resolve_output_clone "$DS"
         local output_clone="$OUTPUT_CLONE"
         local finish_script="${scripts_dir}/${DS}_bids_finish.sh"

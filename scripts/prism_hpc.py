@@ -182,6 +182,15 @@ def create_slurm_job(subject, config, work_dir, dry_run=False, debug=False):
 set -e
 set -u
 
+if command -v apptainer &> /dev/null; then
+    APPTAINER_BIN=apptainer
+elif command -v singularity &> /dev/null; then
+    APPTAINER_BIN=singularity
+else
+    echo "ERROR: neither apptainer nor singularity found on this node" >&2
+    exit 1
+fi
+
 echo "Starting job for subject: {subject}"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_JOB_NODELIST"
@@ -296,7 +305,7 @@ for FASTSURFER_T1_HOST in "${{FASTSURFER_T1_LIST[@]}}"; do
 
     echo "FastSurfer mode: using $FASTSURFER_T1_CONTAINER with SID $FASTSURFER_SID"
 
-    apptainer exec \\
+    "$APPTAINER_BIN" exec \\
 """
 
             apptainer_args = [str(arg) for arg in app.get("apptainer_args", [])]
@@ -363,7 +372,7 @@ PROCESS_EXIT_CODE=$FASTSURFER_EXIT
 """
         if not fastsurfer_mode:
             script_content += """
-apptainer run \\
+"$APPTAINER_BIN" run \\
 """
 
             apptainer_args = [str(arg) for arg in app.get("apptainer_args", [])]

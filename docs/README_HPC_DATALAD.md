@@ -41,8 +41,8 @@ no git happening while jobs run.
     "subject_lists_dir":   "/shared/subject_lists"
   },
   "datalad": {
-    "input_url_template":  "ria+ssh://server/data/{dataset_id}",
-    "output_url_template": "ria+ssh://server/derivatives/{dataset_id}"
+    "input_url_template":  "server:/data/{dataset_id}",
+    "output_url_template": "ssh://server/derivatives/{dataset_id}"
   },
   "hpc": {
     "partition": "compute",
@@ -61,6 +61,10 @@ no git happening while jobs run.
   }
 }
 ```
+
+`output_url_template` must use `ssh://` (or `ria+ssh://` only if `server` is a real
+RIA store) -- `setup` creates the output dataset with a plain `datalad create`
+over SSH, which `ria+ssh://` cannot clone.
 
 There is exactly one config schema; `hpc_datalad_runner.py` and `submit_bids_cohort.sh` both
 read it. `paths.scratch_dir` is the only per-task isolated directory you need to think about --

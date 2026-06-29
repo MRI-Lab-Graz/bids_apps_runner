@@ -461,24 +461,6 @@
                     <div class="form-text mt-2">Pipeline presets keep separate app/container arguments inside one project. Save the project after switching or editing presets.</div>
                 </div>
                 <!-- ═══════════════════════════════════════════════════════════
-                     RUN MODE TOGGLE  (LOCAL / HPC)
-                ═══════════════════════════════════════════════════════════ -->
-                <div class="d-flex gap-0 mb-4 run-mode-toggle-bar" role="group" aria-label="Run mode">
-                    <button type="button" id="modeLocalBtn"
-                            class="btn btn-primary px-4 py-2"
-                            onclick="switchRunMode('local')"
-                            title="Run BIDS app locally on this machine">
-                        <i class="fas fa-laptop me-2"></i>Local
-                    </button>
-                    <button type="button" id="modeHPCBtn"
-                            class="btn btn-outline-primary px-4 py-2"
-                            onclick="switchRunMode('hpc')"
-                            title="Submit jobs to a SLURM/HPC cluster">
-                        <i class="fas fa-server me-2"></i>HPC / SLURM
-                    </button>
-                </div>
-
-                <!-- ═══════════════════════════════════════════════════════════
                      SHARED: Container & Tools  (always visible)
                 ═══════════════════════════════════════════════════════════ -->
                 <div id="sharedRunSection">
@@ -567,40 +549,33 @@
                     </div>
                 </div><!-- end sharedRunSection -->
 
-                <!-- ═══════════════════════════════════════════════════════════
-                     LOCAL RUN PANEL
-                ═══════════════════════════════════════════════════════════ -->
-                <div id="localRunPanel">
-                <div id="runnerActiveRunsNotice" class="alert py-2 px-3 small mb-3" style="display:none;"></div>
-                <div id="runnerOptionsLoadStatus" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;"></div>
-                <div id="runnerPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
-                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                        <strong>Launch Preflight</strong>
-                        <span id="runnerPreflightBadge" class="badge bg-secondary">Checking...</span>
-                    </div>
-                    <ul id="runnerPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
-                </div>
-
-                <div class="runner-action-bar">
-                    <div class="runner-action-bar-inner">
+                <form id="runnerForm">
+                    <div class="d-flex gap-2 mb-4">
                         <button class="btn btn-outline-primary" type="button" onclick="loadExistingConfig()"><i class="fas fa-folder-open me-2"></i>Load Config</button>
                         <button class="btn btn-outline-success" type="button" onclick="handleSaveAndRun(false)"><i class="fas fa-save me-2"></i>Save Only</button>
-                        <button class="btn btn-danger px-4" id="saveStartBtn" type="button" onclick="handleSaveAndRun(true)"><i class="fas fa-play-circle me-2"></i>Save & Start Runner</button>
-                        <button class="btn btn-warning" id="runApp" style="display: none;" type="button" onclick="executeNow()"><i class="fas fa-bolt me-2"></i>Run (Cached)</button>
-                        <button class="btn btn-dark" id="killCurrentBtn" type="button" onclick="killApp('current')"><i class="fas fa-stop-circle me-2"></i>Stop Current Run</button>
-                        <button class="btn btn-outline-dark" id="killAllBtn" type="button" onclick="killApp('all')"><i class="fas fa-ban me-2"></i>Stop All Runs</button>
                     </div>
-                </div>
+                    <div class="section-header">2. Data Locations</div>
 
-                <form id="runnerForm">
-                    <div class="section-header">2. Data Locations (Local)</div>
+                    <label class="form-label fw-semibold mb-1">BIDS Dataset Source</label>
+                    <div class="d-flex gap-0 mb-3 bids-source-toggle-bar" role="group" aria-label="BIDS data source">
+                        <button type="button" id="bidsSourceLocalBtn" class="btn btn-primary btn-sm px-3"
+                                onclick="switchBidsSourceMode('local')" title="Point directly at a BIDS folder already on local/shared disk">
+                            <i class="fas fa-folder me-1"></i>Local Folder
+                        </button>
+                        <button type="button" id="bidsSourceRemoteBtn" class="btn btn-outline-primary btn-sm px-3"
+                                onclick="switchBidsSourceMode('remote')" title="Clone a study from the lab's DataLad server over SSH">
+                            <i class="fas fa-network-wired me-1"></i>Remote (SSH)
+                        </button>
+                    </div>
+
                     <div class="row">
                         <div class="col-md-6 mb-4">
                             <label id="bids_folder_label" class="form-label" title="Path to raw BIDS data (must contain dataset_description.json)">BIDS Dataset Folder</label>
                             <div class="input-group">
-                                <input type="text" id="bids_folder" class="form-control" placeholder="/path/to/rawdata">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('bids_folder')">...</button>
+                                <input type="text" id="bids_folder" class="form-control" placeholder="/path/to/rawdata" oninput="updateCohortDatasetDisplay()">
+                                <button type="button" id="bids_folder_browse_btn" class="btn btn-outline-secondary" onclick="openBrowser('bids_folder')">...</button>
                             </div>
+                            <div id="bidsSourceRemoteHint" class="form-text" style="display:none;">Set automatically from the Remote DataLad Source panel below.</div>
                         </div>
                         <div class="col-md-6 mb-4">
                             <label class="form-label" title="Where derivative results will be saved">Output Folder</label>
@@ -610,6 +585,49 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Remote DataLad Source (SSH) -- shown only when "Remote (SSH)" is selected above -->
+                    <div class="row" id="remoteDatasetRow" style="display:none;">
+                        <div class="col-12 mb-4">
+                            <div class="card border-0 bg-light">
+                                <div class="card-header bg-transparent border-bottom">
+                                    <span class="small fw-semibold"><i class="fas fa-network-wired me-2 text-muted"></i>Remote DataLad Source (SSH)</span>
+                                </div>
+                                <div id="remoteDatasetBody" class="card-body">
+                                    <p class="text-muted small mb-3">
+                                        Clone a study from the lab's DataLad server
+                                        (<code>MRI-Lab_Repository</code>) into a local folder. This only fetches
+                                        metadata (lightweight pointers) &mdash; actual subject data is downloaded
+                                        later, on demand, when a run/SLURM job processes that subject. Once
+                                        connected, that folder is used as the BIDS Dataset Folder above.
+                                    </p>
+                                    <div class="row align-items-end">
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label" title="Studies found under MRI-Lab_Repository on the lab DataLad server">Study</label>
+                                            <div class="input-group">
+                                                <select id="remote_dataset_study" class="form-select" onchange="updateRemoteCloneDirPreview()">
+                                                    <option value="">Loading studies...</option>
+                                                </select>
+                                                <button type="button" class="btn btn-outline-secondary" onclick="loadRemoteStudies()" title="Refresh study list">
+                                                    <i class="fas fa-sync"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label" title="Fixed local destination, derived from the study name">Local Clone Destination</label>
+                                            <input type="text" id="remote_dataset_clone_dir" class="form-control" readonly>
+                                        </div>
+                                    </div>
+                                    <button type="button" class="btn btn-primary" id="remoteDatasetConnectBtn" onclick="connectRemoteDataset()">
+                                        <i class="fas fa-plug me-1"></i>Connect &amp; Clone
+                                    </button>
+                                    <div id="remoteDatasetStatus" class="alert alert-secondary py-2 px-3 small mt-3 mb-2" style="display:none;"></div>
+                                    <pre id="remoteDatasetLog" class="utility-log" style="display:none; max-height:200px; overflow-y:auto; margin-bottom:0;"></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="row">
                         <div class="col-md-6 mb-4">
                             <label class="form-label" title="Root derivatives directory used for versioned output layout">Derivatives Root (Versioned Mode)</label>
@@ -871,158 +889,6 @@
                         </div>
                     </div>
 
-                    <div class="section-header">4. Runner Overrides</div>
-                    <div class="row">
-                        <div class="col-md-3 mb-4">
-                            <label class="form-label">Log Level</label>
-                            <select class="form-select runner-opt" id="runner_log_level" data-flag="--log-level" title="Set logging level for the runner script (default: INFO)">
-                                <option value="INFO">INFO</option>
-                                <option value="DEBUG">DEBUG</option>
-                                <option value="WARNING">WARNING</option>
-                                <option value="ERROR">ERROR</option>
-                            </select>
-                        </div>
-                        <div class="col-md-3 mb-4">
-                            <label class="form-label">Start Delay (sec)</label>
-                            <input type="number" class="form-control runner-opt" id="runner_start_delay" data-flag="--start-delay-sec" min="0" step="1" placeholder="0" title="Delay between launching subjects/jobs to smooth resource spikes">
-                        </div>
-                        <div class="col-md-6 mb-4">
-                            <label class="form-label">Filter Subjects (IDs separated by space)</label>
-                            <input type="text" class="form-control runner-opt" id="runner_subjects" data-flag="--subjects" placeholder="sub-01 sub-02" title="Process only specified subjects (e.g., sub-001 sub-002)">
-                        </div>
-                    </div>
-
-                    <div class="row g-3" style="background: #fdfdfd; padding: 20px; border-radius: 10px; border: 1px solid #f0f0f0; margin: 0 0 30px 0;">
-                        <div class="col-md-3">
-                            <div class="form-check mb-2">
-                                <input class="form-check-input runner-opt" type="checkbox" id="v_out" data-flag="--validate">
-                                <label class="form-check-label" for="v_out" title="Validate outputs after processing and generate reports">Validate Outputs</label>
-                                <div class="text-muted" style="font-size: 0.7rem;">Post-run validation</div>
-                            </div>
-                            <div class="form-check">
-                                <input class="form-check-input runner-opt" type="checkbox" id="v_only" data-flag="--validate-only">
-                                <label class="form-check-label" for="v_only" title="Only validate outputs, skip processing">Validate Only</label>
-                                <div class="text-muted" style="font-size: 0.7rem;">Skip processing</div>
-                            </div>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="form-check mb-2">
-                                <input class="form-check-input runner-opt" type="checkbox" id="force" data-flag="--force">
-                                <label class="form-check-label" for="force" title="Force reprocessing of subjects even if output exists">Force Overwrite</label>
-                                <div class="text-muted" style="font-size: 0.7rem;">Ignore markers</div>
-                            </div>
-                            <div class="form-check">
-                                <input class="form-check-input runner-opt" type="checkbox" id="pilot" data-flag="--pilot">
-                                <label class="form-check-label" for="pilot" title="Pilot mode: process only one randomly selected subject (forces jobs=1)">Pilot (1 Sub)</label>
-                                <div class="text-muted" style="font-size: 0.7rem;">Quick test run</div>
-                            </div>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="form-check mb-2">
-                                <input class="form-check-input runner-opt" type="checkbox" id="debug" data-flag="--debug">
-                                <label class="form-check-label" for="debug" title="Enable debug mode with detailed container execution logs">Debug Logs</label>
-                                <div class="text-muted" style="font-size: 0.7rem;">Verbose output</div>
-                            </div>
-                            <div class="form-check">
-                                <input class="form-check-input runner-opt" type="checkbox" id="dry" data-flag="--dry-run">
-                                <label class="form-check-label" for="dry" title="Show commands that would be run without executing them">Dry Run</label>
-                                <div class="text-muted" style="font-size: 0.7rem;">Simulation only</div>
-                            </div>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="form-check mb-2">
-                                <input class="form-check-input runner-opt" type="checkbox" id="remiss" data-flag="--reprocess-missing">
-                                <label class="form-check-label" for="remiss" title="Automatically reprocess subjects with missing outputs (implies --validate)">Reprocess Missing</label>
-                                <div class="text-muted" style="font-size: 0.7rem;">Auto-recovery</div>
-                            </div>
-                            <div class="form-check">
-                                <input class="form-check-input runner-opt" type="checkbox" id="clean_markers" data-flag="--clean-success-markers">
-                                <label class="form-check-label" for="clean_markers" title="Remove all success markers (forces fresh detection of already processed subjects)">Clean Markers</label>
-                                <div class="text-muted" style="font-size: 0.7rem;">Reset progress</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="section-header">5. Resource Controls</div>
-                    <div class="row">
-                        <div class="col-md-6 mb-4">
-                            <div class="card bg-light border-0 shadow-none">
-                                <div class="card-body p-3">
-                                    <div class="form-check form-switch mb-2">
-                                        <input class="form-check-input" type="checkbox" id="limit_pipeline_usage" onchange="toggleMaxUsageControls()">
-                                        <label class="form-check-label" for="limit_pipeline_usage">
-                                            Cap Pipeline CPU Usage (per run)
-                                        </label>
-                                    </div>
-                                    <div class="input-group mb-2">
-                                        <span class="input-group-text">Max Usage</span>
-                                        <input type="number" class="form-control" id="max_usage_percent" value="75" min="10" max="100" disabled>
-                                        <span class="input-group-text">% of host cores</span>
-                                    </div>
-                                    <div class="form-text">
-                                        At launch, this injects a CPU cap for this run only and keeps the original project config unchanged.
-                                    </div>
-                                    <div class="form-text" id="resourceSummaryText">Host resources: detecting...</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="col-md-6 mb-4">
-                            <div class="card bg-light border-0 shadow-none">
-                                <div class="card-body p-3">
-                                    <div class="mb-2">
-                                        <label class="form-label mb-1">Pilot Subject (optional)</label>
-                                        <input type="text" class="form-control" id="pilot_subject" placeholder="sub-001">
-                                    </div>
-                                    <div class="row g-2 mb-2 align-items-end">
-                                        <div class="col-md-4">
-                                            <label class="form-label mb-1">Sweep Mode</label>
-                                            <select class="form-select" id="pilot_nprocs_mode" onchange="togglePilotSweepMode()">
-                                                <option value="auto" selected>Auto</option>
-                                                <option value="manual">Manual</option>
-                                            </select>
-                                        </div>
-                                        <div class="col-md-8" id="pilotManualSweepBox" style="display:none;">
-                                            <label class="form-label mb-1">Manual nprocs list</label>
-                                            <input type="text" class="form-control" id="pilot_nprocs_list" placeholder="4,8,16,24">
-                                        </div>
-                                    </div>
-                                    <div class="row g-2 mb-2" id="pilotAutoSweepBox">
-                                        <div class="col-md-4">
-                                            <label class="form-label mb-1">Min</label>
-                                            <input type="number" class="form-control" id="pilot_nprocs_min" value="2" min="1">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label mb-1">Max</label>
-                                            <input type="number" class="form-control" id="pilot_nprocs_max" placeholder="auto">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label mb-1">Step</label>
-                                            <input type="number" class="form-control" id="pilot_nprocs_step" value="1" min="1">
-                                        </div>
-                                    </div>
-                                    <div class="form-check mb-2">
-                                        <input class="form-check-input" type="checkbox" id="pilot_force">
-                                        <label class="form-check-label" for="pilot_force">Force rerun during pilot</label>
-                                    </div>
-                                    <button class="btn btn-outline-primary btn-sm" id="runPilotBtn" type="button" onclick="runPilotEstimator()">
-                                        <i class="fas fa-chart-line me-1"></i>Run Pilot Estimator
-                                    </button>
-                                    <div id="pilotStatusPanel" class="mt-3" style="display:none;">
-                                        <div id="pilotStatusText" class="small fw-bold mb-2 text-primary">Pilot status: starting...</div>
-                                        <div class="progress mb-2" style="height: 8px;">
-                                            <div id="pilotProgressBar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuemin="0" aria-valuemax="100"></div>
-                                        </div>
-                                        <div id="pilotArtifacts" class="small text-muted mb-2"></div>
-                                        <pre id="pilotLiveLog" style="max-height:180px; overflow:auto; background:#1e1e1e; color:#d4d4d4; padding:10px; border-radius:6px; font-size:0.75rem; margin:0;"></pre>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div id="statusAlert" style="display:none; padding: 15px; margin-bottom: 25px; border-radius: 8px; text-align: center; font-weight: 600;"></div>
-
                     <div class="row mt-4 justify-content-center">
                         <div class="col-md-8">
                             <div class="card bg-light border-0 shadow-none">
@@ -1044,6 +910,201 @@
                         </div>
                     </div>
                 </form>
+
+                <!-- ═══════════════════════════════════════════════════════════
+                     6. EXECUTION  (choose how to run everything specified above)
+                ═══════════════════════════════════════════════════════════ -->
+                <div class="section-header">6. Execution</div>
+                <p class="text-muted small mb-3">
+                    Everything above (container, data locations, app flags, options) is the same regardless of
+                    how you run it. Pick an executor below — only its own action buttons and console differ.
+                </p>
+                <div class="d-flex gap-0 mb-4 run-mode-toggle-bar" role="group" aria-label="Run mode">
+                    <button type="button" id="modeLocalBtn"
+                            class="btn btn-primary px-4 py-2"
+                            onclick="switchRunMode('local')"
+                            title="Run BIDS app locally on this machine">
+                        <i class="fas fa-laptop me-2"></i>Local
+                    </button>
+                    <button type="button" id="modeHPCBtn"
+                            class="btn btn-outline-primary px-4 py-2"
+                            onclick="switchRunMode('hpc')"
+                            title="Submit jobs to a SLURM/HPC cluster">
+                        <i class="fas fa-server me-2"></i>HPC / SLURM
+                    </button>
+                </div>
+
+                <div id="localRunPanel">
+                <div id="runnerActiveRunsNotice" class="alert py-2 px-3 small mb-3" style="display:none;"></div>
+                <div id="runnerOptionsLoadStatus" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;"></div>
+                <div id="runnerPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <strong>Launch Preflight</strong>
+                        <span id="runnerPreflightBadge" class="badge bg-secondary">Checking...</span>
+                    </div>
+                    <ul id="runnerPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
+                </div>
+
+                <div class="runner-action-bar">
+                    <div class="runner-action-bar-inner">
+                        <button class="btn btn-danger px-4" id="saveStartBtn" type="button" onclick="handleSaveAndRun(true)"><i class="fas fa-play-circle me-2"></i>Save & Start Runner</button>
+                        <button class="btn btn-warning" id="runApp" style="display: none;" type="button" onclick="executeNow()"><i class="fas fa-bolt me-2"></i>Run (Cached)</button>
+                        <button class="btn btn-dark" id="killCurrentBtn" type="button" onclick="killApp('current')"><i class="fas fa-stop-circle me-2"></i>Stop Current Run</button>
+                        <button class="btn btn-outline-dark" id="killAllBtn" type="button" onclick="killApp('all')"><i class="fas fa-ban me-2"></i>Stop All Runs</button>
+                    </div>
+                </div>
+
+                <div class="section-header">Runner Overrides</div>
+                <div class="row">
+                    <div class="col-md-3 mb-4">
+                        <label class="form-label">Log Level</label>
+                        <select class="form-select runner-opt" id="runner_log_level" data-flag="--log-level" title="Set logging level for the runner script (default: INFO)">
+                            <option value="INFO">INFO</option>
+                            <option value="DEBUG">DEBUG</option>
+                            <option value="WARNING">WARNING</option>
+                            <option value="ERROR">ERROR</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3 mb-4">
+                        <label class="form-label">Start Delay (sec)</label>
+                        <input type="number" class="form-control runner-opt" id="runner_start_delay" data-flag="--start-delay-sec" min="0" step="1" placeholder="0" title="Delay between launching subjects/jobs to smooth resource spikes">
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <label class="form-label">Filter Subjects (IDs separated by space)</label>
+                        <input type="text" class="form-control runner-opt" id="runner_subjects" data-flag="--subjects" placeholder="sub-01 sub-02" title="Process only specified subjects (e.g., sub-001 sub-002)">
+                    </div>
+                </div>
+
+                <div class="row g-3" style="background: #fdfdfd; padding: 20px; border-radius: 10px; border: 1px solid #f0f0f0; margin: 0 0 30px 0;">
+                    <div class="col-md-3">
+                        <div class="form-check mb-2">
+                            <input class="form-check-input runner-opt" type="checkbox" id="v_out" data-flag="--validate">
+                            <label class="form-check-label" for="v_out" title="Validate outputs after processing and generate reports">Validate Outputs</label>
+                            <div class="text-muted" style="font-size: 0.7rem;">Post-run validation</div>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input runner-opt" type="checkbox" id="v_only" data-flag="--validate-only">
+                            <label class="form-check-label" for="v_only" title="Only validate outputs, skip processing">Validate Only</label>
+                            <div class="text-muted" style="font-size: 0.7rem;">Skip processing</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-check mb-2">
+                            <input class="form-check-input runner-opt" type="checkbox" id="force" data-flag="--force">
+                            <label class="form-check-label" for="force" title="Force reprocessing of subjects even if output exists">Force Overwrite</label>
+                            <div class="text-muted" style="font-size: 0.7rem;">Ignore markers</div>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input runner-opt" type="checkbox" id="pilot" data-flag="--pilot">
+                            <label class="form-check-label" for="pilot" title="Pilot mode: process only one randomly selected subject (forces jobs=1)">Pilot (1 Sub)</label>
+                            <div class="text-muted" style="font-size: 0.7rem;">Quick test run</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-check mb-2">
+                            <input class="form-check-input runner-opt" type="checkbox" id="debug" data-flag="--debug">
+                            <label class="form-check-label" for="debug" title="Enable debug mode with detailed container execution logs">Debug Logs</label>
+                            <div class="text-muted" style="font-size: 0.7rem;">Verbose output</div>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input runner-opt" type="checkbox" id="dry" data-flag="--dry-run">
+                            <label class="form-check-label" for="dry" title="Show commands that would be run without executing them">Dry Run</label>
+                            <div class="text-muted" style="font-size: 0.7rem;">Simulation only</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-check mb-2">
+                            <input class="form-check-input runner-opt" type="checkbox" id="remiss" data-flag="--reprocess-missing">
+                            <label class="form-check-label" for="remiss" title="Automatically reprocess subjects with missing outputs (implies --validate)">Reprocess Missing</label>
+                            <div class="text-muted" style="font-size: 0.7rem;">Auto-recovery</div>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input runner-opt" type="checkbox" id="clean_markers" data-flag="--clean-success-markers">
+                            <label class="form-check-label" for="clean_markers" title="Remove all success markers (forces fresh detection of already processed subjects)">Clean Markers</label>
+                            <div class="text-muted" style="font-size: 0.7rem;">Reset progress</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-header">Resource Controls</div>
+                <div class="row">
+                    <div class="col-md-6 mb-4">
+                        <div class="card bg-light border-0 shadow-none">
+                            <div class="card-body p-3">
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox" id="limit_pipeline_usage" onchange="toggleMaxUsageControls()">
+                                    <label class="form-check-label" for="limit_pipeline_usage">
+                                        Cap Pipeline CPU Usage (per run)
+                                    </label>
+                                </div>
+                                <div class="input-group mb-2">
+                                    <span class="input-group-text">Max Usage</span>
+                                    <input type="number" class="form-control" id="max_usage_percent" value="75" min="10" max="100" disabled>
+                                    <span class="input-group-text">% of host cores</span>
+                                </div>
+                                <div class="form-text">
+                                    At launch, this injects a CPU cap for this run only and keeps the original project config unchanged.
+                                </div>
+                                <div class="form-text" id="resourceSummaryText">Host resources: detecting...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 mb-4">
+                        <div class="card bg-light border-0 shadow-none">
+                            <div class="card-body p-3">
+                                <div class="mb-2">
+                                    <label class="form-label mb-1">Pilot Subject (optional)</label>
+                                    <input type="text" class="form-control" id="pilot_subject" placeholder="sub-001">
+                                </div>
+                                <div class="row g-2 mb-2 align-items-end">
+                                    <div class="col-md-4">
+                                        <label class="form-label mb-1">Sweep Mode</label>
+                                        <select class="form-select" id="pilot_nprocs_mode" onchange="togglePilotSweepMode()">
+                                            <option value="auto" selected>Auto</option>
+                                            <option value="manual">Manual</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-8" id="pilotManualSweepBox" style="display:none;">
+                                        <label class="form-label mb-1">Manual nprocs list</label>
+                                        <input type="text" class="form-control" id="pilot_nprocs_list" placeholder="4,8,16,24">
+                                    </div>
+                                </div>
+                                <div class="row g-2 mb-2" id="pilotAutoSweepBox">
+                                    <div class="col-md-4">
+                                        <label class="form-label mb-1">Min</label>
+                                        <input type="number" class="form-control" id="pilot_nprocs_min" value="2" min="1">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label mb-1">Max</label>
+                                        <input type="number" class="form-control" id="pilot_nprocs_max" placeholder="auto">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label mb-1">Step</label>
+                                        <input type="number" class="form-control" id="pilot_nprocs_step" value="1" min="1">
+                                    </div>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="pilot_force">
+                                    <label class="form-check-label" for="pilot_force">Force rerun during pilot</label>
+                                </div>
+                                <button class="btn btn-outline-primary btn-sm" id="runPilotBtn" type="button" onclick="runPilotEstimator()">
+                                    <i class="fas fa-chart-line me-1"></i>Run Pilot Estimator
+                                </button>
+                                <div id="pilotStatusPanel" class="mt-3" style="display:none;">
+                                    <div id="pilotStatusText" class="small fw-bold mb-2 text-primary">Pilot status: starting...</div>
+                                    <div class="progress mb-2" style="height: 8px;">
+                                        <div id="pilotProgressBar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuemin="0" aria-valuemax="100"></div>
+                                    </div>
+                                    <div id="pilotArtifacts" class="small text-muted mb-2"></div>
+                                    <pre id="pilotLiveLog" style="max-height:180px; overflow:auto; background:#1e1e1e; color:#d4d4d4; padding:10px; border-radius:6px; font-size:0.75rem; margin:0;"></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="statusAlert" style="display:none; padding: 15px; margin-bottom: 25px; border-radius: 8px; text-align: center; font-weight: 600;"></div>
 
                 <!-- Terminal -->
                 <div class="terminal-container">
@@ -1110,39 +1171,23 @@
                         </div>
                         <div id="cohortPanelBody" class="card-body" style="display:none;">
                             <p class="text-muted small mb-3">
-                                Orchestrate any BIDS app (fMRIPrep, QSIPrep, MRIQC, …) across multiple datasets
-                                via SLURM array jobs and DataLad. Edit the config below, then run Setup → Submit.
+                                Runs this project's BIDS app as a SLURM array job (one task per subject) using
+                                <code>datalad-slurm</code> for git-safe parallel execution. Container, flags,
+                                folders, and SLURM resources are the <strong>same settings</strong> as Local/single-job
+                                execution above — nothing is configured twice. Edit them there, then Setup → Submit here.
                             </p>
 
                             <div class="row mb-3">
                                 <div class="col-md-9">
-                                    <label class="form-label fw-semibold">Config File</label>
-                                    <div class="input-group">
-                                        <input type="text" class="form-control font-monospace" id="cohortConfigPath"
-                                               placeholder="configs/cohort_hpc_example.json">
-                                        <button class="btn btn-outline-secondary" type="button"
-                                                onclick="openBrowser('cohortConfigPath')">…</button>
-                                        <button class="btn btn-outline-primary" type="button"
-                                                onclick="loadCohortConfig()" title="Load config into editor">
-                                            <i class="fas fa-file-import"></i>
-                                        </button>
-                                    </div>
-                                    <small class="text-muted">Default: <code>configs/cohort_hpc_example.json</code></small>
+                                    <label class="form-label fw-semibold">Dataset (from this project)</label>
+                                    <input type="text" class="form-control font-monospace" id="cohortDatasetIdDisplay" readonly>
+                                    <small class="text-muted">Derived from this project's BIDS Dataset Folder above.</small>
                                 </div>
                                 <div class="col-md-3">
                                     <label class="form-label fw-semibold">Max concurrent jobs</label>
-                                    <input type="number" class="form-control" id="cohortMaxConcurrent"
+                                    <input type="number" class="form-control hpc-setting" id="cohort_max_concurrent"
                                            value="50" min="1" max="500">
-                                    <small class="text-muted">Array %N throttle</small>
-                                </div>
-                            </div>
-
-                            <div class="row mb-3">
-                                <div class="col-md-12">
-                                    <label class="form-label fw-semibold">Dataset filter <span class="text-muted fw-normal">(optional — leave empty for all 39)</span></label>
-                                    <input type="text" class="form-control font-monospace" id="cohortDatasets"
-                                           placeholder="ds000031 ds000256 ds001454  …">
-                                    <small class="text-muted">Space-separated dataset IDs to process; blank = all</small>
+                                    <small class="text-muted">Array %N throttle. Saved with HPC settings.</small>
                                 </div>
                             </div>
 
@@ -1157,38 +1202,10 @@
                                 </div>
                             </div>
 
-                            <!-- JSON config editor -->
-                            <div class="card border-0 bg-light mb-3">
-                                <div class="card-header bg-transparent border-bottom d-flex justify-content-between align-items-center px-3 py-2"
-                                     style="cursor:pointer;" onclick="toggleCohortEditor()">
-                                    <span class="small fw-semibold"><i class="fas fa-code me-2 text-muted"></i>Edit Config JSON</span>
-                                    <div class="d-flex align-items-center gap-2">
-                                        <span id="cohortEditorStatus" class="small text-muted"></span>
-                                        <i class="fas fa-chevron-down text-muted" id="cohortEditorIcon" style="transition:transform 0.3s;"></i>
-                                    </div>
-                                </div>
-                                <div id="cohortEditorBody" style="display:none;">
-                                    <div class="p-2">
-                                        <textarea id="cohortConfigEditor"
-                                                  class="form-control font-monospace"
-                                                  rows="20"
-                                                  spellcheck="false"
-                                                  style="font-size:0.82rem; white-space:pre; resize:vertical;"
-                                                  placeholder="Click the import button (↑) next to the config path to load the file here…"></textarea>
-                                    </div>
-                                    <div class="d-flex gap-2 px-3 pb-3">
-                                        <button class="btn btn-sm btn-success" onclick="saveCohortConfig()">
-                                            <i class="fas fa-save me-1"></i>Save to disk
-                                        </button>
-                                        <button class="btn btn-sm btn-outline-secondary" onclick="validateCohortConfig()">
-                                            <i class="fas fa-check me-1"></i>Validate JSON
-                                        </button>
-                                        <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="loadCohortConfig()">
-                                            <i class="fas fa-sync me-1"></i>Reload from disk
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary mb-3" onclick="previewCohortConfig()">
+                                <i class="fas fa-eye me-1"></i>Preview derived config
+                            </button>
+                            <pre id="cohortConfigPreview" class="utility-log" style="display:none; max-height:300px; overflow-y:auto;"></pre>
 
                             <div class="d-flex flex-wrap gap-2 mb-3">
                                 <button class="btn btn-outline-secondary" id="cohortSetupBtn"
@@ -1311,14 +1328,26 @@
                                     </button>
                                 </div>
 
-                                <div class="section-header">Preview</div>
-                                <button class="btn btn-outline-secondary mb-3" id="hpcPreviewBtn" onclick="toggleHPCPreview()">
-                                    <i class="fas fa-eye me-2"></i>Preview SLURM Script
-                                </button>
-                                
+                                <div class="section-header">Preview &amp; Submit</div>
+                                <p class="text-muted small mb-2">
+                                    Runs this project's BIDS app exactly as a local run would
+                                    (<code>scripts/run_bids_apps.py</code>), just submitted via
+                                    <code>sbatch</code> on a compute node instead of executed here directly.
+                                </p>
+                                <div class="d-flex gap-2 mb-3">
+                                    <button class="btn btn-outline-secondary" id="hpcPreviewBtn" onclick="toggleHPCPreview()">
+                                        <i class="fas fa-eye me-2"></i>Preview SLURM Script
+                                    </button>
+                                    <button class="btn btn-danger" id="hpcSubmitBtn" onclick="submitHPCJob()">
+                                        <i class="fas fa-paper-plane me-2"></i>Submit to SLURM
+                                    </button>
+                                </div>
+
                                 <div id="hpcScriptPreview" style="display:none;">
                                     <pre id="hpcScriptContent" style="background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 8px; max-height: 400px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.85rem;"></pre>
                                 </div>
+
+                                <div id="hpcSubmitStatus" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;"></div>
                             </div>
                         </div>
                     </div>
@@ -2105,6 +2134,8 @@
             suppressProjectDirtyTracking = true;
             try {
                 document.getElementById('bids_folder').value = common.bids_folder || '';
+                updateCohortDatasetDisplay(common.bids_folder || '');
+                switchBidsSourceMode(inferBidsSourceMode(common.bids_folder));
                 document.getElementById('output_folder').value = common.output_folder || '';
                 document.getElementById('tmp_folder').value = common.tmp_folder || '';
                 document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
@@ -3490,7 +3521,10 @@
 
             // Store project info early so navbar updates immediately
             lastProjectId = projectIdOverride || project.id || '';
-            lastSavedPath = null;
+            // The project we just loaded already has a project.json on disk at this
+            // deterministic path -- treat it as "saved" immediately (hasUnsavedProjectChanges()
+            // separately guards against acting on subsequent unsaved edits).
+            lastSavedPath = `projects/${lastProjectId}/project.json`;
             setNavbarProjectName(project.name || project.id || '');
             currentProjectConfig = cloneJson(cfg) || {};
             syncCurrentProjectConfigWithPipelines();
@@ -3514,6 +3548,8 @@
 
                 // Fill form fields
                 document.getElementById('bids_folder').value = common.bids_folder || '';
+                updateCohortDatasetDisplay(common.bids_folder || '');
+                switchBidsSourceMode(inferBidsSourceMode(common.bids_folder));
                 document.getElementById('output_folder').value = common.output_folder || '';
                 document.getElementById('tmp_folder').value = common.tmp_folder || '';
                 document.getElementById('templateflow_dir').value = common.templateflow_dir || '';
@@ -4872,6 +4908,8 @@
                     : ((cfg.app && typeof cfg.app === 'object') ? cfg.app : {});
                 
                 document.getElementById('bids_folder').value = activeCommon.bids_folder || '';
+                updateCohortDatasetDisplay(activeCommon.bids_folder || '');
+                switchBidsSourceMode(inferBidsSourceMode(activeCommon.bids_folder));
                 document.getElementById('output_folder').value = activeCommon.output_folder || '';
                 document.getElementById('tmp_folder').value = activeCommon.tmp_folder || '';
                 document.getElementById('templateflow_dir').value = activeCommon.templateflow_dir || '';
@@ -6800,6 +6838,7 @@
                     ? Object.fromEntries(Object.entries(src.environment).map(([k, v]) => [String(k), String(v)]))
                     : {},
                 monitor_jobs: src.monitor_jobs !== false,
+                max_concurrent: parseInt(src.max_concurrent, 10) || 50,
             };
         }
 
@@ -6949,12 +6988,14 @@
                     { key: 'datalad', label: 'DataLad', icon: 'database' },
                     { key: 'git', label: 'Git', icon: 'code-branch' },
                     { key: 'git_annex', label: 'Git-Annex', icon: 'archive' },
-                    { key: 'apptainer', label: 'Apptainer', icon: 'box' },
+                    { key: 'apptainer', label: 'Apptainer / Singularity', icon: 'box' },
                     { key: 'hpc_datalad_available', label: 'HPC Runner', icon: 'rocket' }
                 ];
-                
+
                 tools.forEach(tool => {
-                    const available = data[tool.key];
+                    const available = tool.key === 'apptainer'
+                        ? (data.apptainer || data.singularity)
+                        : data[tool.key];
                     const badge = document.createElement('span');
                     badge.className = `badge ${available ? 'bg-success' : 'bg-danger'}`;
                     badge.innerHTML = `<i class="fas fa-${tool.icon} me-1"></i>${tool.label}`;
@@ -7003,17 +7044,25 @@
             scheduleHpcPreflightRefresh();
         }
 
+        // Starting defaults for a SLURM cluster with a "hpc" partition (sized for a
+        // lightweight single-dataset MRIQC pilot; adjust per-cluster as needed).
+        const HPC_SETTINGS_DEFAULTS = { partition: 'hpc', time: '02:00:00', mem: '16G', cpus: 4 };
+
         function loadHpcSettingsToForm(hpc) {
-            document.getElementById('hpc_partition').value = hpc.partition || '';
-            document.getElementById('hpc_time').value = hpc.time || '';
-            document.getElementById('hpc_mem').value = hpc.mem || '';
-            document.getElementById('hpc_cpus').value = hpc.cpus || 1;
+            const hasAnySetting = !!(hpc.partition || hpc.time || hpc.mem || hpc.cpus);
+            const defaults = hasAnySetting ? {} : HPC_SETTINGS_DEFAULTS;
+            document.getElementById('hpc_partition').value = hpc.partition || defaults.partition || '';
+            document.getElementById('hpc_time').value = hpc.time || defaults.time || '';
+            document.getElementById('hpc_mem').value = hpc.mem || defaults.mem || '';
+            document.getElementById('hpc_cpus').value = hpc.cpus || defaults.cpus || 1;
             document.getElementById('hpc_job_name').value = hpc.job_name || '';
             document.getElementById('hpc_output_pattern').value = hpc.output_pattern || '';
             document.getElementById('hpc_error_pattern').value = hpc.error_pattern || '';
             document.getElementById('hpc_modules').value = (hpc.modules || []).join('\n');
             document.getElementById('hpc_environment').value = JSON.stringify(hpc.environment || {}, null, 2);
             document.getElementById('hpc_monitor_jobs').checked = hpc.monitor_jobs !== false;
+            document.getElementById('cohort_max_concurrent').value = hpc.max_concurrent || 50;
+            updateCohortDatasetDisplay();
             scheduleHpcPreflightRefresh();
         }
 
@@ -7053,6 +7102,13 @@
                 return null;
             }
 
+            const maxConcurrentRaw = (document.getElementById('cohort_max_concurrent').value || '').trim();
+            const maxConcurrent = parseInt(maxConcurrentRaw, 10);
+            if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
+                if (!silent) logHPC('Max concurrent jobs must be an integer >= 1.', true);
+                return null;
+            }
+
             return {
                 partition: partition,
                 time: timeVal,
@@ -7063,7 +7119,8 @@
                 error_pattern: (document.getElementById('hpc_error_pattern').value || '').trim(),
                 modules: modules,
                 environment: envResult.environment,
-                monitor_jobs: document.getElementById('hpc_monitor_jobs').checked
+                monitor_jobs: document.getElementById('hpc_monitor_jobs').checked,
+                max_concurrent: maxConcurrent
             };
         }
 
@@ -7109,6 +7166,7 @@
                     currentProjectConfig.hpc = hpcSettings;
                     lastProjectSavedAt = new Date().toISOString();
                     lastProjectSavePath = `projects/${lastProjectId}/project.json`;
+                    lastSavedPath = lastProjectSavePath;
                     if (loadedProjectMeta && loadedProjectMeta.id === lastProjectId) {
                         loadedProjectMeta.last_modified = lastProjectSavedAt;
                     }
@@ -7143,69 +7201,155 @@
             scheduleHpcPreflightRefresh();
         }
 
-        function toggleHPCPreview() {
+        function _requireSavedProjectForHpc(actionLabel) {
+            if (!lastProjectId) {
+                logHPC(`Load a project before ${actionLabel}.`, true);
+                return false;
+            }
+            if (hasUnsavedProjectChanges()) {
+                logHPC(`Unsaved changes detected. Save the project before ${actionLabel}.`, true);
+                return false;
+            }
+            if (!lastSavedPath) {
+                logHPC(`No saved config found. Click "Save Only" first, then ${actionLabel}.`, true);
+                return false;
+            }
+            const preflight = evaluateHpcPreflight();
+            if (!preflight.ready) {
+                const missing = preflight.blockingFailures.map((item) => item.label).join(', ');
+                logHPC(`Cannot ${actionLabel}. Fix preflight: ` + missing, true);
+                scheduleHpcPreflightRefresh();
+                return false;
+            }
+            return true;
+        }
+
+        async function _generateHpcScript() {
+            const hpcSettings = getHpcSettingsFromForm();
+            if (!hpcSettings) return null;
+
+            const payload = { config_path: lastSavedPath, hpc: hpcSettings };
+            if (lastProjectId) {
+                payload.project_id = lastProjectId;
+                payload.pipeline_id = currentPipelineId || '';
+            }
+
+            const resp = await fetch('/generate_hpc_script', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await resp.json();
+            if (!resp.ok || data.error) {
+                logHPC((data.error || 'Failed to generate SLURM script.') + (data.details ? ': ' + data.details : ''), true);
+                return null;
+            }
+            return data;
+        }
+
+        async function toggleHPCPreview() {
             const preview = document.getElementById('hpcScriptPreview');
             if (!preview) return;
 
-            if (preview.style.display === 'none') {
-                if (!lastProjectId) {
-                    logHPC('Load a project before previewing HPC script.', true);
-                    return;
-                }
-
-                const preflight = evaluateHpcPreflight();
-                if (!preflight.ready) {
-                    const missing = preflight.blockingFailures.map((item) => item.label).join(', ');
-                    logHPC('Cannot preview script. Fix preflight: ' + missing, true);
-                    scheduleHpcPreflightRefresh();
-                    return;
-                }
-
-                const hpcSettings = getHpcSettingsFromForm();
-                if (!hpcSettings) return;
-                
-                const container = currentProjectConfig?.common?.container || 'container.sif';
-                const scriptContent = generateSLURMScriptPreview(hpcSettings, container);
-                document.getElementById('hpcScriptContent').textContent = scriptContent;
-                preview.style.display = 'block';
-            } else {
+            if (preview.style.display !== 'none') {
                 preview.style.display = 'none';
+                scheduleHpcPreflightRefresh();
+                return;
             }
 
+            if (!_requireSavedProjectForHpc('previewing the SLURM script')) return;
+
+            logHPC('Generating SLURM script preview...');
+            const result = await _generateHpcScript();
+            if (!result) return;
+
+            document.getElementById('hpcScriptContent').textContent = result.script;
+            preview.style.display = 'block';
+            logHPC(`Preview generated (uses runtime config: ${result.runtime_config_path})`);
             scheduleHpcPreflightRefresh();
         }
 
-        function generateSLURMScriptPreview(hpc, container) {
-            let script = '#!/bin/bash\n';
-            script += `#SBATCH --partition=${hpc.partition || 'compute'}\n`;
-            script += `#SBATCH --time=${hpc.time || '24:00:00'}\n`;
-            script += `#SBATCH --mem=${hpc.mem || '32G'}\n`;
-            script += `#SBATCH --cpus-per-task=${hpc.cpus || 8}\n`;
-            script += `#SBATCH --job-name=${hpc.job_name || 'bids-app'}\n`;
-            if (hpc.output_pattern) script += `#SBATCH --output=${hpc.output_pattern}\n`;
-            if (hpc.error_pattern) script += `#SBATCH --error=${hpc.error_pattern}\n`;
-            script += '\n';
+        let _hpcSubmitInProgress = false;
 
-            if (hpc.modules && hpc.modules.length > 0) {
-                script += '# Load required modules\n';
-                hpc.modules.forEach(m => {
-                    script += `module load ${m}\n`;
+        async function submitHPCJob() {
+            if (_hpcSubmitInProgress) return;
+            const statusEl = document.getElementById('hpcSubmitStatus');
+            const btn = document.getElementById('hpcSubmitBtn');
+
+            if (!_requireSavedProjectForHpc('submitting a SLURM job')) return;
+
+            _hpcSubmitInProgress = true;
+            btn.disabled = true;
+            statusEl.style.display = 'block';
+            statusEl.className = 'alert alert-info py-2 px-3 small mb-3';
+            statusEl.textContent = 'Generating SLURM script...';
+            logHPC('Generating SLURM script for submission...');
+
+            try {
+                const generated = await _generateHpcScript();
+                if (!generated) {
+                    statusEl.className = 'alert alert-danger py-2 px-3 small mb-3';
+                    statusEl.textContent = 'Failed to generate SLURM script. See console output below.';
+                    return;
+                }
+
+                document.getElementById('hpcScriptContent').textContent = generated.script;
+                document.getElementById('hpcScriptPreview').style.display = 'block';
+
+                statusEl.textContent = 'Submitting to sbatch...';
+                logHPC(`Submitting ${generated.script_path} via sbatch...`);
+
+                const resp = await fetch('/submit_hpc_job', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ script_path: generated.script_path })
                 });
-                script += '\n';
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    statusEl.className = 'alert alert-danger py-2 px-3 small mb-3';
+                    statusEl.textContent = data.error || 'Submission failed.';
+                    logHPC(data.error || 'Submission failed.', true);
+                    return;
+                }
+
+                statusEl.className = 'alert alert-success py-2 px-3 small mb-3';
+                statusEl.textContent = `Submitted as SLURM job ${data.job_id}. Tracking status below...`;
+                logHPC(`Submitted batch job ${data.job_id}`);
+                _pollHpcJobStatus(data.job_id, statusEl);
+            } catch (err) {
+                statusEl.className = 'alert alert-danger py-2 px-3 small mb-3';
+                statusEl.textContent = 'Submission request failed: ' + err.message;
+                logHPC('Submission request failed: ' + err.message, true);
+            } finally {
+                _hpcSubmitInProgress = false;
+                btn.disabled = false;
+                scheduleHpcPreflightRefresh();
             }
+        }
 
-            if (hpc.environment && Object.keys(hpc.environment).length > 0) {
-                script += '# Set environment variables\n';
-                Object.entries(hpc.environment).forEach(([key, val]) => {
-                    script += `export ${key}="${val}"\n`;
-                });
-                script += '\n';
-            }
-
-            script += '# Run pipeline (example)\n';
-            script += `apptainer run ${container} /bids /out participant\n`;
-
-            return script;
+        function _pollHpcJobStatus(jobId, statusEl) {
+            const poll = async () => {
+                try {
+                    const resp = await fetch('/get_hpc_job_status', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ job_ids: [String(jobId)] })
+                    });
+                    const data = await resp.json();
+                    const job = (data.jobs || [])[0];
+                    if (!job) {
+                        statusEl.textContent = `Job ${jobId} is no longer in the SLURM queue (completed, failed, or cancelled). Check the output log.`;
+                        logHPC(`Job ${jobId} left the queue.`);
+                        return;
+                    }
+                    statusEl.textContent = `Job ${jobId} status: ${job.status} (running time: ${job.time})`;
+                    logHPC(`Job ${jobId} status: ${job.status}`);
+                    setTimeout(poll, 15000);
+                } catch (err) {
+                    logHPC(`Status check failed for job ${jobId}: ` + err.message, true);
+                }
+            };
+            poll();
         }
 
         // ── Run-mode toggle ───────────────────────────────────────────────────────
@@ -7257,6 +7401,152 @@
         let _cohortPollTimer = null;
         let _cohortLastLogLen = 0;
 
+        let _remoteStudiesLoaded = false;
+        let _bidsSourceMode = 'local';
+
+        function switchBidsSourceMode(mode) {
+            _bidsSourceMode = mode === 'remote' ? 'remote' : 'local';
+
+            const localBtn = document.getElementById('bidsSourceLocalBtn');
+            const remoteBtn = document.getElementById('bidsSourceRemoteBtn');
+            const remoteRow = document.getElementById('remoteDatasetRow');
+            const remoteHint = document.getElementById('bidsSourceRemoteHint');
+            const bidsInput = document.getElementById('bids_folder');
+            const browseBtn = document.getElementById('bids_folder_browse_btn');
+
+            const isRemote = _bidsSourceMode === 'remote';
+            localBtn.className = isRemote ? 'btn btn-outline-primary btn-sm px-3' : 'btn btn-primary btn-sm px-3';
+            remoteBtn.className = isRemote ? 'btn btn-primary btn-sm px-3' : 'btn btn-outline-primary btn-sm px-3';
+            remoteRow.style.display = isRemote ? '' : 'none';
+            remoteHint.style.display = isRemote ? '' : 'none';
+            bidsInput.readOnly = isRemote;
+            browseBtn.style.display = isRemote ? 'none' : '';
+
+            if (isRemote && !_remoteStudiesLoaded) {
+                loadRemoteStudies();
+            }
+        }
+
+        // Best-effort default: a bids_folder already under the lab's local clone
+        // root means this project's data came from the remote source; otherwise
+        // assume a plain local folder. There's no separate persisted "mode" field.
+        function inferBidsSourceMode(bidsFolder) {
+            return (bidsFolder || '').startsWith('/usr/people/mrilabgraz/data/') ? 'remote' : 'local';
+        }
+
+        async function loadRemoteStudies() {
+            const select = document.getElementById('remote_dataset_study');
+            const statusBox = document.getElementById('remoteDatasetStatus');
+            select.innerHTML = '<option value="">Loading studies...</option>';
+
+            try {
+                const resp = await fetch('/list_remote_studies');
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    select.innerHTML = '<option value="">Failed to load studies</option>';
+                    statusBox.style.display = 'block';
+                    statusBox.className = 'alert alert-danger py-2 px-3 small mt-3 mb-2';
+                    statusBox.textContent = data.error || 'Failed to load study list.';
+                    return;
+                }
+                _remoteStudiesLoaded = true;
+                const studies = data.studies || [];
+                select.innerHTML = studies.length
+                    ? '<option value="">Select a study...</option>' + studies.map((s) => `<option value="${s}">${s}</option>`).join('')
+                    : '<option value="">No studies found</option>';
+                updateRemoteCloneDirPreview();
+            } catch (err) {
+                select.innerHTML = '<option value="">Failed to load studies</option>';
+                statusBox.style.display = 'block';
+                statusBox.className = 'alert alert-danger py-2 px-3 small mt-3 mb-2';
+                statusBox.textContent = 'Request failed: ' + err;
+            }
+        }
+
+        function updateRemoteCloneDirPreview() {
+            const study = document.getElementById('remote_dataset_study').value;
+            document.getElementById('remote_dataset_clone_dir').value = study
+                ? `/usr/people/mrilabgraz/data/${study}`
+                : '';
+        }
+
+        let _remoteDatasetPollTimer = null;
+
+        async function connectRemoteDataset() {
+            const study = document.getElementById('remote_dataset_study').value;
+            const target = document.getElementById('remote_dataset_clone_dir').value.trim();
+            const statusBox = document.getElementById('remoteDatasetStatus');
+            const logBox = document.getElementById('remoteDatasetLog');
+            const btn = document.getElementById('remoteDatasetConnectBtn');
+
+            if (!study) { alert('Select a study to clone.'); return; }
+
+            btn.disabled = true;
+            statusBox.style.display = 'block';
+            statusBox.className = 'alert alert-info py-2 px-3 small mt-3 mb-2';
+            statusBox.textContent = 'Connecting...';
+            logBox.style.display = 'block';
+            logBox.textContent = '';
+
+            try {
+                const resp = await fetch('/connect_remote_dataset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ study: study })
+                });
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    statusBox.className = 'alert alert-danger py-2 px-3 small mt-3 mb-2';
+                    statusBox.textContent = data.error || 'Failed to start connection.';
+                    btn.disabled = false;
+                    return;
+                }
+                pollRemoteDatasetStatus(data.clone_id, target);
+            } catch (err) {
+                statusBox.className = 'alert alert-danger py-2 px-3 small mt-3 mb-2';
+                statusBox.textContent = 'Request failed: ' + err;
+                btn.disabled = false;
+            }
+        }
+
+        function pollRemoteDatasetStatus(cloneId, target) {
+            const statusBox = document.getElementById('remoteDatasetStatus');
+            const logBox = document.getElementById('remoteDatasetLog');
+            const btn = document.getElementById('remoteDatasetConnectBtn');
+
+            if (_remoteDatasetPollTimer) clearInterval(_remoteDatasetPollTimer);
+            _remoteDatasetPollTimer = setInterval(async () => {
+                try {
+                    const resp = await fetch(`/connect_remote_dataset_status?clone_id=${encodeURIComponent(cloneId)}`);
+                    const data = await resp.json();
+                    if (data.log_tail) logBox.textContent = data.log_tail;
+                    logBox.scrollTop = logBox.scrollHeight;
+
+                    if (data.status === 'running') {
+                        statusBox.className = 'alert alert-info py-2 px-3 small mt-3 mb-2';
+                        statusBox.textContent = 'Cloning dataset over SSH (metadata only)...';
+                    } else if (data.status === 'completed') {
+                        clearInterval(_remoteDatasetPollTimer);
+                        statusBox.className = 'alert alert-success py-2 px-3 small mt-3 mb-2';
+                        statusBox.textContent = `Connected — using ${target} as BIDS Dataset Folder.`;
+                        document.getElementById('bids_folder').value = target;
+                        updateCohortDatasetDisplay();
+                        btn.disabled = false;
+                    } else if (data.status === 'failed') {
+                        clearInterval(_remoteDatasetPollTimer);
+                        statusBox.className = 'alert alert-danger py-2 px-3 small mt-3 mb-2';
+                        statusBox.textContent = data.error || 'Connection failed. See log below.';
+                        btn.disabled = false;
+                    }
+                } catch (err) {
+                    clearInterval(_remoteDatasetPollTimer);
+                    statusBox.className = 'alert alert-danger py-2 px-3 small mt-3 mb-2';
+                    statusBox.textContent = 'Status check failed: ' + err;
+                    btn.disabled = false;
+                }
+            }, 2000);
+        }
+
         function toggleCohortPanel() {
             const body = document.getElementById('cohortPanelBody');
             const icon = document.getElementById('cohortPanelIcon');
@@ -7265,71 +7555,45 @@
             icon.style.transform = open ? '' : 'rotate(180deg)';
         }
 
-        function toggleCohortEditor() {
-            const body = document.getElementById('cohortEditorBody');
-            const icon = document.getElementById('cohortEditorIcon');
-            const open = body.style.display !== 'none';
-            body.style.display = open ? 'none' : 'block';
-            icon.style.transform = open ? '' : 'rotate(180deg)';
+        function _basenameOf(path) {
+            const trimmed = (path || '').replace(/\/+$/, '');
+            const parts = trimmed.split('/');
+            return parts[parts.length - 1] || '';
         }
 
-        function _cohortEditorStatus(msg, isError = false) {
-            const el = document.getElementById('cohortEditorStatus');
-            el.textContent = msg;
-            el.className = isError ? 'small text-danger' : 'small text-success';
+        function updateCohortDatasetDisplay(bidsFolderOverride) {
+            const display = document.getElementById('cohortDatasetIdDisplay');
+            if (!display) return;
+            const bidsFolder = bidsFolderOverride !== undefined
+                ? bidsFolderOverride
+                : (document.getElementById('bids_folder')?.value || '');
+            display.value = bidsFolder ? _basenameOf(bidsFolder) : '(load a project with a BIDS Dataset Folder set)';
         }
 
-        async function loadCohortConfig() {
-            const path = document.getElementById('cohortConfigPath').value.trim();
-            const url = '/cohort/load_config' + (path ? `?path=${encodeURIComponent(path)}` : '');
+        async function previewCohortConfig() {
+            const pre = document.getElementById('cohortConfigPreview');
+            if (!_requireSavedProjectForHpc('previewing the cohort config')) return;
+
+            const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
+            const params = new URLSearchParams({
+                project_id: lastProjectId,
+                pipeline_id: currentPipelineId || '',
+                max_concurrent: maxConcurrent,
+            });
+
             try {
-                const r = await fetch(url);
-                const data = await r.json();
-                if (!r.ok || data.error) { _cohortEditorStatus(data.error || 'Load failed', true); return; }
-                // Pretty-print
-                const editor = document.getElementById('cohortConfigEditor');
-                editor.value = JSON.stringify(JSON.parse(data.content), null, 2);
-                if (!document.getElementById('cohortConfigPath').value.trim())
-                    document.getElementById('cohortConfigPath').value = data.path;
-                // Open editor panel
-                document.getElementById('cohortEditorBody').style.display = 'block';
-                document.getElementById('cohortEditorIcon').style.transform = 'rotate(180deg)';
-                _cohortEditorStatus('Loaded from disk');
-            } catch (e) {
-                _cohortEditorStatus('Network error', true);
-            }
-        }
-
-        function validateCohortConfig() {
-            const content = document.getElementById('cohortConfigEditor').value.trim();
-            if (!content) { _cohortEditorStatus('Editor is empty', true); return false; }
-            try {
-                JSON.parse(content);
-                _cohortEditorStatus('JSON is valid ✓');
-                return true;
-            } catch (e) {
-                _cohortEditorStatus(`Invalid JSON: ${e.message}`, true);
-                return false;
-            }
-        }
-
-        async function saveCohortConfig() {
-            if (!validateCohortConfig()) return;
-            const path = document.getElementById('cohortConfigPath').value.trim();
-            if (!path) { _cohortEditorStatus('Set a config file path first', true); return; }
-            const content = document.getElementById('cohortConfigEditor').value;
-            try {
-                const r = await fetch('/cohort/save_config', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ path, content }),
-                });
-                const data = await r.json();
-                if (!r.ok || data.error) { _cohortEditorStatus(data.error || 'Save failed', true); return; }
-                _cohortEditorStatus('Saved ✓');
-                logHPC(`Config saved: ${data.path}`);
-            } catch (e) {
-                _cohortEditorStatus('Network error', true);
+                const resp = await fetch(`/cohort/preview_config?${params}`);
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    pre.style.display = 'block';
+                    pre.textContent = 'Error: ' + (data.error || 'Failed to derive config.');
+                    return;
+                }
+                pre.style.display = 'block';
+                pre.textContent = JSON.stringify(data.config, null, 2);
+            } catch (err) {
+                pre.style.display = 'block';
+                pre.textContent = 'Request failed: ' + err.message;
             }
         }
 
@@ -7363,9 +7627,10 @@
         }
 
         async function runCohort(command) {
-            const configPath = document.getElementById('cohortConfigPath').value.trim();
-            const datasets   = document.getElementById('cohortDatasets').value.trim();
-            const dryRun     = document.getElementById('cohortDryRun').checked;
+            if (!_requireSavedProjectForHpc(`running cohort ${command}`)) return;
+
+            const dryRun = document.getElementById('cohortDryRun').checked;
+            const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
 
             _cohortLastLogLen = 0;
             _cohortSetBusy(true, command);
@@ -7376,8 +7641,13 @@
                 resp = await fetch('/cohort/run', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ command, config_path: configPath || null,
-                                          datasets, dry_run: dryRun }),
+                    body: JSON.stringify({
+                        command,
+                        project_id: lastProjectId,
+                        pipeline_id: currentPipelineId || '',
+                        dry_run: dryRun,
+                        max_concurrent: maxConcurrent,
+                    }),
                 });
             } catch (err) {
                 logHPC(`Network error: ${err}`, true);
