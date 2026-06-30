@@ -66,12 +66,15 @@ class ProjectStore:
         default_tmp_folder = str(
             machine_defaults.get("default_tmp_folder") or ""
         ).strip()
+        default_templateflow_dir = str(
+            machine_defaults.get("default_templateflow_dir") or ""
+        ).strip()
 
         default_common = {
             "bids_folder": "",
             "output_folder": "",
             "tmp_folder": default_tmp_folder,
-            "templateflow_dir": "",
+            "templateflow_dir": default_templateflow_dir,
             "pipeline_output_root": "",
             "pipeline_app_name": "",
             "pipeline_version": "",

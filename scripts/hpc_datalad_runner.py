@@ -214,6 +214,14 @@ set -e
 set -u
 trap 'echo "FAILED at line $LINENO (task $SLURM_ARRAY_TASK_ID, sub-${SUBJECT_LABEL})" >&2' ERR
 
+# Pre-flight: verify user is resolvable (apptainer requires getpwuid to succeed)
+if ! getent passwd "$(id -u)" > /dev/null 2>&1; then
+    echo "FATAL: Cannot resolve user UID $(id -u) on $(hostname)" >&2
+    echo "       Apptainer will fail with: Couldn't determine user account information" >&2
+    echo "       HPC admin must configure LDAP/sssd on compute nodes so getent passwd $(id -u) works" >&2
+    exit 1
+fi
+
 if command -v apptainer &> /dev/null; then
     APPTAINER_BIN=apptainer
 elif command -v singularity &> /dev/null; then

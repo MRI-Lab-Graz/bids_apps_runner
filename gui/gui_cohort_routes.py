@@ -21,12 +21,19 @@ def _run_cohort_async(job_id: str, cmd: list[str], log_file: Path) -> None:
         _cohort_jobs[job_id]["status"] = "running"
 
     try:
+        import os as _os
+        env = _os.environ.copy()
+        # Ensure ~/.local/bin is on PATH so datalad-slurm extension is visible
+        local_bin = str(Path.home() / ".local" / "bin")
+        if local_bin not in env.get("PATH", ""):
+            env["PATH"] = local_bin + ":" + env.get("PATH", "")
         with open(log_file, "w") as lf:
             process = subprocess.Popen(
                 cmd,
                 stdout=lf,
                 stderr=subprocess.STDOUT,
                 text=True,
+                env=env,
             )
         with _cohort_jobs_lock:
             _cohort_jobs[job_id]["pid"] = process.pid

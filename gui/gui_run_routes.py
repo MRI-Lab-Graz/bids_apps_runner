@@ -954,6 +954,24 @@ def register_run_routes(
                 )
                 lines.append("")
 
+            # When the BIDS dataset is a DataLad remote clone, verify that the
+            # compute node can reach the SSH server before starting.  DataLad
+            # fetches subject data on demand via SSH; a silent connectivity
+            # failure would only surface as a cryptic mid-run error.
+            from gui.gui_utility_routes import (
+                LOCAL_DATASET_BASE_DIR,
+                REMOTE_DATASET_SSH_HOST,
+            )
+            if bids_folder and str(bids_folder).startswith(LOCAL_DATASET_BASE_DIR):
+                lines += [
+                    "# Verify DataLad SSH connectivity before starting",
+                    f'ssh -o BatchMode=yes -o ConnectTimeout=10 {REMOTE_DATASET_SSH_HOST} exit || {{',
+                    f'    echo "ERROR: Cannot reach DataLad server ({REMOTE_DATASET_SSH_HOST}) via SSH from this compute node." >&2',
+                    '    exit 1',
+                    '}',
+                    "",
+                ]
+
             lines.append(f'cd "{work_dir}"')
             run_script = base_dir / "scripts" / "run_bids_apps.py"
             # --local forces prism_runner's local execution path even though this
@@ -1065,27 +1083,100 @@ def register_run_routes(
         if not job_ids:
             return jsonify({"error": "job_ids required"}), 400
 
+        def _sacct_final(job_id):
+            """Query sacct for final state of a completed/failed job."""
+            try:
+                r = subprocess.run(
+                    ["sacct", "-j", job_id, "--noheader", "--parsable2",
+                     "--format=JobID,State,ExitCode,Elapsed,Start,End"],
+                    capture_output=True, text=True, check=False, timeout=10,
+                )
+                for line in r.stdout.strip().splitlines():
+                    parts = line.split("|")
+                    # Skip sub-steps (jobid.batch, jobid.extern)
+                    if len(parts) >= 6 and "." not in parts[0]:
+                        return {
+                            "job_id": parts[0],
+                            "status": parts[1],
+                            "exit_code": parts[2],
+                            "elapsed": parts[3],
+                            "start": parts[4],
+                            "end": parts[5],
+                            "final": True,
+                        }
+            except Exception:
+                pass
+            return None
+
+        def _log_tail(job_id, log_pattern, n=40):
+            """Try to read the last n lines of the SLURM output log."""
+            import glob as _glob
+            pattern = log_pattern.replace("%j", job_id).replace("%J", job_id)
+            matches = _glob.glob(pattern)
+            if not matches:
+                return None, None
+            log_path = sorted(matches)[-1]
+            try:
+                with open(log_path, "r", errors="replace") as fh:
+                    lines = fh.readlines()
+                return log_path, "".join(lines[-n:])
+            except Exception:
+                return log_path, None
+
         try:
             cmd = ["squeue", "-j", ",".join(job_ids), "--format=%i,%T,%M,%e"]
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
 
-            jobs = []
+            active = {}
             for line in result.stdout.strip().split("\n")[1:]:
                 if line:
                     parts = line.split(",")
                     if len(parts) >= 4:
-                        jobs.append(
-                            {
-                                "job_id": parts[0],
-                                "status": parts[1],
-                                "time": parts[2],
-                                "end_time": parts[3] if len(parts) > 3 else "",
-                            }
-                        )
+                        active[parts[0]] = {
+                            "job_id": parts[0],
+                            "status": parts[1],
+                            "time": parts[2],
+                            "end_time": parts[3] if len(parts) > 3 else "",
+                            "final": False,
+                        }
+
+            jobs = []
+            for job_id in job_ids:
+                if job_id in active:
+                    jobs.append(active[job_id])
+                else:
+                    # Job left squeue — fetch final state from sacct
+                    final = _sacct_final(job_id)
+                    if final:
+                        jobs.append(final)
 
             return jsonify({"jobs": jobs})
         except FileNotFoundError:
             return jsonify({"error": "squeue not found - SLURM not available"}), 400
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @app.route("/get_hpc_job_log", methods=["POST"])
+    def get_hpc_job_log():
+        """Return the tail of a SLURM job's output log."""
+        data = request.get_json(silent=True) or {}
+        job_id = str(data.get("job_id") or "").strip()
+        log_pattern = str(data.get("log_pattern") or "").strip()
+        n = min(int(data.get("lines") or 60), 200)
+
+        if not job_id or not log_pattern:
+            return jsonify({"error": "job_id and log_pattern required"}), 400
+
+        import glob as _glob
+        pattern = log_pattern.replace("%j", job_id).replace("%J", job_id)
+        matches = _glob.glob(pattern)
+        if not matches:
+            return jsonify({"error": f"No log file found matching {pattern}"}), 404
+        log_path = sorted(matches)[-1]
+        try:
+            with open(log_path, "r", errors="replace") as fh:
+                lines = fh.readlines()
+            return jsonify({"log_path": log_path, "tail": "".join(lines[-n:]), "total_lines": len(lines)})
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 

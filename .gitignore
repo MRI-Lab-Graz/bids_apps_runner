@@ -18,6 +18,9 @@ missing_qsiprep.json
 *.sif
 check_repo/
 
+# Generated HPC scripts (live in the project folder, not the repo)
+scripts/generated/
+
 # Virtual environments
 .appsrunner/
 

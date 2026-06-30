@@ -6,11 +6,27 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from flask import jsonify, render_template, request
+
+# In-memory registry of async TemplateFlow download jobs
+_tf_jobs: dict[str, dict] = {}
+_tf_jobs_lock = threading.Lock()
+
+CURATED_TEMPLATES = [
+    "MNI152NLin2009cAsym",
+    "MNI152NLin6Asym",
+    "MNI152Lin",
+    "fsaverage",
+    "fsLR",
+    "OASIS30ANTs",
+    "MNIInfant",
+]
 
 
 def register_misc_routes(
@@ -511,6 +527,85 @@ def register_misc_routes(
             )
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
+
+    @app.route("/templateflow_curated_list", methods=["GET"])
+    def templateflow_curated_list():
+        """Return the lab's curated template list."""
+        return jsonify({"templates": CURATED_TEMPLATES})
+
+    @app.route("/templateflow_download", methods=["POST"])
+    def templateflow_download():
+        """Start an async TemplateFlow template download.
+
+        Request body:
+          tf_home   – TEMPLATEFLOW_HOME directory (must exist)
+          templates – list of template names to fetch
+
+        Response:
+          job_id – poll /templateflow_download_status?job_id=<id> for progress
+        """
+        data = request.get_json(silent=True) or {}
+        tf_home = (data.get("tf_home") or "").strip()
+        templates = [str(t).strip() for t in (data.get("templates") or []) if str(t).strip()]
+
+        if not tf_home:
+            return jsonify({"error": "tf_home is required"}), 400
+        if not templates:
+            return jsonify({"error": "No templates selected"}), 400
+
+        Path(tf_home).mkdir(parents=True, exist_ok=True)
+
+        job_id = str(uuid.uuid4())
+        with _tf_jobs_lock:
+            _tf_jobs[job_id] = {"status": "running", "log": [], "error": ""}
+
+        def _run():
+            env = os.environ.copy()
+            env["TEMPLATEFLOW_HOME"] = tf_home
+            log_lines = []
+            try:
+                code = (
+                    "import templateflow.api as tf\n"
+                    f"tf.get({templates!r}, raise_empty=False)\n"
+                    "print('Download complete.')\n"
+                )
+                proc = subprocess.Popen(
+                    [sys.executable, "-c", code],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                )
+                for line in proc.stdout:
+                    log_lines.append(line.rstrip())
+                    with _tf_jobs_lock:
+                        _tf_jobs[job_id]["log"] = list(log_lines)
+                proc.wait()
+                status = "completed" if proc.returncode == 0 else "failed"
+                error = "" if proc.returncode == 0 else f"Process exited with code {proc.returncode}"
+            except Exception as exc:
+                status = "failed"
+                error = str(exc)
+            with _tf_jobs_lock:
+                _tf_jobs[job_id]["status"] = status
+                _tf_jobs[job_id]["error"] = error
+                _tf_jobs[job_id]["log"] = log_lines
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({"job_id": job_id})
+
+    @app.route("/templateflow_download_status", methods=["GET"])
+    def templateflow_download_status():
+        job_id = request.args.get("job_id", "")
+        with _tf_jobs_lock:
+            job = _tf_jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Unknown job_id"}), 404
+        return jsonify({
+            "status": job["status"],
+            "log_tail": "\n".join(job["log"][-100:]),
+            "error": job["error"],
+        })
 
     @app.route("/get_templateflow_templates", methods=["POST"])
     def get_templateflow_templates():

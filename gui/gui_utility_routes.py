@@ -482,6 +482,39 @@ def register_utility_routes(
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
+    @app.route("/check_datalad_ssh", methods=["GET"])
+    def check_datalad_ssh():
+        """Quick SSH reachability probe for the lab's DataLad server.
+
+        Returns {"ok": true} or {"ok": false, "error": "..."} — always 200
+        so the client can distinguish network failure from server error.
+        """
+        try:
+            result = subprocess.run(
+                [
+                    "ssh",
+                    "-o", "BatchMode=yes",
+                    "-o", "ConnectTimeout=5",
+                    REMOTE_DATASET_SSH_HOST,
+                    "exit",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return jsonify({"ok": True})
+            return jsonify({
+                "ok": False,
+                "error": result.stderr.strip() or "SSH connection failed.",
+            })
+        except subprocess.TimeoutExpired:
+            return jsonify({"ok": False, "error": "Timed out connecting to DataLad server."})
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "ssh not found on this host."})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+
     @app.route("/connect_remote_dataset", methods=["POST"])
     def connect_remote_dataset():
         """Clone (metadata only) a study from the lab's DataLad server, so it

@@ -13,6 +13,9 @@ psutil>=5.8.0
 # For DataLad integration (HPC version)
 # Note: DataLad requires system-level git and git-annex
 datalad>=0.16.0; sys_platform!="win32"
+# datalad-slurm extension (not on PyPI — install via):
+#   pip install git+https://github.com/knuedd/datalad-slurm.git
+# Already bundled in the venv; see scripts/install.sh for setup notes.
 
 # For enhanced logging with colors
 colorlog>=6.0.0

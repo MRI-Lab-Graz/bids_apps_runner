@@ -401,6 +401,14 @@
                                     <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('machine_settings_default_tmp_folder')">...</button>
                                 </div>
                             </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Default TemplateFlow Folder</label>
+                                <div class="input-group">
+                                    <input type="text" id="machine_settings_default_templateflow_dir" class="form-control" placeholder="/path/to/templateflow">
+                                    <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('machine_settings_default_templateflow_dir')">...</button>
+                                </div>
+                                <div class="form-text">Pre-fills the Templateflow field for every new project.</div>
+                            </div>
                         </div>
 
                         <div class="row">
@@ -453,6 +461,9 @@
                         </div>
                         <button type="button" class="btn btn-sm btn-outline-primary" id="createPipelinePresetBtn" onclick="createPipelinePreset()">
                             <i class="fas fa-plus me-1"></i>New
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="renamePipelinePresetBtn" onclick="renameActivePipelinePreset()">
+                            <i class="fas fa-pen me-1"></i>Rename
                         </button>
                         <button type="button" class="btn btn-sm btn-outline-danger" id="deletePipelinePresetBtn" onclick="deleteActivePipelinePreset()">
                             <i class="fas fa-trash me-1"></i>Delete
@@ -526,15 +537,8 @@
                         </div>
                     </div>
 
-                    <div class="row">
-                        <div class="col-md-6 mb-4">
-                            <label class="form-label" title="Local directory for pre-downloaded TemplateFlow resources (Optional)">Templateflow (Optional)</label>
-                            <div class="input-group">
-                                <input type="text" id="templateflow_dir" class="form-control">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('templateflow_dir')">...</button>
-                                <button type="button" class="btn btn-primary" onclick="openTemplateFlowPicker()"><i class="fas fa-search me-1"></i> Scan</button>
-                            </div>
-                        </div>
+                    <!-- templateflow_dir is a machine-level setting (set in Machine Settings) -->
+                    <input type="hidden" id="templateflow_dir">
 
                     <div class="row">
                         <div class="col-md-6 mb-4">
@@ -569,13 +573,12 @@
                     </div>
 
                     <div class="row">
-                        <div class="col-md-6 mb-4">
-                            <label id="bids_folder_label" class="form-label" title="Path to raw BIDS data (must contain dataset_description.json)">BIDS Dataset Folder</label>
+                        <div class="col-md-6 mb-4" id="bidsFolderCol">
+                            <label id="bids_folder_label" class="form-label" title="Path to raw BIDS data (must contain dataset_description.json)"><span id="bids_folder_label_text">BIDS Dataset Folder</span> <span class="text-muted fw-normal small">(read-only source)</span></label>
                             <div class="input-group">
-                                <input type="text" id="bids_folder" class="form-control" placeholder="/path/to/rawdata" oninput="updateCohortDatasetDisplay()">
+                                <input type="text" id="bids_folder" class="form-control" placeholder="/path/to/rawdata" readonly oninput="updateCohortDatasetDisplay()">
                                 <button type="button" id="bids_folder_browse_btn" class="btn btn-outline-secondary" onclick="openBrowser('bids_folder')">...</button>
                             </div>
-                            <div id="bidsSourceRemoteHint" class="form-text" style="display:none;">Set automatically from the Remote DataLad Source panel below.</div>
                         </div>
                         <div class="col-md-6 mb-4">
                             <label class="form-label" title="Where derivative results will be saved">Output Folder</label>
@@ -1348,6 +1351,20 @@
                                 </div>
 
                                 <div id="hpcSubmitStatus" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;"></div>
+
+                                <!-- Job output log viewer -->
+                                <div id="hpcJobLogPanel" style="display:none;" class="mt-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <span class="text-muted small fw-bold">JOB OUTPUT LOG</span>
+                                        <div class="d-flex gap-2 align-items-center">
+                                            <span id="hpcJobLogPath" class="text-muted" style="font-size:0.75rem;"></span>
+                                            <button class="btn btn-sm btn-outline-secondary" onclick="refreshHpcJobLog()">
+                                                <i class="fas fa-sync me-1"></i>Refresh
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <pre id="hpcJobLogOutput" class="utility-log" style="min-height:120px; max-height:300px; overflow-y:auto; font-size:0.8rem;"></pre>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1540,6 +1557,52 @@
                     <pre id="buildOutput" class="utility-log mt-3"></pre>
                 </div>
             </div>
+        <!-- TemplateFlow Download Panel -->
+        <div class="card mt-4" id="templateflowDownloadCard">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="fas fa-download me-2"></i>TemplateFlow Templates</span>
+                <span id="tfDownloadBadge" class="badge bg-secondary" style="display:none;"></span>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    Pre-download standard space templates into your <strong>TemplateFlow</strong> folder.
+                    Required by fMRIPrep, QSIPrep, MRIQC and others — downloading ahead of time avoids
+                    network access during runs (including SLURM jobs on compute nodes).
+                </p>
+
+                <div class="row mb-3 align-items-end">
+                    <div class="col-md-8">
+                        <label class="form-label">TemplateFlow Home</label>
+                        <div class="input-group">
+                            <input type="text" id="tf_download_home" class="form-control" placeholder="Set in project settings or enter path">
+                            <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('tf_download_home')">...</button>
+                        </div>
+                        <div class="form-text">Reads from the active project's Templateflow field, or enter a path manually.</div>
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="tfScanInstalled()">
+                            <i class="fas fa-search me-1"></i>Scan installed
+                        </button>
+                    </div>
+                </div>
+
+                <label class="form-label fw-semibold">Templates to download</label>
+                <div id="tfTemplateChecklist" class="row row-cols-2 row-cols-md-3 g-2 mb-3">
+                    <!-- populated by JS -->
+                </div>
+
+                <div class="d-flex gap-2 mb-3">
+                    <button type="button" class="btn btn-primary" id="tfDownloadBtn" onclick="startTfDownload()">
+                        <i class="fas fa-download me-1"></i>Download Selected
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="tfSelectAll(true)">All</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="tfSelectAll(false)">None</button>
+                </div>
+
+                <div id="tfDownloadStatus" class="utility-status" style="display:none;"></div>
+                <pre id="tfDownloadLog" class="utility-log mt-3" style="display:none; max-height:300px; overflow-y:auto;"></pre>
+            </div>
+        </div>
         </div>
     </div>
 
@@ -1719,9 +1782,9 @@
         function updateQsireconUI() {
             const isQR = isQsireconContainer();
             document.getElementById('qsireconSection').style.display = isQR ? '' : 'none';
-            const bidsLabel = document.getElementById('bids_folder_label');
-            if (bidsLabel) {
-                bidsLabel.textContent = isQR
+            const bidsLabelText = document.getElementById('bids_folder_label_text');
+            if (bidsLabelText) {
+                bidsLabelText.textContent = isQR
                     ? 'QSIPrep Derivatives Folder (qsirecon input)'
                     : 'BIDS Dataset Folder';
             }
@@ -2013,6 +2076,11 @@
                     ? 'At least one pipeline preset is required.'
                     : 'Delete the active pipeline preset.';
             }
+            const renameBtn = document.getElementById('renamePipelinePresetBtn');
+            if (renameBtn) {
+                renameBtn.disabled = pipelineIds.length === 0;
+                renameBtn.title = 'Rename the active pipeline preset.';
+            }
         }
 
         function syncCurrentProjectConfigWithPipelines() {
@@ -2279,6 +2347,28 @@
             showStatus(`Created pipeline preset: ${cleanName}`);
         }
 
+        function renameActivePipelinePreset() {
+            if (!lastProjectId) {
+                showStatus('Load a project before renaming pipeline presets.', true);
+                return;
+            }
+            const entry = currentProjectPipelines[currentPipelineId];
+            if (!entry) return;
+
+            const currentName = entry.name || currentPipelineId;
+            const newName = prompt('Rename pipeline preset:', currentName);
+            if (newName === null) return;
+
+            const cleanName = String(newName || '').trim();
+            if (!cleanName || cleanName === currentName) return;
+
+            entry.name = cleanName;
+            renderPipelinePresetSelector();
+            syncCurrentProjectConfigWithPipelines();
+            setProjectDirty(true);
+            showStatus(`Pipeline preset renamed to: ${cleanName}`);
+        }
+
         async function deleteActivePipelinePreset() {
             if (!lastProjectId) {
                 showStatus('Load a project before deleting pipeline presets.', true);
@@ -2407,6 +2497,7 @@
             document.getElementById('machine_settings_apptainer_folder').value = effective.default_apptainer_folder || '';
             document.getElementById('machine_settings_apptainer_container').value = effective.default_apptainer_container || '';
             document.getElementById('machine_settings_default_tmp_folder').value = effective.default_tmp_folder || '';
+            document.getElementById('machine_settings_default_templateflow_dir').value = effective.default_templateflow_dir || '';
             document.getElementById('machine_settings_docker_repo').value = effective.default_docker_repo || '';
             document.getElementById('machine_settings_docker_tag').value = effective.default_docker_tag || 'latest';
             document.getElementById('machine_settings_default_jobs').value = effective.default_jobs || 1;
@@ -2446,6 +2537,7 @@
                 default_apptainer_folder: (document.getElementById('machine_settings_apptainer_folder').value || '').trim(),
                 default_apptainer_container: (document.getElementById('machine_settings_apptainer_container').value || '').trim(),
                 default_tmp_folder: (document.getElementById('machine_settings_default_tmp_folder').value || '').trim(),
+                default_templateflow_dir: (document.getElementById('machine_settings_default_templateflow_dir').value || '').trim(),
                 default_docker_repo: (document.getElementById('machine_settings_docker_repo').value || '').trim(),
                 default_docker_tag: (document.getElementById('machine_settings_docker_tag').value || 'latest').trim() || 'latest',
                 default_jobs: parseInt(document.getElementById('machine_settings_default_jobs').value, 10) || 1,
@@ -2516,6 +2608,7 @@
             }
 
             const defaultTmpFolder = (effective.default_tmp_folder || '').trim();
+            const defaultTemplateflowDir = (effective.default_templateflow_dir || '').trim();
 
             if (!fillOnlyEmpty || !(jobsEl.value || '').trim()) {
                 jobsEl.value = String(effective.default_jobs || 1);
@@ -2523,6 +2616,11 @@
 
             if (!fillOnlyEmpty || !(tmpFolderEl.value || '').trim()) {
                 tmpFolderEl.value = defaultTmpFolder;
+            }
+
+            const templateflowEl = document.getElementById('templateflow_dir');
+            if (templateflowEl && defaultTemplateflowDir) {
+                templateflowEl.value = defaultTemplateflowDir;
             }
 
             const hasConfiguredContainer = !!getConfiguredContainerValue();
@@ -5055,6 +5153,7 @@
                         document.getElementById('build_tmp_dir').value = document.getElementById('tmp_folder').value;
                     }
                     scheduleBuildPreflightRefresh();
+                    initTfDownloadPanel();
                 }
             }
             document.querySelectorAll('.tab-button').forEach(btn => {
@@ -6754,6 +6853,29 @@
         let hpcPreflightUpdateScheduled = false;
         let hpcSaveInProgress = false;
 
+        // Cached result of the async DataLad SSH reachability check.
+        // null = not yet checked, true/false = last result.
+        let _datadadSSHCheck = { state: null, error: '', checking: false };
+
+        async function triggerDataladSSHCheck() {
+            if (_datadadSSHCheck.checking) return;
+            _datadadSSHCheck.checking = true;
+            _datadadSSHCheck.state = null;
+            scheduleHpcPreflightRefresh();
+            try {
+                const resp = await fetch('/check_datalad_ssh');
+                const data = await resp.json();
+                _datadadSSHCheck.state = !!data.ok;
+                _datadadSSHCheck.error = data.error || '';
+            } catch (err) {
+                _datadadSSHCheck.state = false;
+                _datadadSSHCheck.error = 'Request failed: ' + err;
+            } finally {
+                _datadadSSHCheck.checking = false;
+                scheduleHpcPreflightRefresh();
+            }
+        }
+
         function updateHpcProjectScopeNotice() {
             const notice = document.getElementById('hpcProjectScopeNotice');
             if (!notice) return;
@@ -6863,6 +6985,17 @@
             const envResult = _parseHpcEnvironmentInput(document.getElementById('hpc_environment').value || '');
             const dirty = _isHpcDirty();
 
+            const isRemoteBids = _bidsSourceMode === 'remote';
+            const sshCheckLabel = _datadadSSHCheck.checking
+                ? 'DataLad SSH reachable (checking...)'
+                : 'DataLad SSH reachable';
+            const sshCheckOk = isRemoteBids
+                ? (_datadadSSHCheck.state === true)
+                : true;
+            const sshCheckNote = isRemoteBids && !_datadadSSHCheck.checking && _datadadSSHCheck.state === false
+                ? _datadadSSHCheck.error || 'Cannot reach DataLad server'
+                : '';
+
             const checks = [
                 { label: 'Project loaded', ok: projectLoaded, blocking: true },
                 { label: 'Partition set', ok: !!partition, blocking: true },
@@ -6870,6 +7003,7 @@
                 { label: 'Memory format valid (e.g., 32G)', ok: !!mem && _validateHpcMemFormat(mem), blocking: true },
                 { label: 'CPU count valid (>= 1)', ok: Number.isInteger(cpus) && cpus >= 1, blocking: true },
                 { label: 'Environment JSON valid', ok: envResult.ok, blocking: true, failNote: envResult.ok ? '' : envResult.error },
+                ...(isRemoteBids ? [{ label: sshCheckLabel, ok: sshCheckOk, blocking: true, failNote: sshCheckNote }] : []),
                 { label: 'Unsaved HPC edits', ok: !dirty, blocking: false, failNote: dirty ? 'changes pending save' : 'none' },
                 { label: 'Form serialization ready', ok: !!hpcSettings, blocking: true },
             ];
@@ -6937,6 +7071,158 @@
             }
         }
 
+        // ── TemplateFlow download panel ──────────────────────────────────────
+        const TF_DEFAULT_SELECTED = [
+            'MNI152NLin2009cAsym', 'MNI152NLin6Asym', 'MNI152Lin',
+            'fsaverage', 'fsLR', 'OASIS30ANTs'
+        ];
+        const TF_DESCRIPTIONS = {
+            MNI152NLin2009cAsym: 'fMRIPrep / MRIQC default',
+            MNI152NLin6Asym:     'FSL / HCP / QSIPrep default',
+            MNI152Lin:           'legacy compatibility',
+            fsaverage:           'FreeSurfer surface outputs',
+            fsLR:                'HCP CIFTI surface space',
+            OASIS30ANTs:         'brain extraction & segmentation',
+            MNIInfant:           'pediatric studies (NiBabies)',
+        };
+        let _tfPollTimer = null;
+        let _tfInstalledNames = new Set();
+
+        async function initTfDownloadPanel() {
+            const resp = await fetch('/templateflow_curated_list');
+            const data = await resp.json();
+            const list = data.templates || [];
+            const container = document.getElementById('tfTemplateChecklist');
+            if (!container) return;
+            container.innerHTML = '';
+            list.forEach((tpl) => {
+                const isDefault = TF_DEFAULT_SELECTED.includes(tpl);
+                const desc = TF_DESCRIPTIONS[tpl] || '';
+                const col = document.createElement('div');
+                col.className = 'col';
+                col.innerHTML = `
+                    <div class="form-check tf-template-item" id="tfItem_${tpl}">
+                        <input class="form-check-input" type="checkbox" id="tfChk_${tpl}" value="${tpl}" ${isDefault ? 'checked' : ''}>
+                        <label class="form-check-label" for="tfChk_${tpl}">
+                            <span class="fw-semibold">${escapeHtml(tpl)}</span>
+                            ${desc ? `<br><small class="text-muted">${escapeHtml(desc)}</small>` : ''}
+                            <span id="tfBadge_${tpl}" style="display:none;" class="badge bg-success ms-1 small">installed</span>
+                        </label>
+                    </div>`;
+                container.appendChild(col);
+            });
+            // Pre-fill TF home from project templateflow_dir
+            const tfInput = document.getElementById('tf_download_home');
+            if (tfInput && !tfInput.value) {
+                const projectTf = (document.getElementById('templateflow_dir')?.value || '').trim();
+                if (projectTf) tfInput.value = projectTf;
+            }
+        }
+
+        async function tfScanInstalled() {
+            const tfHome = (document.getElementById('tf_download_home')?.value || '').trim();
+            if (!tfHome) { alert('Enter a TemplateFlow Home path first.'); return; }
+            try {
+                const resp = await fetch('/get_templateflow_templates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: tfHome }),
+                });
+                const data = await resp.json();
+                if (data.error) { alert(data.error); return; }
+                _tfInstalledNames = new Set((data.templates || []).map((t) => t.name));
+                document.querySelectorAll('[id^="tfBadge_"]').forEach((badge) => {
+                    const tpl = badge.id.replace('tfBadge_', '');
+                    badge.style.display = _tfInstalledNames.has(tpl) ? '' : 'none';
+                });
+            } catch (err) {
+                alert('Scan failed: ' + err);
+            }
+        }
+
+        function tfSelectAll(checked) {
+            document.querySelectorAll('[id^="tfChk_"]').forEach((chk) => { chk.checked = checked; });
+        }
+
+        async function startTfDownload() {
+            const tfHome = (document.getElementById('tf_download_home')?.value || '').trim();
+            if (!tfHome) { alert('Enter a TemplateFlow Home path first.'); return; }
+            const selected = [...document.querySelectorAll('[id^="tfChk_"]:checked')].map((c) => c.value);
+            if (!selected.length) { alert('Select at least one template.'); return; }
+
+            const btn = document.getElementById('tfDownloadBtn');
+            const statusEl = document.getElementById('tfDownloadStatus');
+            const logEl = document.getElementById('tfDownloadLog');
+            const badge = document.getElementById('tfDownloadBadge');
+
+            btn.disabled = true;
+            statusEl.style.display = 'block';
+            statusEl.className = 'alert alert-info py-2 px-3 small mb-2';
+            statusEl.textContent = `Starting download of ${selected.length} template(s)...`;
+            logEl.style.display = 'block';
+            logEl.textContent = '';
+            badge.style.display = '';
+            badge.className = 'badge bg-info';
+            badge.textContent = 'Downloading...';
+
+            try {
+                const resp = await fetch('/templateflow_download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tf_home: tfHome, templates: selected }),
+                });
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    statusEl.className = 'alert alert-danger py-2 px-3 small mb-2';
+                    statusEl.textContent = data.error || 'Failed to start download.';
+                    btn.disabled = false;
+                    badge.className = 'badge bg-danger';
+                    badge.textContent = 'Failed';
+                    return;
+                }
+                _pollTfDownload(data.job_id, btn, statusEl, logEl, badge);
+            } catch (err) {
+                statusEl.className = 'alert alert-danger py-2 px-3 small mb-2';
+                statusEl.textContent = 'Request failed: ' + err;
+                btn.disabled = false;
+                badge.className = 'badge bg-danger';
+                badge.textContent = 'Failed';
+            }
+        }
+
+        function _pollTfDownload(jobId, btn, statusEl, logEl, badge) {
+            if (_tfPollTimer) clearInterval(_tfPollTimer);
+            _tfPollTimer = setInterval(async () => {
+                try {
+                    const resp = await fetch(`/templateflow_download_status?job_id=${encodeURIComponent(jobId)}`);
+                    const data = await resp.json();
+                    if (data.log_tail) { logEl.textContent = data.log_tail; logEl.scrollTop = logEl.scrollHeight; }
+
+                    if (data.status === 'completed') {
+                        clearInterval(_tfPollTimer);
+                        statusEl.className = 'alert alert-success py-2 px-3 small mb-2';
+                        statusEl.textContent = 'Download complete.';
+                        badge.className = 'badge bg-success';
+                        badge.textContent = 'Done';
+                        btn.disabled = false;
+                        tfScanInstalled();
+                    } else if (data.status === 'failed') {
+                        clearInterval(_tfPollTimer);
+                        statusEl.className = 'alert alert-danger py-2 px-3 small mb-2';
+                        statusEl.textContent = data.error || 'Download failed.';
+                        badge.className = 'badge bg-danger';
+                        badge.textContent = 'Failed';
+                        btn.disabled = false;
+                    }
+                } catch (err) {
+                    clearInterval(_tfPollTimer);
+                    statusEl.className = 'alert alert-danger py-2 px-3 small mb-2';
+                    statusEl.textContent = 'Status check failed: ' + err;
+                    btn.disabled = false;
+                }
+            }, 2000);
+        }
+
         function scheduleHpcPreflightRefresh() {
             if (hpcPreflightUpdateScheduled) return;
             hpcPreflightUpdateScheduled = true;
@@ -6952,6 +7238,7 @@
                 el.addEventListener('input', scheduleHpcPreflightRefresh);
                 el.addEventListener('change', scheduleHpcPreflightRefresh);
             });
+            if (_bidsSourceMode === 'remote') triggerDataladSSHCheck();
             scheduleHpcPreflightRefresh();
         }
 
@@ -7327,7 +7614,19 @@
             }
         }
 
+        let _hpcCurrentJobId = null;
+        let _hpcCurrentLogPattern = null;
+
         function _pollHpcJobStatus(jobId, statusEl) {
+            _hpcCurrentJobId = jobId;
+            _hpcCurrentLogPattern = (document.getElementById('hpc_output_pattern').value || '').trim() || null;
+
+            const SLURM_COLORS = {
+                RUNNING: 'alert-info', PENDING: 'alert-secondary', COMPLETING: 'alert-info',
+                COMPLETED: 'alert-success', FAILED: 'alert-danger', CANCELLED: 'alert-warning',
+                TIMEOUT: 'alert-warning', NODE_FAIL: 'alert-danger', OUT_OF_MEMORY: 'alert-danger',
+            };
+
             const poll = async () => {
                 try {
                     const resp = await fetch('/get_hpc_job_status', {
@@ -7337,19 +7636,77 @@
                     });
                     const data = await resp.json();
                     const job = (data.jobs || [])[0];
+
                     if (!job) {
-                        statusEl.textContent = `Job ${jobId} is no longer in the SLURM queue (completed, failed, or cancelled). Check the output log.`;
-                        logHPC(`Job ${jobId} left the queue.`);
+                        // sacct returned nothing either — truly unknown
+                        statusEl.style.display = 'block';
+                        statusEl.className = 'alert alert-warning py-2 px-3 small mb-3';
+                        statusEl.textContent = `Job ${jobId}: status unknown (not in queue, sacct returned nothing). Check the log file manually.`;
+                        logHPC(`Job ${jobId}: status unknown after leaving queue.`);
                         return;
                     }
-                    statusEl.textContent = `Job ${jobId} status: ${job.status} (running time: ${job.time})`;
-                    logHPC(`Job ${jobId} status: ${job.status}`);
-                    setTimeout(poll, 15000);
+
+                    const st = (job.status || '').toUpperCase().split(' ')[0];
+                    const colorClass = SLURM_COLORS[st] || 'alert-secondary';
+                    statusEl.style.display = 'block';
+                    statusEl.className = `alert ${colorClass} py-2 px-3 small mb-3`;
+
+                    if (job.final) {
+                        // Job is done — show final state
+                        const exitInfo = job.exit_code ? ` · exit ${job.exit_code}` : '';
+                        const elapsed = job.elapsed ? ` · elapsed ${job.elapsed}` : '';
+                        statusEl.textContent = `Job ${jobId}: ${st}${exitInfo}${elapsed}`;
+                        logHPC(`Job ${jobId} finished: ${st}${exitInfo}${elapsed}`, st !== 'COMPLETED');
+                        // Show log tail
+                        if (_hpcCurrentLogPattern) {
+                            fetchHpcJobLog(jobId, _hpcCurrentLogPattern);
+                        }
+                    } else {
+                        // Still running or pending
+                        const time = job.time ? ` · ${job.time} elapsed` : '';
+                        statusEl.textContent = `Job ${jobId}: ${st}${time}`;
+                        logHPC(`Job ${jobId} status: ${st}`);
+                        // Also refresh log while running
+                        if (st === 'RUNNING' && _hpcCurrentLogPattern) {
+                            fetchHpcJobLog(jobId, _hpcCurrentLogPattern);
+                        }
+                        setTimeout(poll, 15000);
+                    }
                 } catch (err) {
                     logHPC(`Status check failed for job ${jobId}: ` + err.message, true);
                 }
             };
             poll();
+        }
+
+        async function fetchHpcJobLog(jobId, logPattern) {
+            const panel = document.getElementById('hpcJobLogPanel');
+            const logEl = document.getElementById('hpcJobLogOutput');
+            const pathEl = document.getElementById('hpcJobLogPath');
+            try {
+                const resp = await fetch('/get_hpc_job_log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ job_id: String(jobId), log_pattern: logPattern, lines: 60 }),
+                });
+                const data = await resp.json();
+                if (data.error) {
+                    if (panel) panel.style.display = 'block';
+                    if (logEl) logEl.textContent = data.error;
+                    return;
+                }
+                if (panel) panel.style.display = 'block';
+                if (logEl) { logEl.textContent = data.tail || '(log is empty)'; logEl.scrollTop = logEl.scrollHeight; }
+                if (pathEl) pathEl.textContent = data.log_path || '';
+            } catch (err) {
+                if (logEl) logEl.textContent = 'Could not fetch log: ' + err;
+            }
+        }
+
+        function refreshHpcJobLog() {
+            if (_hpcCurrentJobId && _hpcCurrentLogPattern) {
+                fetchHpcJobLog(_hpcCurrentJobId, _hpcCurrentLogPattern);
+            }
         }
 
         // ── Run-mode toggle ───────────────────────────────────────────────────────
@@ -7410,20 +7767,19 @@
             const localBtn = document.getElementById('bidsSourceLocalBtn');
             const remoteBtn = document.getElementById('bidsSourceRemoteBtn');
             const remoteRow = document.getElementById('remoteDatasetRow');
-            const remoteHint = document.getElementById('bidsSourceRemoteHint');
-            const bidsInput = document.getElementById('bids_folder');
-            const browseBtn = document.getElementById('bids_folder_browse_btn');
+            const bidsFolderCol = document.getElementById('bidsFolderCol');
 
             const isRemote = _bidsSourceMode === 'remote';
             localBtn.className = isRemote ? 'btn btn-outline-primary btn-sm px-3' : 'btn btn-primary btn-sm px-3';
             remoteBtn.className = isRemote ? 'btn btn-primary btn-sm px-3' : 'btn btn-outline-primary btn-sm px-3';
             remoteRow.style.display = isRemote ? '' : 'none';
-            remoteHint.style.display = isRemote ? '' : 'none';
-            bidsInput.readOnly = isRemote;
-            browseBtn.style.display = isRemote ? 'none' : '';
+            bidsFolderCol.style.display = isRemote ? 'none' : '';
 
             if (isRemote && !_remoteStudiesLoaded) {
                 loadRemoteStudies();
+            }
+            if (isRemote) {
+                triggerDataladSSHCheck();
             }
         }
 
@@ -7454,6 +7810,15 @@
                 select.innerHTML = studies.length
                     ? '<option value="">Select a study...</option>' + studies.map((s) => `<option value="${s}">${s}</option>`).join('')
                     : '<option value="">No studies found</option>';
+                // Restore study selection from bids_folder if it matches the remote clone pattern
+                const savedBids = (document.getElementById('bids_folder').value || '').trim();
+                const remotePrefix = '/usr/people/mrilabgraz/data/';
+                if (savedBids.startsWith(remotePrefix)) {
+                    const studyName = savedBids.slice(remotePrefix.length).split('/')[0];
+                    if (studyName && studies.includes(studyName)) {
+                        select.value = studyName;
+                    }
+                }
                 updateRemoteCloneDirPreview();
             } catch (err) {
                 select.innerHTML = '<option value="">Failed to load studies</option>';
@@ -7465,9 +7830,14 @@
 
         function updateRemoteCloneDirPreview() {
             const study = document.getElementById('remote_dataset_study').value;
-            document.getElementById('remote_dataset_clone_dir').value = study
-                ? `/usr/people/mrilabgraz/data/${study}`
-                : '';
+            const cloneDir = study ? `/usr/people/mrilabgraz/data/${study}` : '';
+            document.getElementById('remote_dataset_clone_dir').value = cloneDir;
+            // Keep bids_folder in sync — path is deterministic from study name,
+            // so save/validation always has the right value even before cloning.
+            if (cloneDir) {
+                document.getElementById('bids_folder').value = cloneDir;
+                updateCohortDatasetDisplay();
+            }
         }
 
         let _remoteDatasetPollTimer = null;

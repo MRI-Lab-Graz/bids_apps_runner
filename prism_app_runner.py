@@ -212,6 +212,7 @@ def _sanitize_machine_settings(raw):
         "default_apptainer_folder",
         "default_apptainer_container",
         "default_tmp_folder",
+        "default_templateflow_dir",
         "default_docker_repo",
         "default_docker_tag",
     ):

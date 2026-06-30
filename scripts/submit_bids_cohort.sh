@@ -239,7 +239,7 @@ cmd_submit() {
     check_todos
     resolve_config
 
-    local scripts_dir="${REPO_DIR}/scripts/generated"
+    local scripts_dir="$(dirname "$(realpath "$CONFIG")")/generated"
     local submission_log="${REPO_DIR}/logs/submission_$(date '+%Y%m%d_%H%M%S').log"
     mkdir -p "$scripts_dir" "$(dirname "$submission_log")"
 
@@ -315,6 +315,9 @@ cmd_submit() {
             continue
         fi
 
+        # Ensure log dir exists before slurm-schedule writes its env.json there.
+        mkdir -p "${LOG_DIR_BASE}/${DS}"
+
         # Schedule the array job. Nothing inside the job touches git --
         # slurm-schedule declares/prepares the per-subject outputs and
         # submits via sbatch itself; we parse the SLURM job id back out of
@@ -342,7 +345,6 @@ cmd_submit() {
         if [[ ${#HPC_MODULES[@]} -gt 0 ]]; then
             module_load_line="module load ${HPC_MODULES[*]}"
         fi
-        mkdir -p "${LOG_DIR_BASE}/${DS}"
         cat > "$finish_script" <<EOF
 #!/bin/bash
 #SBATCH --job-name=finish_${DS}
@@ -355,6 +357,9 @@ cmd_submit() {
 #SBATCH --error=${LOG_DIR_BASE}/${DS}/finish-%j.err
 set -euo pipefail
 ${module_load_line}
+# Activate venv so datalad is importable regardless of compute node Python version
+source "${REPO_DIR}/.appsrunner/bin/activate" 2>/dev/null || \
+    export PYTHONPATH="${REPO_DIR}/.appsrunner/lib/python3.10/site-packages:\${PYTHONPATH:-}"
 cd "${output_clone}"
 datalad slurm-finish -m "Finish ${APP_NAME} array job ${job_id} for ${DS}"
 datalad push --to origin
