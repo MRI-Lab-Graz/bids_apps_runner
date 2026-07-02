@@ -3801,6 +3801,15 @@
                     if (isStaleProjectLoad(loadToken)) return;
                     applySavedAppConfig(cfg);
                 }
+
+                // Re-run the advisory HPC pre-fill now that container_select/
+                // pipeline_app_name have their real values -- the earlier call
+                // from applyProjectData() fires before this async restore
+                // finishes, so app detection (inferCurrentPipelineAppName())
+                // can miss and silently fall back to the generic defaults.
+                if (!isStaleProjectLoad(loadToken)) {
+                    updateHpcConfigDetails(currentProjectConfig);
+                }
             } catch (e) {
                 console.warn('Background project restore failed:', e);
             }

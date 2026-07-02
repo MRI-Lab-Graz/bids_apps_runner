@@ -221,6 +221,30 @@ cmd_setup() {
              (test -d '${remote_path}/.datalad' || datalad create '${remote_path}')" \
             || warn "[$DS] Could not create output repo on server (may already exist)"
 
+        # 2b. Register the output dataset as a subdataset of the INPUT dataset
+        #    on the server, confined to a "derivatives" branch of the input
+        #    dataset. The input dataset's default branch (whatever it was
+        #    checked out to beforehand, typically master) is restored
+        #    afterward, so a plain clone of the input dataset keeps showing
+        #    raw BIDS data only -- the derivatives link is opt-in via
+        #    `git checkout derivatives`. Idempotent: skips registration if
+        #    .gitmodules already references this app's subdataset.
+        local input_ssh_host="${input_url%%:*}"
+        local input_remote_path="${input_url#*:}"
+        run ssh "$input_ssh_host" bash -s -- "$input_remote_path" "$APP_NAME" <<'REMOTE_SCRIPT' \
+            || warn "[$DS] Could not register ${APP_NAME} derivatives subdataset on input dataset (may already be registered)"
+set -e
+cd "$1"
+app_name="$2"
+default_branch=$(git symbolic-ref --short HEAD)
+git checkout derivatives 2>/dev/null || git checkout -b derivatives
+if ! grep -q "derivatives/${app_name}" .gitmodules 2>/dev/null; then
+    git submodule add "./derivatives/${app_name}" "derivatives/${app_name}"
+    datalad save -m "Register ${app_name} derivatives subdataset"
+fi
+git checkout "$default_branch"
+REMOTE_SCRIPT
+
         # 3. Clone output to shared HPC location (for cheap per-job clones)
         if [[ -d "${output_clone}/.datalad" ]]; then
             log "[$DS] Output already cloned at ${output_clone}"
