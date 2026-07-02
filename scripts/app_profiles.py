@@ -40,10 +40,12 @@ DEFAULT_PROFILE: Dict[str, Any] = {
     "recommended_hpc": None,
 }
 
-# recommended_hpc values are starting points seeded from what's been observed
-# working on this cluster (partition=hpc, mem=16G/cpus=4 for MRIQC) -- they
-# only ever pre-fill an editable GUI form field, never silently override a
-# submission. Adjust freely per your cluster.
+# recommended_hpc values are starting points tuned from a real production run
+# on this cluster (partition=hpc; MRIQC completed 23/23 subjects at cpus=4/
+# mem=32G in 45-55min each, with plenty of node headroom to spare -- cpus=8/
+# mem=40G raises per-subject internal parallelism for datasets with several
+# runs per subject). They only ever pre-fill an editable GUI form field,
+# never silently override a submission. Adjust freely per your cluster.
 CATALOG: Dict[str, Dict[str, Any]] = {
     "mriqc": {
         "display_name": "MRIQC",
@@ -55,8 +57,8 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "recommended_hpc": {
             "partition": "hpc",
             "time": "04:00:00",
-            "mem": "16G",
-            "cpus": 4,
+            "mem": "40G",
+            "cpus": 8,
         },
     },
     "fmriprep": {

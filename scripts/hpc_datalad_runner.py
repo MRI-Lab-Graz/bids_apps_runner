@@ -196,7 +196,21 @@ class BidsAppComputeScriptGenerator:
         max_concurrent = int(self.hpc.get("max_concurrent", 50))
         array_spec = f"0-{self.n_subjects - 1}%{max_concurrent}"
 
-        log_dir = self.paths.get("log_dir", "$HOME/logs/bids_app")
+        # datalad-slurm's own bookkeeping (get_slurm_output_files in the
+        # datalad-slurm package) reads back the SBATCH --output/--error paths
+        # via `scontrol show job` and expects them to live *inside* the
+        # dataset it's scheduling from, so it can save them for provenance
+        # alongside the job's declared outputs. Pointing them at a location
+        # outside the dataset (e.g. this repo's own logs/ folder) makes
+        # `datalad slurm-finish` fail with "path not underneath the reference
+        # dataset" for every log file, aborting before it can push. Use a
+        # dedicated subdirectory of the output dataset itself instead.
+        output_dir = self.paths.get("output_dir", "")
+        log_dir = (
+            f"{output_dir}/.slurm_logs"
+            if output_dir
+            else self.paths.get("log_dir", "$HOME/logs/bids_app")
+        )
         out_log = f"{log_dir}/{self.dataset_id}/slurm-%A_%a.out"
         err_log = f"{log_dir}/{self.dataset_id}/slurm-%A_%a.err"
 
@@ -353,6 +367,7 @@ echo "Scratch: ${{WORK_DIR}}"
             },
             container_ref=container_path,
         )
+        extra_env = ""
         if profile.get("supports_nipreps_resource_flags"):
             cpus = int(self.hpc.get("cpus", 8))
             mem_gb = _mem_to_gb(self.hpc.get("mem", "32G"))
@@ -362,6 +377,27 @@ echo "Scratch: ${{WORK_DIR}}"
                 options.append(f"--omp-nthreads={cpus}")
             if not _has_flag(options, _MEM_ALIASES):
                 options.append(f"--mem={mem_gb}")
+
+            # --nprocs/--omp-nthreads alone are not always sufficient: some
+            # underlying libraries (e.g. AFNI, invoked by nipype's afni
+            # interfaces) don't consistently honor MRIQC's own CLI flags and
+            # instead read thread-count env vars directly, defaulting to the
+            # *node's* full core count if unset. With --cleanenv, plain host
+            # `export` doesn't reach the container -- these must be passed
+            # explicitly via --env so several array tasks sharing one large
+            # node don't collectively exhaust its shared process limit
+            # (ulimit -u) the same way unconstrained internal threading did.
+            thread_env = ",".join(
+                f"{var}={cpus}"
+                for var in (
+                    "OMP_NUM_THREADS",
+                    "MKL_NUM_THREADS",
+                    "OPENBLAS_NUM_THREADS",
+                    "NUMEXPR_NUM_THREADS",
+                    "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS",
+                )
+            )
+            extra_env = f"    --env {_shell_quote(thread_env)} \\\n"
         for auto_opt in profile.get("auto_options") or []:
             if auto_opt not in options:
                 options.append(auto_opt)
@@ -385,7 +421,7 @@ echo "Scratch: ${{WORK_DIR}}"
 echo "--- Running {app_name} for sub-${{SUBJECT_LABEL}} ---"
 "$APPTAINER_BIN" run \\
     --cleanenv \\
-    -B "${{BIDS_DIR}}":/bids:ro \\
+{extra_env}    -B "${{BIDS_DIR}}":/bids:ro \\
     -B "${{OUT_DIR}}":/output \\
 {extra_binds}    -B "${{TMP_DIR}}":/tmp \\
     {container} \\

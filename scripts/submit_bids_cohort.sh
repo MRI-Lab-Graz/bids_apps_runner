@@ -231,6 +231,18 @@ cmd_setup() {
                 || { warn "[$DS] Output clone failed – skipping"; failed=$((failed + 1)); continue; }
         fi
 
+        # 3b. Work on a local "derivatives" branch, not the remote's checked-out
+        #    master. Every BIDS app run through this script pushes here so we
+        #    never hit "remote rejected (branch is currently checked out)" --
+        #    git only guards the branch that's actually checked out server-side,
+        #    so a same-named local branch pushes cleanly with no special-casing.
+        #    Merge derivatives -> master later, whenever convenient.
+        if git -C "$output_clone" show-ref --verify --quiet refs/heads/derivatives; then
+            run git -C "$output_clone" checkout derivatives
+        else
+            run git -C "$output_clone" checkout -b derivatives
+        fi
+
         # 4. Prefetch all subject data now, since array tasks no longer call
         #    `datalad get` themselves (datalad-slurm keeps all git/annex
         #    operations outside the job).
@@ -312,12 +324,15 @@ cmd_submit() {
             failed=$((failed + 1)); continue
         fi
 
-        # Build one non-overlapping -o flag per subject (wildcards are
-        # forbidden by `datalad slurm-schedule`).
-        local -a output_flags=()
-        while IFS= read -r subj; do
-            [[ -n "$subj" ]] && output_flags+=(-o "$subj")
-        done < "$subj_list"
+        # Declare the whole dataset as output ("-o ." is an explicit,
+        # documented special case in `datalad slurm-schedule --help`, not a
+        # forbidden wildcard glob like "-o sub-*"). Per-subject -o flags
+        # (-o sub-01 -o sub-02 ...) only cover each subject's own
+        # subdirectory -- BIDS apps commonly also write loose report files
+        # at the dataset root (e.g. MRIQC's sub-01_ses-1_T1w.html), which
+        # per-subject flags silently miss, leaving real output uncommitted
+        # after slurm-finish. "-o ." covers any app's output layout.
+        local -a output_flags=(-o .)
 
         if $DRY_RUN; then
             echo "[DRY-RUN] (cd ${output_clone} && datalad -f json slurm-schedule ${output_flags[*]} -m '...' sbatch ${array_script})"
@@ -328,6 +343,12 @@ cmd_submit() {
 
         # Ensure log dir exists before slurm-schedule writes its env.json there.
         mkdir -p "${LOG_DIR_BASE}/${DS}"
+
+        # Also pre-create the array job's own SBATCH --output/--error location,
+        # which now lives *inside* the output dataset (see hpc_datalad_runner.py)
+        # so datalad-slurm can save those logs as part of the job's provenance
+        # instead of erroring on paths outside the dataset.
+        mkdir -p "${output_clone}/.slurm_logs/${DS}"
 
         # Schedule the array job. Nothing inside the job touches git --
         # slurm-schedule declares/prepares the per-subject outputs and
@@ -422,20 +443,34 @@ cmd_status() {
 
     log "Reading: ${log_file}"
     echo ""
-    printf "%-20s %-12s %-10s %-16s %s\n" "DATASET" "JOB_ARRAY" "SUBJECTS" "ARRAY_STATUS" "FINISH_STATUS"
-    printf "%-20s %-12s %-10s %-16s %s\n" "-------" "---------" "--------" "------------" "-------------"
+    printf "%-20s %-12s %-10s %-10s %-40s %s\n" "DATASET" "JOB_ARRAY" "SUBJECTS" "PROGRESS" "ARRAY_STATUS" "FINISH_STATUS"
+    printf "%-20s %-12s %-10s %-10s %-40s %s\n" "-------" "---------" "--------" "--------" "------------" "-------------"
 
     while read -r ds job_id n_subjects finish_job_id; do
-        local status finish_status
-        status=$(squeue --job "$job_id" --noheader --format="%T" 2>/dev/null \
-            | sort -u | tr '\n' ',' | sed 's/,$//')
-        [[ -z "$status" ]] && status="DONE/UNKNOWN"
+        local status progress finish_status terminal_count
+
+        # squeue only shows currently-queued (PENDING/RUNNING) tasks -- once a
+        # task finishes (success or failure) it drops out of squeue entirely,
+        # so squeue alone is blind to COMPLETED/FAILED/OUT_OF_MEMORY subjects.
+        # sacct keeps full historical accounting regardless of queue state.
+        status=$(sacct -j "$job_id" --noheader --format=JobID,State --parsable2 2>/dev/null \
+            | awk -F'|' -v jid="$job_id" '$1 ~ ("^" jid "_[0-9]+$") {print $2}' \
+            | sort | uniq -c | awk '{printf "%s:%s ", $2, $1}' | sed 's/ $//')
+        [[ -z "$status" ]] && status="UNKNOWN"
+
+        terminal_count=$(sacct -j "$job_id" --noheader --format=JobID,State --parsable2 2>/dev/null \
+            | awk -F'|' -v jid="$job_id" '$1 ~ ("^" jid "_[0-9]+$") && $2 !~ /PENDING|RUNNING/' \
+            | wc -l)
+        progress="${terminal_count}/${n_subjects}"
+
         finish_status="-"
         if [[ -n "$finish_job_id" ]]; then
-            finish_status=$(squeue --job "$finish_job_id" --noheader --format="%T" 2>/dev/null)
-            [[ -z "$finish_status" ]] && finish_status="DONE/UNKNOWN"
+            finish_status=$(sacct -j "$finish_job_id" --noheader --format=JobID,State --parsable2 2>/dev/null \
+                | awk -F'|' -v jid="$finish_job_id" '$1 == jid {print $2}')
+            [[ -z "$finish_status" ]] && finish_status="UNKNOWN"
         fi
-        printf "%-20s %-12s %-10s %-16s %s\n" "$ds" "$job_id" "$n_subjects" "$status" "$finish_status"
+
+        printf "%-20s %-12s %-10s %-10s %-40s %s\n" "$ds" "$job_id" "$n_subjects" "$progress" "$status" "$finish_status"
     done < "$log_file"
 }
 
