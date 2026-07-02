@@ -20,55 +20,47 @@ from argparse import Namespace
 # Import from PRISM modules
 from prism_core import get_subjects_from_bids, run_command
 import prism_datalad
+from app_profiles import resolve_app_name, resolve_app_profile, CATALOG
 
 
-def _is_mriqc_container(container_ref):
-    """Return True only for MRIQC container references."""
-    ref = str(container_ref or "").strip().lower()
-    if not ref:
-        return False
-
-    if "/mriqc:" in ref:
-        return True
-    if ref.startswith("mriqc:"):
-        return True
-
-    base = os.path.basename(ref)
-    return base.startswith("mriqc")
-
-
-def _ensure_mriqc_no_sub_option(container_ref, options):
-    """Ensure MRIQC does not fail on network upload timeout by default."""
+def _ensure_app_auto_options(common, app, container_ref, options):
+    """Append any catalog auto_options (e.g. MRIQC's --no-sub) not already
+    present. Resolved via the shared app profile catalog (scripts/app_profiles.py)."""
     opts = [str(x) for x in (options or [])]
-    if not _is_mriqc_container(container_ref):
-        return opts
-
-    if "--no-sub" in opts:
-        return opts
-
-    opts.append("--no-sub")
-    logging.info("MRIQC detected: auto-appending --no-sub to disable metrics upload")
+    profile = resolve_app_profile(common, app, container_ref=container_ref)
+    for auto_opt in profile.get("auto_options") or []:
+        if auto_opt in opts:
+            continue
+        opts.append(auto_opt)
+        logging.info(
+            "%s detected: auto-appending %s",
+            profile.get("display_name", "App"),
+            auto_opt,
+        )
     return opts
 
 
 def _infer_execution_adapter(common, app):
-    """Resolve app execution adapter from explicit config or pipeline metadata."""
+    """Resolve app execution adapter from explicit config or pipeline metadata.
+
+    app.execution_adapter is a distinct, pre-existing field from
+    app.app_profile: it's an explicit adapter request (kept for backward
+    compatibility), resolved via the fastsurfer catalog entry's own alias
+    table before falling through to the normal 3-tier catalog resolution.
+    """
     app_cfg = app if isinstance(app, dict) else {}
     common_cfg = common if isinstance(common, dict) else {}
+    container_ref = str(common_cfg.get("container", "")).strip()
 
     explicit = str(app_cfg.get("execution_adapter", "")).strip().lower()
-    if explicit in {"fastsurfer", "fastsurfer-cross", "bids-fastsurfer"}:
-        return "fastsurfer-cross"
+    fastsurfer_aliases = CATALOG.get("fastsurfer", {}).get(
+        "execution_adapter_aliases", {}
+    )
+    if explicit in fastsurfer_aliases:
+        return fastsurfer_aliases[explicit]
 
-    pipeline_app = str(common_cfg.get("pipeline_app_name", "")).strip().lower()
-    if pipeline_app == "fastsurfer":
-        return "fastsurfer-cross"
-
-    container_ref = str(common_cfg.get("container", "")).strip().lower()
-    if "fastsurfer" in container_ref:
-        return "fastsurfer-cross"
-
-    return ""
+    name = resolve_app_name(common_cfg, app_cfg, container_ref=container_ref)
+    return CATALOG.get(name, {}).get("execution_adapter_default", "")
 
 
 def _drop_runtime_flags(options, flag_names):
@@ -414,8 +406,8 @@ PROCESS_EXIT_CODE=$FASTSURFER_EXIT
     /bids /output {analysis_level} \\
 """
 
-            app_options = _ensure_mriqc_no_sub_option(
-                common.get("container", ""), app.get("options", [])
+            app_options = _ensure_app_auto_options(
+                common, app, common.get("container", ""), app.get("options", [])
             )
             if common.get("fs_license_file"):
                 if "--fs-license-file" not in app_options and not any(

@@ -23,6 +23,7 @@ scripts/generated/
 
 # Virtual environments
 .appsrunner/
+.datalad-slurm-venv/
 
 # macOS
 .DS_Store

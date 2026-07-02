@@ -28,6 +28,8 @@ import argparse
 from pathlib import Path
 from typing import Dict, Optional
 
+from app_profiles import resolve_app_profile
+
 _SAFE_SUBJECT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _SAFE_SHELL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SAFE_ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -69,6 +71,34 @@ def _validate_sbatch_value(value: object, label: str) -> str:
     return normalized
 
 
+_MEM_UNIT_TO_GB = {"K": 1 / (1024 * 1024), "M": 1 / 1024, "G": 1, "T": 1024}
+
+
+_NPROCS_ALIASES = ("--nprocs", "--n_procs", "--n-procs", "--n_cpus", "--n-cpus", "-n-cpus")
+_OMP_ALIASES = ("--omp-nthreads", "--omp_nthreads", "--ants-nthreads")
+_MEM_ALIASES = ("--mem", "--mem_gb", "--mem-gb")
+
+
+def _has_flag(options, aliases) -> bool:
+    for opt in options:
+        token = str(opt).split("=", 1)[0]
+        if token in aliases:
+            return True
+    return False
+
+
+def _mem_to_gb(mem: str) -> int:
+    """Convert a SLURM-style --mem value (e.g. "16G", "32000M") to whole GB,
+    for passing to nipreps-style --mem/--mem-gb flags. Falls back to 4 if the
+    value can't be parsed rather than failing script generation."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMGT]?)", str(mem or "").strip())
+    if not match:
+        return 4
+    value, unit = match.groups()
+    gb = float(value) * _MEM_UNIT_TO_GB.get(unit or "M", 1 / 1024)
+    return max(1, round(gb))
+
+
 def setup_logging(log_level="INFO"):
     """Setup logging configuration."""
     logging.basicConfig(
@@ -101,8 +131,9 @@ class BidsAppComputeScriptGenerator:
     Workflow per array task:
       1. Resolve subject from list file via $SLURM_ARRAY_TASK_ID
       2. Set up per-task scratch directory
-      3. Run BIDS app via apptainer exec, reading from the shared input
-         clone and writing into the shared output clone
+      3. Run BIDS app via apptainer run (invokes the container's entrypoint/
+         runscript), reading from the shared input clone and writing into
+         the shared output clone
       4. Clean up scratch
 
     Required config keys (top-level JSON sections):
@@ -302,7 +333,38 @@ echo "Scratch: ${{WORK_DIR}}"
     def _run_bids_app(self) -> str:
         app_name = self._app_name
         analysis_level = self.bids_app.get("analysis_level", "participant")
-        options = self.bids_app.get("options", [])
+        options = list(self.bids_app.get("options", []))
+
+        # Nipreps-convention resource caps (mriqc/fmriprep/qsiprep/qsirecon
+        # honor these) so the app's own worker pool respects the SLURM
+        # allocation instead of auto-detecting the whole (possibly much
+        # larger) node. Without this, internal process/thread counts can
+        # exceed --cpus-per-task and exhaust a node's shared process limit
+        # (ulimit -u) or --mem when several array tasks share one node.
+        # Resolved via the shared app profile catalog (scripts/app_profiles.py)
+        # -- only known NiPreps apps get these flags; other BIDS apps may not
+        # recognize them at all.
+        container_path = self.paths.get("container", "")
+        profile = resolve_app_profile(
+            {"pipeline_app_name": app_name, "container": container_path},
+            {
+                "app_profile": self.bids_app.get("app_profile", ""),
+                "app_profile_overrides": self.bids_app.get("app_profile_overrides") or {},
+            },
+            container_ref=container_path,
+        )
+        if profile.get("supports_nipreps_resource_flags"):
+            cpus = int(self.hpc.get("cpus", 8))
+            mem_gb = _mem_to_gb(self.hpc.get("mem", "32G"))
+            if not _has_flag(options, _NPROCS_ALIASES):
+                options.append(f"--nprocs={cpus}")
+            if not _has_flag(options, _OMP_ALIASES):
+                options.append(f"--omp-nthreads={cpus}")
+            if not _has_flag(options, _MEM_ALIASES):
+                options.append(f"--mem={mem_gb}")
+        for auto_opt in profile.get("auto_options") or []:
+            if auto_opt not in options:
+                options.append(auto_opt)
 
         container = _shell_quote(self.paths.get("container", "TODO_CONTAINER_PATH"))
 
@@ -321,7 +383,7 @@ echo "Scratch: ${{WORK_DIR}}"
         return f"""
 # Run BIDS app: {app_name}
 echo "--- Running {app_name} for sub-${{SUBJECT_LABEL}} ---"
-"$APPTAINER_BIN" exec \\
+"$APPTAINER_BIN" run \\
     --cleanenv \\
     -B "${{BIDS_DIR}}":/bids:ro \\
     -B "${{OUT_DIR}}":/output \\

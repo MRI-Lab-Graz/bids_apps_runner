@@ -1210,6 +1210,18 @@
                             </button>
                             <pre id="cohortConfigPreview" class="utility-log" style="display:none; max-height:300px; overflow-y:auto;"></pre>
 
+                            <div id="cohortJobsPanel" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <strong>DataLad-Slurm Jobs</strong>
+                                    <span id="cohortJobsBadge" class="badge bg-secondary">Checking...</span>
+                                </div>
+                                <div id="cohortJobsDetail" class="mt-2"></div>
+                                <button type="button" class="btn btn-sm btn-outline-danger mt-2" id="cohortCloseJobsBtn"
+                                        onclick="closeCohortOpenJobs()" style="display:none;">
+                                    <i class="fas fa-broom me-1"></i>Close failed jobs
+                                </button>
+                            </div>
+
                             <div class="d-flex flex-wrap gap-2 mb-3">
                                 <button class="btn btn-outline-secondary" id="cohortSetupBtn"
                                         onclick="runCohort('setup')" title="Pre-clone all datasets and create output repos">
@@ -1291,6 +1303,14 @@
                                         <label class="form-label">Error Pattern</label>
                                         <input type="text" class="form-control hpc-setting" id="hpc_error_pattern" placeholder="slurm-%j.err">
                                         <small class="text-muted">Error log pattern</small>
+                                    </div>
+                                </div>
+
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <label class="form-label">Notify Email</label>
+                                        <input type="email" class="form-control hpc-setting" id="hpc_notify_email" placeholder="you@example.com">
+                                        <small class="text-muted">Optional. SLURM emails you (--mail-type=END,FAIL) when the array or finish job ends. Requires a working mail relay on the cluster.</small>
                                     </div>
                                 </div>
 
@@ -1791,7 +1811,19 @@
             if (isQR) updateQsireconFsDir();
         }
 
+        // Keep in sync with scripts/app_profiles.py CATALOG keys -- this list
+        // only powers the dropdown + a non-authoritative pre-fill guess, the
+        // Python catalog is the source of truth for actual app behavior.
         const KNOWN_PIPELINE_APPS = ['fmriprep', 'freesurfer', 'fastsurfer', 'qsiprep', 'qsirecon', 'mriqc', 'cat12', 'nibabies'];
+
+        // Starting HPC settings per known app (mirrors scripts/app_profiles.py
+        // CATALOG[*]["recommended_hpc"]) -- advisory only: pre-fills the SLURM
+        // Settings form as an editable suggestion when a project has no HPC
+        // settings saved yet. Never silently overrides a submission.
+        const APP_RECOMMENDED_HPC = {
+            mriqc: { partition: 'hpc', time: '04:00:00', mem: '16G', cpus: 4 },
+            fmriprep: { partition: 'hpc', time: '18:00:00', mem: '32G', cpus: 8 },
+        };
 
         function _normalizePathForJoin(pathValue) {
             return String(pathValue || '').trim().replace(/\/+$/g, '');
@@ -6953,6 +6985,7 @@
                 job_name: String(src.job_name || '').trim(),
                 output_pattern: String(src.output_pattern || '').trim(),
                 error_pattern: String(src.error_pattern || '').trim(),
+                notify_email: String(src.notify_email || '').trim(),
                 modules: Array.isArray(src.modules)
                     ? src.modules.map((m) => String(m).trim()).filter(Boolean)
                     : [],
@@ -7337,7 +7370,17 @@
 
         function loadHpcSettingsToForm(hpc) {
             const hasAnySetting = !!(hpc.partition || hpc.time || hpc.mem || hpc.cpus);
-            const defaults = hasAnySetting ? {} : HPC_SETTINGS_DEFAULTS;
+            // Advisory only: pre-fill from this app's recommended_hpc catalog
+            // entry when the project has no HPC settings saved yet, falling
+            // back to the generic cluster defaults for unknown apps. Purely
+            // a suggested, user-editable starting point -- never overrides
+            // anything the project already has saved.
+            const detectedApp = (typeof inferCurrentPipelineAppName === 'function')
+                ? inferCurrentPipelineAppName()
+                : '';
+            const defaults = hasAnySetting
+                ? {}
+                : (APP_RECOMMENDED_HPC[detectedApp] || HPC_SETTINGS_DEFAULTS);
             document.getElementById('hpc_partition').value = hpc.partition || defaults.partition || '';
             document.getElementById('hpc_time').value = hpc.time || defaults.time || '';
             document.getElementById('hpc_mem').value = hpc.mem || defaults.mem || '';
@@ -7345,6 +7388,7 @@
             document.getElementById('hpc_job_name').value = hpc.job_name || '';
             document.getElementById('hpc_output_pattern').value = hpc.output_pattern || '';
             document.getElementById('hpc_error_pattern').value = hpc.error_pattern || '';
+            document.getElementById('hpc_notify_email').value = hpc.notify_email || '';
             document.getElementById('hpc_modules').value = (hpc.modules || []).join('\n');
             document.getElementById('hpc_environment').value = JSON.stringify(hpc.environment || {}, null, 2);
             document.getElementById('hpc_monitor_jobs').checked = hpc.monitor_jobs !== false;
@@ -7396,6 +7440,12 @@
                 return null;
             }
 
+            const notifyEmail = (document.getElementById('hpc_notify_email').value || '').trim();
+            if (notifyEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notifyEmail)) {
+                if (!silent) logHPC('Notify email is not a valid email address.', true);
+                return null;
+            }
+
             return {
                 partition: partition,
                 time: timeVal,
@@ -7404,6 +7454,7 @@
                 job_name: (document.getElementById('hpc_job_name').value || '').trim(),
                 output_pattern: (document.getElementById('hpc_output_pattern').value || '').trim(),
                 error_pattern: (document.getElementById('hpc_error_pattern').value || '').trim(),
+                notify_email: notifyEmail,
                 modules: modules,
                 environment: envResult.environment,
                 monitor_jobs: document.getElementById('hpc_monitor_jobs').checked,
@@ -7923,6 +7974,101 @@
             const open = body.style.display !== 'none';
             body.style.display = open ? 'none' : 'block';
             icon.style.transform = open ? '' : 'rotate(180deg)';
+            if (!open) checkCohortOpenJobs();
+        }
+
+        let _cohortOpenJobsCheck = { checking: false, error: null, openJobs: [] };
+
+        async function checkCohortOpenJobs() {
+            const panel = document.getElementById('cohortJobsPanel');
+            const badge = document.getElementById('cohortJobsBadge');
+            const detail = document.getElementById('cohortJobsDetail');
+            const closeBtn = document.getElementById('cohortCloseJobsBtn');
+            if (!panel || !lastProjectId) { if (panel) panel.style.display = 'none'; return; }
+
+            panel.style.display = 'block';
+            panel.className = 'alert alert-secondary py-2 px-3 small mb-3';
+            _cohortOpenJobsCheck.checking = true;
+            badge.className = 'badge bg-secondary';
+            badge.textContent = 'Checking...';
+            detail.textContent = '';
+            closeBtn.style.display = 'none';
+
+            const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
+            const params = new URLSearchParams({
+                project_id: lastProjectId,
+                pipeline_id: currentPipelineId || '',
+                max_concurrent: maxConcurrent,
+            });
+
+            let data;
+            try {
+                const resp = await fetch(`/cohort/check_open_jobs?${params}`);
+                data = await resp.json();
+            } catch (err) {
+                _cohortOpenJobsCheck = { checking: false, error: 'Request failed: ' + err, openJobs: [] };
+                badge.className = 'badge bg-danger';
+                badge.textContent = 'Error';
+                detail.textContent = _cohortOpenJobsCheck.error;
+                return;
+            }
+
+            _cohortOpenJobsCheck.checking = false;
+            _cohortOpenJobsCheck.error = data.error || null;
+            _cohortOpenJobsCheck.openJobs = data.open_jobs || [];
+
+            if (data.error) {
+                badge.className = 'badge bg-secondary';
+                badge.textContent = 'Unknown';
+                detail.textContent = data.error;
+                return;
+            }
+
+            if (_cohortOpenJobsCheck.openJobs.length === 0) {
+                panel.className = 'alert alert-success py-2 px-3 small mb-3';
+                badge.className = 'badge bg-success';
+                badge.textContent = 'Clear';
+                detail.textContent = 'No stuck datalad-slurm jobs for this dataset.';
+                return;
+            }
+
+            const closeable = _cohortOpenJobsCheck.openJobs.filter(
+                (j) => j.status !== 'RUNNING' && j.status !== 'PENDING'
+            );
+            panel.className = 'alert alert-warning py-2 px-3 small mb-3';
+            badge.className = 'badge bg-warning text-dark';
+            badge.textContent = `${_cohortOpenJobsCheck.openJobs.length} open`;
+            detail.innerHTML = 'Unfinished datalad-slurm job(s) will block Submit for overlapping subjects: '
+                + _cohortOpenJobsCheck.openJobs.map(
+                    (j) => `<code>${escapeHtml(j.job_id)}</code> (${escapeHtml(j.status)})`
+                ).join(', ');
+            if (closeable.length > 0) {
+                closeBtn.style.display = 'inline-flex';
+            }
+        }
+
+        async function closeCohortOpenJobs() {
+            const closeBtn = document.getElementById('cohortCloseJobsBtn');
+            closeBtn.disabled = true;
+            const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
+            try {
+                const resp = await fetch('/cohort/close_open_jobs', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        project_id: lastProjectId,
+                        pipeline_id: currentPipelineId || '',
+                        max_concurrent: maxConcurrent,
+                    }),
+                });
+                const data = await resp.json();
+                logHPC(data.output || (data.ok ? 'Closed failed datalad-slurm jobs.' : 'Failed to close jobs.'), !data.ok);
+            } catch (err) {
+                logHPC('Request failed: ' + err, true);
+            } finally {
+                closeBtn.disabled = false;
+                checkCohortOpenJobs();
+            }
         }
 
         function _basenameOf(path) {
@@ -7994,6 +8140,7 @@
                 ? 'badge bg-secondary' : 'badge bg-danger';
             badge.textContent = status;
             msg.textContent   = `${command} finished`;
+            checkCohortOpenJobs();
         }
 
         async function runCohort(command) {

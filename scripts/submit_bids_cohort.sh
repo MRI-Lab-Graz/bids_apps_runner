@@ -45,6 +45,17 @@
 #                      not on PyPI -- provides slurm-schedule/slurm-finish)
 #   • sbatch         (SLURM, only needed for submit phase)
 #   • ssh access to the DataLad server (only needed for setup phase)
+#   • .datalad-slurm-venv at the repo root -- a dedicated venv pinned to a
+#     uv-managed portable Python (not a symlink to the system python3), used
+#     only by the dependent "finish" job. Compute nodes on a cluster can run
+#     a different system python3 than the login node, which silently breaks
+#     any venv/uv-tool install that just symlinks to system python (both
+#     .appsrunner and a plain `uv tool install git-annex` hit this). Set up
+#     once with:
+#       uv python install 3.10
+#       uv venv --python 3.10 .datalad-slurm-venv
+#       uv pip install --python .datalad-slurm-venv/bin/python datalad git-annex \
+#         git+https://github.com/knuedd/datalad-slurm.git
 #
 # Edit the TODO values in your config JSON before running.
 
@@ -345,6 +356,17 @@ cmd_submit() {
         if [[ ${#HPC_MODULES[@]} -gt 0 ]]; then
             module_load_line="module load ${HPC_MODULES[*]}"
         fi
+        # Notify on the finish job only (not the per-subject array, which
+        # would send one email per task) -- the finish job only runs once
+        # the whole array has settled (--dependency=afterany), so its own
+        # completion is the single "the cohort submission is done" signal.
+        local notify_email
+        notify_email="$(cfg '.hpc.notify_email // ""')"
+        local mail_lines=""
+        if [[ -n "$notify_email" ]]; then
+            mail_lines="#SBATCH --mail-user=${notify_email}
+#SBATCH --mail-type=END,FAIL"
+        fi
         cat > "$finish_script" <<EOF
 #!/bin/bash
 #SBATCH --job-name=finish_${DS}
@@ -355,14 +377,23 @@ cmd_submit() {
 #SBATCH --cpus-per-task=1
 #SBATCH --output=${LOG_DIR_BASE}/${DS}/finish-%j.out
 #SBATCH --error=${LOG_DIR_BASE}/${DS}/finish-%j.err
+${mail_lines}
 set -euo pipefail
 ${module_load_line}
-# Activate venv so datalad is importable regardless of compute node Python version
-source "${REPO_DIR}/.appsrunner/bin/activate" 2>/dev/null || \
-    export PYTHONPATH="${REPO_DIR}/.appsrunner/lib/python3.10/site-packages:\${PYTHONPATH:-}"
+# Use the dedicated datalad-slurm venv's own datalad entry point (pinned to
+# a uv-managed portable Python 3.10) instead of .appsrunner -- compute nodes
+# on this cluster can have a different system python3 than the login node
+# (observed 3.12 vs 3.10), which silently breaks a venv that just symlinks
+# to system python. Must call the venv's bin/datalad script directly (not
+# \`python -m datalad\`, which uses a different, more limited entry point
+# that doesn't recognize e.g. \`-f json\`). Also prepend its bin/ to PATH so
+# datalad picks up the venv's git-annex, not the system/uv-tool one (which
+# has the same node-dependent-python-version problem).
+export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
+DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
-datalad slurm-finish -m "Finish ${APP_NAME} array job ${job_id} for ${DS}"
-datalad push --to origin
+"\$DATALAD_BIN" slurm-finish -m "Finish ${APP_NAME} array job ${job_id} for ${DS}"
+"\$DATALAD_BIN" push --to origin
 EOF
         chmod +x "$finish_script"
 

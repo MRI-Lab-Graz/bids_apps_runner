@@ -32,6 +32,7 @@ from datetime import datetime
 # Import from PRISM modules
 from prism_core import get_subjects_from_bids, print_summary
 import prism_datalad
+from app_profiles import resolve_app_name, resolve_app_profile, CATALOG
 
 # ============================================================================
 # Helper Functions for Container Execution
@@ -245,88 +246,44 @@ def _prepare_qsiprep_runtime_bids_view(bids_folder, tmp_dir, subject):
     return runtime_root
 
 
-def _is_qsiprep_container(container_ref):
-    """Return True only for QSIPrep container references."""
-    ref = str(container_ref or "").strip().lower()
-    if not ref:
-        return False
-
-    # Match common refs:
-    # - /path/to/qsiprep_1.1.1.sif
-    # - pennlinc/qsiprep:1.1.1
-    # - qsiprep:latest
-    if "/qsiprep:" in ref:
-        return True
-    if ref.startswith("qsiprep:"):
-        return True
-
-    base = os.path.basename(ref)
-    return base.startswith("qsiprep")
-
-
-def _is_qsirecon_container(container_ref):
-    """Return True only for QSIRecon container references."""
-    ref = str(container_ref or "").strip().lower()
-    if not ref:
-        return False
-
-    if "/qsirecon:" in ref:
-        return True
-    if ref.startswith("qsirecon:"):
-        return True
-
-    base = os.path.basename(ref)
-    return base.startswith("qsirecon")
-
-
-def _is_mriqc_container(container_ref):
-    """Return True only for MRIQC container references."""
-    ref = str(container_ref or "").strip().lower()
-    if not ref:
-        return False
-
-    if "/mriqc:" in ref:
-        return True
-    if ref.startswith("mriqc:"):
-        return True
-
-    base = os.path.basename(ref)
-    return base.startswith("mriqc")
-
-
-def _ensure_mriqc_no_sub_option(container_ref, options):
-    """Ensure MRIQC does not fail on network upload timeout by default."""
+def _ensure_app_auto_options(common, app, container_ref, options):
+    """Append any catalog auto_options (e.g. MRIQC's --no-sub) not already
+    present. Resolved via the shared app profile catalog (scripts/app_profiles.py)."""
     opts = [str(x) for x in (options or [])]
-    if not _is_mriqc_container(container_ref):
-        return opts
-
-    if "--no-sub" in opts:
-        return opts
-
-    # Disable uploading anonymous metrics unless user explicitly opted out of this behavior.
-    opts.append("--no-sub")
-    logging.info("MRIQC detected: auto-appending --no-sub to disable metrics upload")
+    profile = resolve_app_profile(common, app, container_ref=container_ref)
+    for auto_opt in profile.get("auto_options") or []:
+        if auto_opt in opts:
+            continue
+        opts.append(auto_opt)
+        logging.info(
+            "%s detected: auto-appending %s",
+            profile.get("display_name", "App"),
+            auto_opt,
+        )
     return opts
 
 
 def _infer_execution_adapter(common, app):
-    """Resolve app execution adapter from explicit config or pipeline metadata."""
+    """Resolve app execution adapter from explicit config or pipeline metadata.
+
+    app.execution_adapter is a distinct, pre-existing field from
+    app.app_profile: it's an explicit adapter request (kept for backward
+    compatibility), resolved via the fastsurfer catalog entry's own alias
+    table before falling through to the normal 3-tier catalog resolution.
+    """
     app_cfg = app if isinstance(app, dict) else {}
     common_cfg = common if isinstance(common, dict) else {}
+    container_ref = str(common_cfg.get("container", "")).strip()
 
     explicit = str(app_cfg.get("execution_adapter", "")).strip().lower()
-    if explicit in {"fastsurfer", "fastsurfer-cross", "bids-fastsurfer"}:
-        return "fastsurfer-cross"
+    fastsurfer_aliases = CATALOG.get("fastsurfer", {}).get(
+        "execution_adapter_aliases", {}
+    )
+    if explicit in fastsurfer_aliases:
+        return fastsurfer_aliases[explicit]
 
-    pipeline_app = str(common_cfg.get("pipeline_app_name", "")).strip().lower()
-    if pipeline_app == "fastsurfer":
-        return "fastsurfer-cross"
-
-    container_ref = str(common_cfg.get("container", "")).strip().lower()
-    if "fastsurfer" in container_ref:
-        return "fastsurfer-cross"
-
-    return ""
+    name = resolve_app_name(common_cfg, app_cfg, container_ref=container_ref)
+    return CATALOG.get(name, {}).get("execution_adapter_default", "")
 
 
 def _drop_runtime_flags(options, flag_names):
@@ -1138,7 +1095,7 @@ def _process_subject(
         # QSIPrep compatibility translation layer:
         # create subject-scoped runtime BIDS view and apply IntendedFor fixes there,
         # leaving raw dataset unchanged.
-        if not dry_run and _is_qsiprep_container(container_ref):
+        if not dry_run and resolve_app_name(common, app, container_ref) == "qsiprep":
             bids_mount_source = _prepare_qsiprep_runtime_bids_view(
                 common["bids_folder"], tmp_dir, subject
             )
@@ -1292,8 +1249,8 @@ def _process_subject(
             cmd = list(base_cmd)
             cmd.extend(["/bids", "/output", analysis_level])
 
-            app_options = _ensure_mriqc_no_sub_option(
-                container_ref, app.get("options", [])
+            app_options = _ensure_app_auto_options(
+                common, app, container_ref, app.get("options", [])
             )
             if app_options:
                 cmd.extend(app_options)
@@ -1354,8 +1311,11 @@ def _process_subject(
                     return True, "finished"
 
                 # QSIRecon writes large outputs and may need extra time to flush
-                # on network filesystems; use a longer wait for it.
-                max_wait = 300 if _is_qsirecon_container(container_ref) else 90
+                # on network filesystems; use a longer wait for it (per-app
+                # override from the catalog, default 90s otherwise).
+                max_wait = resolve_app_profile(
+                    common, app, container_ref
+                ).get("completion_wait_seconds", 90)
 
                 output_exists = _wait_for_output_detection(
                     subject,

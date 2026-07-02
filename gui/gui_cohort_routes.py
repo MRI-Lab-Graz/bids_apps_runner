@@ -15,6 +15,35 @@ _cohort_jobs: dict[str, Any] = {}
 _cohort_jobs_lock = threading.Lock()
 
 
+def _datalad_subprocess_env() -> dict:
+    env = os.environ.copy()
+    # Ensure ~/.local/bin is on PATH so datalad-slurm extension is visible
+    local_bin = str(Path.home() / ".local" / "bin")
+    if local_bin not in env.get("PATH", ""):
+        env["PATH"] = local_bin + ":" + env.get("PATH", "")
+    return env
+
+
+def _parse_open_slurm_jobs(stdout: str) -> list[dict[str, str]]:
+    """Parse the plain-text table `datalad slurm-finish --list-open-jobs`
+    prints, e.g.:
+        The following jobs are open:
+
+        slurm-job-id   slurm-job-status
+        5352559        FAILED
+    """
+    jobs = []
+    for line in stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        job_id, status = parts
+        if job_id.lower() == "slurm-job-id":
+            continue
+        jobs.append({"job_id": job_id, "status": status})
+    return jobs
+
+
 def _run_cohort_async(job_id: str, cmd: list[str], log_file: Path) -> None:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     with _cohort_jobs_lock:
@@ -113,6 +142,95 @@ def register_cohort_routes(
         if error_response:
             return error_response
         return jsonify({"config": cohort_cfg})
+
+    @app.route("/cohort/check_open_jobs", methods=["GET"])
+    def cohort_check_open_jobs():
+        """Report any datalad-slurm jobs left open (unfinished) in this
+        project's output dataset -- e.g. a crashed slurm-finish job leaves
+        the previous slurm-schedule's outputs permanently claimed, which
+        makes every subsequent `datalad slurm-schedule` fail with a cryptic
+        "conflicting outputs" error until someone closes it out manually.
+        """
+        project_id = (request.args.get("project_id") or "").strip()
+        pipeline_id = (request.args.get("pipeline_id") or "").strip()
+        max_concurrent = request.args.get("max_concurrent")
+
+        cohort_cfg, error_response = _build_cohort_config(
+            project_id, pipeline_id, max_concurrent
+        )
+        if error_response:
+            return error_response
+
+        output_dir = cohort_cfg["paths"]["output_dir"]
+        result: dict[str, Any] = {
+            "dataset": cohort_cfg["datasets"][0],
+            "output_dir": output_dir,
+            "open_jobs": [],
+            "error": None,
+        }
+
+        if not (Path(output_dir) / ".datalad").is_dir():
+            result["error"] = "Output dataset not cloned yet -- run Setup first."
+            return jsonify(result)
+
+        try:
+            proc = subprocess.run(
+                ["datalad", "slurm-finish", "--list-open-jobs"],
+                cwd=output_dir,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                env=_datalad_subprocess_env(),
+            )
+            result["open_jobs"] = _parse_open_slurm_jobs(proc.stdout)
+        except subprocess.TimeoutExpired:
+            result["error"] = "Timed out checking datalad-slurm job status."
+        except FileNotFoundError:
+            result["error"] = "datalad executable not found."
+
+        return jsonify(result)
+
+    @app.route("/cohort/close_open_jobs", methods=["POST"])
+    def cohort_close_open_jobs():
+        """Close failed/cancelled datalad-slurm jobs so a new slurm-schedule
+        stops being rejected for "conflicting outputs". Never touches
+        pending or running jobs (datalad-slurm itself refuses to)."""
+        data = request.get_json(silent=True) or {}
+        project_id = (data.get("project_id") or "").strip()
+        pipeline_id = (data.get("pipeline_id") or "").strip()
+        max_concurrent = data.get("max_concurrent")
+
+        cohort_cfg, error_response = _build_cohort_config(
+            project_id, pipeline_id, max_concurrent
+        )
+        if error_response:
+            return error_response
+
+        output_dir = cohort_cfg["paths"]["output_dir"]
+        if not (Path(output_dir) / ".datalad").is_dir():
+            return (
+                jsonify({"ok": False, "error": "Output dataset not cloned yet -- run Setup first."}),
+                400,
+            )
+
+        try:
+            proc = subprocess.run(
+                ["datalad", "slurm-finish", "--close-failed-jobs"],
+                cwd=output_dir,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=_datalad_subprocess_env(),
+            )
+        except subprocess.TimeoutExpired:
+            return jsonify({"ok": False, "error": "Timed out closing failed jobs."}), 504
+
+        return jsonify(
+            {
+                "ok": proc.returncode == 0,
+                "output": (proc.stdout or "") + (proc.stderr or ""),
+            }
+        )
 
     @app.route("/cohort/run", methods=["POST"])
     def cohort_run():

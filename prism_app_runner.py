@@ -793,12 +793,19 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50):
             "max_concurrent": int(max_concurrent or 50),
             "modules": hpc.get("modules") or [],
             "environment": hpc.get("environment") or {},
+            "notify_email": hpc.get("notify_email") or "",
         },
         "bids_app": {
             "app_name": app_name,
             "analysis_level": app.get("analysis_level") or "participant",
             "output_dir_name": os.path.basename(output_folder) or app_name,
             "options": app.get("options") or [],
+            # Carried through so the SLURM-array path (hpc_datalad_runner.py)
+            # resolves the same app profile catalog entry/overrides as the
+            # local/single-job HPC path, e.g. a custom app fork that doesn't
+            # support the NiPreps --nprocs/--omp-nthreads/--mem convention.
+            "app_profile": app.get("app_profile") or "",
+            "app_profile_overrides": app.get("app_profile_overrides") or {},
         },
     }
 

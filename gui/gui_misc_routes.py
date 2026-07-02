@@ -500,21 +500,11 @@ def register_misc_routes(
                         target_section_options, key=lambda option: option["name"]
                     )
 
-            app_name = "BIDS App"
-            doc_url = "https://bids-apps.neuroimaging.io/"
-            container_lower = os.path.basename(container).lower()
-            if "qsirecon" in container_lower:
-                app_name = "QSIRecon"
-                doc_url = "https://qsirecon.readthedocs.io/"
-            elif "qsiprep" in container_lower:
-                app_name = "QSIPrep"
-                doc_url = "https://qsiprep.readthedocs.io/"
-            elif "fmriprep" in container_lower:
-                app_name = "fMRIPrep"
-                doc_url = "https://fmriprep.org/"
-            elif "mriqc" in container_lower:
-                app_name = "MRIQC"
-                doc_url = "https://mriqc.readthedocs.io/"
+            import app_profiles  # lazy -- scripts/ is on sys.path at runtime
+
+            profile = app_profiles.resolve_app_profile({}, {}, container_ref=container)
+            app_name = profile["display_name"]
+            doc_url = profile["docs_url"]
 
             return jsonify(
                 {
