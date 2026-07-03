@@ -46,6 +46,15 @@ DEFAULT_PROFILE: Dict[str, Any] = {
 # mem=40G raises per-subject internal parallelism for datasets with several
 # runs per subject). They only ever pre-fill an editable GUI form field,
 # never silently override a submission. Adjust freely per your cluster.
+#
+# GPU-capable apps (qsiprep, fastsurfer) request a GPU via the sbatch_gres
+# key -- any "sbatch_"-prefixed key becomes a literal #SBATCH directive
+# (scripts/prism_hpc.py), and prism_hpc.py auto-adds apptainer's --nv flag
+# whenever a requested sbatch_* value contains "gpu". qsiprep can offload
+# FSL's eddy current/motion correction to eddy_cuda when the container
+# includes it, unlike CPU-only apps such as MRIQC. The "gpu" partition name
+# and gres syntax ("gpu:1") are placeholders -- match them to your cluster's
+# actual GPU partition/gres naming before relying on them.
 CATALOG: Dict[str, Dict[str, Any]] = {
     "mriqc": {
         "display_name": "MRIQC",
@@ -79,6 +88,34 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "docs_url": "https://qsiprep.readthedocs.io/",
         "container_match_names": ["qsiprep"],
         "supports_nipreps_resource_flags": True,
+        "recommended_hpc": {
+            "partition": "gpu",
+            "time": "24:00:00",
+            "mem": "32G",
+            "cpus": 8,
+            "sbatch_gres": "gpu:1",
+        },
+    },
+    "qsiprep_cpu": {
+        "display_name": "QSIPrep (CPU)",
+        "docs_url": "https://qsiprep.readthedocs.io/",
+        # Empty on purpose: container/auto-detection should still resolve a
+        # qsiprep container to the "qsiprep" (GPU) entry above by default.
+        # This CPU-only variant is only reachable by explicitly picking it
+        # from the Compute Preset dropdown -- e.g. while a GPU partition is
+        # unavailable (LDAP/sssd not configured on those nodes yet, etc.).
+        # QSIPrep's only GPU-accelerated step is FSL eddy (eddy_cuda); it
+        # falls back to the CPU eddy_openmp implementation automatically,
+        # just slower for that one step -- everything else is CPU-bound
+        # regardless of this preset.
+        "container_match_names": [],
+        "supports_nipreps_resource_flags": True,
+        "recommended_hpc": {
+            "partition": "hpc",
+            "time": "24:00:00",
+            "mem": "32G",
+            "cpus": 8,
+        },
     },
     "qsirecon": {
         "display_name": "QSIRecon",
@@ -86,6 +123,12 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "container_match_names": ["qsirecon"],
         "supports_nipreps_resource_flags": True,
         "completion_wait_seconds": 300,
+        "recommended_hpc": {
+            "partition": "hpc",
+            "time": "12:00:00",
+            "mem": "32G",
+            "cpus": 8,
+        },
     },
     "fastsurfer": {
         "display_name": "FastSurfer",
@@ -97,11 +140,28 @@ CATALOG: Dict[str, Dict[str, Any]] = {
             "fastsurfer-cross": "fastsurfer-cross",
             "bids-fastsurfer": "fastsurfer-cross",
         },
+        # FastSurfer's HPC script path (prism_hpc.py fastsurfer_mode) always
+        # passes --nv to apptainer, so it effectively requires a GPU node
+        # regardless of this profile -- request one here too so SLURM
+        # actually schedules it onto a GPU-equipped node.
+        "recommended_hpc": {
+            "partition": "gpu",
+            "time": "02:00:00",
+            "mem": "16G",
+            "cpus": 4,
+            "sbatch_gres": "gpu:1",
+        },
     },
     "freesurfer": {
         "display_name": "FreeSurfer",
         "docs_url": "https://surfer.nmr.mgh.harvard.edu/",
         "container_match_names": ["freesurfer"],
+        "recommended_hpc": {
+            "partition": "hpc",
+            "time": "20:00:00",
+            "mem": "16G",
+            "cpus": 4,
+        },
     },
     "cat12": {
         "display_name": "CAT12",

@@ -523,6 +523,21 @@ def register_misc_routes(
         """Return the lab's curated template list."""
         return jsonify({"templates": CURATED_TEMPLATES})
 
+    @app.route("/app_profiles", methods=["GET"])
+    def app_profiles_catalog():
+        """Return the BIDS app profile catalog (display names + recommended
+        HPC starting points) so the GUI doesn't hand-duplicate it in JS."""
+        import app_profiles  # lazy -- scripts/ is on sys.path at runtime
+
+        profiles = {
+            key: {
+                "display_name": profile.get("display_name", key),
+                "recommended_hpc": profile.get("recommended_hpc"),
+            }
+            for key, profile in app_profiles.CATALOG.items()
+        }
+        return jsonify({"profiles": profiles})
+
     @app.route("/templateflow_download", methods=["POST"])
     def templateflow_download():
         """Start an async TemplateFlow template download.

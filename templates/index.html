@@ -1248,97 +1248,26 @@
                         </div>
                     </div>
 
-                    <!-- HPC Settings Editor (Advanced) -->
+                    <!-- HPC Settings Editor -->
                     <div id="hpcConfigEditor" style="display:none;">
-                        <div class="card border-warning mb-3">
-                            <div class="card-header bg-warning bg-opacity-10 border-warning cursor-pointer" onclick="toggleAdvancedHPC()" style="cursor: pointer;">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <span><i class="fas fa-sliders-h me-2"></i><strong>Advanced: SLURM Settings</strong></span>
-                                    <i class="fas fa-chevron-down" id="hpcAdvancedIcon" style="transition: transform 0.3s;"></i>
-                                </div>
+                        <div class="card border-primary mb-3">
+                            <div class="card-header bg-primary bg-opacity-10 border-primary">
+                                <i class="fas fa-microchip me-2"></i><strong>SLURM Job Settings</strong>
                             </div>
-                            <div id="hpcAdvancedPanel" class="card-body" style="display:none;">
-                                <div class="alert alert-info alert-sm mb-3">
-                                    <small><i class="fas fa-info-circle me-2"></i>Modify SLURM parameters only if you know what you're doing. These settings affect how your jobs run on the HPC cluster.</small>
-                                </div>
-                                <div class="alert alert-secondary alert-sm mb-3">
-                                    <small><i class="fas fa-terminal me-2"></i>Need custom SBATCH directives? Add keys prefixed with <code>sbatch_</code> directly in project.json <code>hpc</code> (example: <code>sbatch_gres: gpu:1</code>).</small>
-                                </div>
-                        
-                                <div class="row mb-3">
-                                    <div class="col-md-3">
-                                        <label class="form-label">Partition</label>
-                                        <input type="text" class="form-control hpc-setting" id="hpc_partition" placeholder="compute">
-                                        <small class="text-muted">SLURM partition name</small>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label">Time</label>
-                                        <input type="text" class="form-control hpc-setting" id="hpc_time" placeholder="24:00:00">
-                                        <small class="text-muted">Max runtime (HH:MM:SS)</small>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label">Memory</label>
-                                        <input type="text" class="form-control hpc-setting" id="hpc_mem" placeholder="32G">
-                                        <small class="text-muted">RAM per job (e.g., 32G, 64G)</small>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label">CPUs</label>
-                                        <input type="number" class="form-control hpc-setting" id="hpc_cpus" placeholder="8" min="1">
-                                        <small class="text-muted">Number of cores</small>
-                                    </div>
-                                </div>
-
+                            <div class="card-body">
                                 <div class="row mb-3">
                                     <div class="col-md-6">
-                                        <label class="form-label">Job Name</label>
-                                        <input type="text" class="form-control hpc-setting" id="hpc_job_name" placeholder="my_pipeline">
-                                        <small class="text-muted">SLURM job name</small>
+                                        <label class="form-label">Compute Preset</label>
+                                        <select class="form-select" id="hpc_preset" onchange="applyHpcPreset()">
+                                            <option value="auto">Auto-detect</option>
+                                        </select>
+                                        <small class="text-muted" id="hpc_preset_summary">Detecting recommended settings…</small>
                                     </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label">Output Pattern</label>
-                                        <input type="text" class="form-control hpc-setting" id="hpc_output_pattern" placeholder="slurm-%j.out">
-                                        <small class="text-muted">Log file pattern (%j=jobid)</small>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label">Error Pattern</label>
-                                        <input type="text" class="form-control hpc-setting" id="hpc_error_pattern" placeholder="slurm-%j.err">
-                                        <small class="text-muted">Error log pattern</small>
-                                    </div>
-                                </div>
-
-                                <div class="row mb-3">
                                     <div class="col-md-6">
                                         <label class="form-label">Notify Email</label>
                                         <input type="email" class="form-control hpc-setting" id="hpc_notify_email" placeholder="you@example.com">
                                         <small class="text-muted">Optional. SLURM emails you (--mail-type=END,FAIL) when the array or finish job ends. Requires a working mail relay on the cluster.</small>
-                                    </div>
-                                </div>
-
-                                <div class="row mb-3">
-                                    <div class="col-md-12">
-                                        <label class="form-label">Modules to Load</label>
-                                        <textarea class="form-control hpc-setting" id="hpc_modules" placeholder="apptainer/1.2.0&#10;datalad/0.19.0" rows="3"></textarea>
-                                        <small class="text-muted">One module per line (e.g., apptainer/1.2.0, gcc/11.2.0)</small>
-                                    </div>
-                                </div>
-
-                                <div class="row mb-3">
-                                    <div class="col-md-12">
-                                        <label class="form-label">Environment Variables (JSON)</label>
-                                        <textarea class="form-control hpc-setting" id="hpc_environment" placeholder='{&#10;  "TEMPLATEFLOW_HOME": "/data/shared/templateflow",&#10;  "APPTAINER_CACHEDIR": "/tmp/.apptainer"&#10;}' rows="4" style="font-family: monospace; font-size: 0.9rem;"></textarea>
-                                        <small class="text-muted">JSON object with environment variables</small>
-                                    </div>
-                                </div>
-
-                                <div class="row mb-3">
-                                    <div class="col-md-12">
-                                        <div class="form-check form-switch">
-                                            <input class="form-check-input hpc-setting" type="checkbox" id="hpc_monitor_jobs">
-                                            <label class="form-check-label" for="hpc_monitor_jobs">
-                                                Monitor job completion
-                                            </label>
-                                        </div>
-                                        <small class="text-muted">Automatically check job status after submission</small>
+                                        <div class="invalid-feedback" id="hpc_notify_email_feedback"></div>
                                     </div>
                                 </div>
 
@@ -1349,6 +1278,101 @@
                                     <button class="btn btn-outline-secondary" id="hpcDiscardBtn" onclick="resetHPCSettings()">
                                         <i class="fas fa-undo me-2"></i>Discard Changes
                                     </button>
+                                </div>
+
+                                <!-- Advanced: SLURM Settings (collapsed by default) -->
+                                <div class="card border-warning mb-4">
+                                    <div class="card-header bg-warning bg-opacity-10 border-warning cursor-pointer" onclick="toggleAdvancedHPC()" style="cursor: pointer;">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <span><i class="fas fa-sliders-h me-2"></i><strong>Advanced: SLURM Settings</strong></span>
+                                            <i class="fas fa-chevron-down" id="hpcAdvancedIcon" style="transition: transform 0.3s;"></i>
+                                        </div>
+                                    </div>
+                                    <div id="hpcAdvancedPanel" class="card-body" style="display:none;">
+                                        <div class="alert alert-info alert-sm mb-3">
+                                            <small><i class="fas fa-info-circle me-2"></i>Modify SLURM parameters only if you know what you're doing. Editing any field here switches the Compute Preset above to "Custom".</small>
+                                        </div>
+                                        <div class="alert alert-secondary alert-sm mb-3">
+                                            <small><i class="fas fa-terminal me-2"></i>Need other custom SBATCH directives? Add keys prefixed with <code>sbatch_</code> directly in project.json <code>hpc</code> (example: <code>sbatch_partition: debug</code>).</small>
+                                        </div>
+
+                                        <div class="row mb-3">
+                                            <div class="col-md-3">
+                                                <label class="form-label">Partition</label>
+                                                <input type="text" class="form-control hpc-setting" id="hpc_partition" placeholder="compute">
+                                                <small class="text-muted">SLURM partition name</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label">Time</label>
+                                                <input type="text" class="form-control hpc-setting" id="hpc_time" placeholder="24:00:00">
+                                                <small class="text-muted">Max runtime (HH:MM:SS)</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label">Memory</label>
+                                                <input type="text" class="form-control hpc-setting" id="hpc_mem" placeholder="32G">
+                                                <small class="text-muted">RAM per job (e.g., 32G, 64G)</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label">CPUs</label>
+                                                <input type="number" class="form-control hpc-setting" id="hpc_cpus" placeholder="8" min="1">
+                                                <small class="text-muted">Number of cores</small>
+                                            </div>
+                                        </div>
+
+                                        <div class="row mb-3">
+                                            <div class="col-md-4">
+                                                <label class="form-label">GPU Resource</label>
+                                                <input type="text" class="form-control hpc-setting" id="hpc_sbatch_gres" placeholder="e.g. gpu:1 (blank = no GPU)">
+                                                <small class="text-muted">Optional. Maps to <code>#SBATCH --gres=&lt;value&gt;</code>; leave blank for non-GPU jobs.</small>
+                                            </div>
+                                        </div>
+
+                                        <div class="row mb-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label">Job Name</label>
+                                                <input type="text" class="form-control hpc-setting" id="hpc_job_name" placeholder="my_pipeline">
+                                                <small class="text-muted">SLURM job name</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label">Output Pattern</label>
+                                                <input type="text" class="form-control hpc-setting" id="hpc_output_pattern" placeholder="slurm-%j.out">
+                                                <small class="text-muted">Log file pattern (%j=jobid)</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label">Error Pattern</label>
+                                                <input type="text" class="form-control hpc-setting" id="hpc_error_pattern" placeholder="slurm-%j.err">
+                                                <small class="text-muted">Error log pattern</small>
+                                            </div>
+                                        </div>
+
+                                        <div class="row mb-3">
+                                            <div class="col-md-12">
+                                                <label class="form-label">Modules to Load</label>
+                                                <textarea class="form-control hpc-setting" id="hpc_modules" placeholder="apptainer/1.2.0&#10;datalad/0.19.0" rows="3"></textarea>
+                                                <small class="text-muted">One module per line (e.g., apptainer/1.2.0, gcc/11.2.0)</small>
+                                            </div>
+                                        </div>
+
+                                        <div class="row mb-3">
+                                            <div class="col-md-12">
+                                                <label class="form-label">Environment Variables (JSON)</label>
+                                                <textarea class="form-control hpc-setting" id="hpc_environment" placeholder='{&#10;  "TEMPLATEFLOW_HOME": "/data/shared/templateflow",&#10;  "APPTAINER_CACHEDIR": "/tmp/.apptainer"&#10;}' rows="4" style="font-family: monospace; font-size: 0.9rem;"></textarea>
+                                                <small class="text-muted">JSON object with environment variables</small>
+                                            </div>
+                                        </div>
+
+                                        <div class="row mb-3">
+                                            <div class="col-md-12">
+                                                <div class="form-check form-switch">
+                                                    <input class="form-check-input hpc-setting" type="checkbox" id="hpc_monitor_jobs">
+                                                    <label class="form-check-label" for="hpc_monitor_jobs">
+                                                        Monitor job completion
+                                                    </label>
+                                                </div>
+                                                <small class="text-muted">Automatically check job status after submission</small>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <div class="section-header">Preview &amp; Submit</div>
@@ -1816,14 +1840,36 @@
         // Python catalog is the source of truth for actual app behavior.
         const KNOWN_PIPELINE_APPS = ['fmriprep', 'freesurfer', 'fastsurfer', 'qsiprep', 'qsirecon', 'mriqc', 'cat12', 'nibabies'];
 
-        // Starting HPC settings per known app (mirrors scripts/app_profiles.py
-        // CATALOG[*]["recommended_hpc"]) -- advisory only: pre-fills the SLURM
-        // Settings form as an editable suggestion when a project has no HPC
-        // settings saved yet. Never silently overrides a submission.
-        const APP_RECOMMENDED_HPC = {
-            mriqc: { partition: 'hpc', time: '04:00:00', mem: '40G', cpus: 8 },
-            fmriprep: { partition: 'hpc', time: '18:00:00', mem: '32G', cpus: 8 },
-        };
+        // Fetched once from GET /app_profiles: { key: { display_name, recommended_hpc } }.
+        // Single source of truth is scripts/app_profiles.py CATALOG -- no more
+        // hand-duplicating the recommended HPC values here.
+        let HPC_APP_PROFILES = {};
+
+        async function loadHpcAppProfiles() {
+            try {
+                const resp = await fetch('/app_profiles');
+                const data = await resp.json();
+                HPC_APP_PROFILES = data.profiles || {};
+            } catch (e) {
+                console.error('Failed to load app profiles', e);
+            }
+            populateHpcPresetOptions();
+        }
+
+        function populateHpcPresetOptions() {
+            const sel = document.getElementById('hpc_preset');
+            if (!sel) return;
+            const keep = sel.value;
+            sel.innerHTML = '';
+            sel.add(new Option('Auto-detect', 'auto'));
+            Object.entries(HPC_APP_PROFILES).forEach(([key, profile]) => {
+                const rec = profile.recommended_hpc || {};
+                const isGpu = Object.keys(rec).some((k) => k.startsWith('sbatch_') && String(rec[k]).toLowerCase().includes('gpu'));
+                sel.add(new Option(`${profile.display_name || key}${isGpu ? ' (GPU)' : ''}`, key));
+            });
+            sel.add(new Option('Custom (manually tuned)', 'custom'));
+            if (keep && Array.from(sel.options).some((o) => o.value === keep)) sel.value = keep;
+        }
 
         function _normalizePathForJoin(pathValue) {
             return String(pathValue || '').trim().replace(/\/+$/g, '');
@@ -6138,6 +6184,41 @@
             btn.textContent = shouldShow ? 'Hide Details' : 'Show Details';
         }
 
+        function _buildOutputCandidateNames() {
+            const presetEl = document.getElementById('build_top_candidate');
+            if (!presetEl) return [];
+            return Array.from(presetEl.options)
+                .map((opt) => (opt.value || '').split('/').pop())
+                .filter(Boolean);
+        }
+
+        function _resolveBuildOutputBase(currentValue) {
+            const trimmed = (currentValue || '').trim().replace(/\/+$/, '');
+            if (!trimmed) return '';
+            const segments = trimmed.split('/');
+            const last = segments[segments.length - 1];
+            if (_buildOutputCandidateNames().includes(last)) {
+                segments.pop();
+                return segments.join('/');
+            }
+            return trimmed;
+        }
+
+        function _applyBuildOutputDirForCandidate(repo) {
+            const outputEl = document.getElementById('build_output_dir');
+            if (!outputEl) return;
+
+            const candidateName = (repo || '').split('/').pop();
+            if (!candidateName) return;
+
+            const effective = globalMachineSettings && globalMachineSettings.effective;
+            const machineDefaultBase = ((effective && effective.default_apptainer_folder) || '').trim();
+            const base = _resolveBuildOutputBase(outputEl.value) || machineDefaultBase;
+            if (!base) return;
+
+            outputEl.value = `${base.replace(/\/+$/, '')}/${candidateName}`;
+        }
+
         async function applyBuildTopCandidate() {
             const presetEl = document.getElementById('build_top_candidate');
             const repoEl = document.getElementById('build_docker_repo');
@@ -6153,6 +6234,7 @@
             }
 
             repoEl.value = repo;
+            _applyBuildOutputDirForCandidate(repo);
             const hasLatest = Array.from(tagEl.options).some((opt) => opt.value === 'latest');
             if (!hasLatest) {
                 tagEl.add(new Option('latest', 'latest'));
@@ -6283,6 +6365,32 @@
             scheduleBuildPreflightRefresh();
         }
 
+        async function _markLocallyAvailableBuildTags(repo) {
+            const tagSelect = document.getElementById('build_docker_tag');
+            const outputDir = (document.getElementById('build_output_dir').value || '').trim();
+            if (!tagSelect || !outputDir || !repo) return;
+
+            try {
+                const resp = await fetch('/list_containers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder: outputDir })
+                });
+                const data = await resp.json();
+                if (!resp.ok || data.error || !Array.isArray(data.containers)) return;
+
+                const available = new Set(data.containers);
+                const repoName = repo.split('/').pop();
+                Array.from(tagSelect.options).forEach((opt) => {
+                    const isAvailable = available.has(`${repoName}_${opt.value}.sif`)
+                        || available.has(`${repoName}_${opt.value}.simg`);
+                    opt.innerText = isAvailable ? `${opt.value} (already locally available)` : opt.value;
+                });
+            } catch (e) {
+                // Best-effort marking only; ignore failures.
+            }
+        }
+
         async function fetchDockerTags() {
             if (buildTagFetchInProgress) return;
 
@@ -6343,6 +6451,7 @@
                         opt.innerText = tag;
                         tagSelect.appendChild(opt);
                     });
+                    await _markLocallyAvailableBuildTags(repo);
                     _setUtilityStatus(statusEl, `Fetched ${data.tags.length} tags.`, false);
                 } else if (data.error) {
                     _setUtilityStatus(statusEl, `Error: ${data.error}`, true);
@@ -6851,6 +6960,8 @@
                 if (!el) return;
                 el.addEventListener('input', () => applyVersionedOutputPaths({ source: `${id}-input` }));
                 el.addEventListener('change', () => applyVersionedOutputPaths({ source: `${id}-change` }));
+                el.addEventListener('input', refreshHpcPresetIfAuto);
+                el.addEventListener('change', refreshHpcPresetIfAuto);
             });
             updateVersionedOutputControls();
             applyVersionedOutputPaths({ source: 'initial-load' });
@@ -6875,6 +6986,8 @@
             initializeCheckPreflightTracking();
             initializeBuildPreflightTracking();
             initializeHpcPreflightTracking();
+            initializeHpcPresetDivergenceTracking();
+            loadHpcAppProfiles();
 
             // Keep navbar status fresh without requiring user actions.
             setInterval(updateNavbarRunStatus, 3000);
@@ -6987,10 +7100,12 @@
         function _normalizeHpcSettingsForCompare(hpc) {
             const src = hpc || {};
             return {
+                preset: String(src.preset || 'auto').trim(),
                 partition: String(src.partition || '').trim(),
                 time: String(src.time || '').trim(),
                 mem: String(src.mem || '').trim(),
                 cpus: parseInt(src.cpus, 10) || 1,
+                sbatch_gres: String(src.sbatch_gres || '').trim(),
                 job_name: String(src.job_name || '').trim(),
                 output_pattern: String(src.output_pattern || '').trim(),
                 error_pattern: String(src.error_pattern || '').trim(),
@@ -7284,6 +7399,36 @@
             scheduleHpcPreflightRefresh();
         }
 
+        // Keeps the "Auto-detect" preset following the currently configured
+        // container/app live, without requiring a project reload.
+        function refreshHpcPresetIfAuto() {
+            const presetSel = document.getElementById('hpc_preset');
+            if (presetSel && presetSel.value === 'auto') applyHpcPreset();
+        }
+
+        // Editing a preset-derived Advanced field by hand switches the
+        // Compute Preset dropdown to "Custom" so it stops being silently
+        // overwritten by preset/auto-detect changes.
+        function initializeHpcPresetDivergenceTracking() {
+            ['hpc_partition', 'hpc_time', 'hpc_mem', 'hpc_cpus', 'hpc_sbatch_gres'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.addEventListener('input', () => {
+                    const presetSel = document.getElementById('hpc_preset');
+                    if (presetSel && presetSel.value !== 'custom') {
+                        presetSel.value = 'custom';
+                        updateHpcPresetSummary();
+                    }
+                });
+            });
+
+            const emailEl = document.getElementById('hpc_notify_email');
+            if (emailEl) {
+                emailEl.addEventListener('input', validateHpcEmailField);
+                emailEl.addEventListener('blur', validateHpcEmailField);
+            }
+        }
+
         function setHpcSaveButtonBusy(isBusy) {
             hpcSaveInProgress = !!isBusy;
             const btn = document.getElementById('hpcSaveBtn');
@@ -7375,25 +7520,93 @@
 
         // Starting defaults for a SLURM cluster with a "hpc" partition (sized for a
         // lightweight single-dataset MRIQC pilot; adjust per-cluster as needed).
+        // Fallback for apps with no recommended_hpc catalog entry (e.g. cat12, nibabies).
         const HPC_SETTINGS_DEFAULTS = { partition: 'hpc', time: '02:00:00', mem: '16G', cpus: 4 };
 
+        // Resolves the "Compute Preset" dropdown value to an app_profiles.py
+        // CATALOG key: 'auto' follows the currently detected container/app,
+        // an explicit key is used as-is, and 'custom' has no catalog key.
+        function _resolveHpcPresetKey(presetValue) {
+            if (presetValue === 'auto') {
+                return (typeof inferCurrentPipelineAppName === 'function') ? inferCurrentPipelineAppName() : '';
+            }
+            return presetValue;
+        }
+
+        // Derives partition/time/mem/cpus/GPU gres from the selected preset
+        // and writes them into the Advanced fields. No-op on the fields when
+        // preset is 'custom' (the saved/hand-edited values are left alone),
+        // but always refreshes the summary line.
+        function applyHpcPreset(options = {}) {
+            const silent = !!options.silent;
+            const presetSel = document.getElementById('hpc_preset');
+            if (!presetSel) return;
+
+            if (presetSel.value !== 'custom') {
+                const key = _resolveHpcPresetKey(presetSel.value);
+                const rec = (HPC_APP_PROFILES[key] && HPC_APP_PROFILES[key].recommended_hpc) || HPC_SETTINGS_DEFAULTS;
+                document.getElementById('hpc_partition').value = rec.partition || '';
+                document.getElementById('hpc_time').value = rec.time || '';
+                document.getElementById('hpc_mem').value = rec.mem || '';
+                document.getElementById('hpc_cpus').value = rec.cpus || 1;
+                document.getElementById('hpc_sbatch_gres').value = rec.sbatch_gres || '';
+            }
+            updateHpcPresetSummary();
+            if (!silent) scheduleHpcPreflightRefresh();
+        }
+
+        function updateHpcPresetSummary() {
+            const el = document.getElementById('hpc_preset_summary');
+            const presetSel = document.getElementById('hpc_preset');
+            if (!el || !presetSel) return;
+
+            const key = _resolveHpcPresetKey(presetSel.value);
+            const profile = HPC_APP_PROFILES[key];
+            let label;
+            if (presetSel.value === 'auto') {
+                label = `Auto-detected: ${profile ? profile.display_name : (key || 'unrecognized container')}`;
+            } else if (presetSel.value === 'custom') {
+                label = 'Custom settings (edit in Advanced)';
+            } else {
+                label = (profile && profile.display_name) || key;
+            }
+
+            const gres = (document.getElementById('hpc_sbatch_gres').value || '').trim();
+            el.textContent = `${label} — Partition: ${document.getElementById('hpc_partition').value || '—'}` +
+                ` · Time: ${document.getElementById('hpc_time').value || '—'}` +
+                ` · Mem: ${document.getElementById('hpc_mem').value || '—'}` +
+                ` · CPUs: ${document.getElementById('hpc_cpus').value || '—'}` +
+                (gres ? ` · GPU: ${gres}` : '');
+        }
+
+        function validateHpcEmailField() {
+            const input = document.getElementById('hpc_notify_email');
+            const feedback = document.getElementById('hpc_notify_email_feedback');
+            if (!input) return true;
+            const value = input.value.trim();
+            const valid = !value || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+            input.classList.toggle('is-invalid', !valid);
+            if (feedback) feedback.textContent = valid ? '' : 'Enter a valid email address (e.g. name@example.com).';
+            return valid;
+        }
+
         function loadHpcSettingsToForm(hpc) {
-            const hasAnySetting = !!(hpc.partition || hpc.time || hpc.mem || hpc.cpus);
-            // Advisory only: pre-fill from this app's recommended_hpc catalog
-            // entry when the project has no HPC settings saved yet, falling
-            // back to the generic cluster defaults for unknown apps. Purely
-            // a suggested, user-editable starting point -- never overrides
-            // anything the project already has saved.
-            const detectedApp = (typeof inferCurrentPipelineAppName === 'function')
-                ? inferCurrentPipelineAppName()
-                : '';
-            const defaults = hasAnySetting
-                ? {}
-                : (APP_RECOMMENDED_HPC[detectedApp] || HPC_SETTINGS_DEFAULTS);
-            document.getElementById('hpc_partition').value = hpc.partition || defaults.partition || '';
-            document.getElementById('hpc_time').value = hpc.time || defaults.time || '';
-            document.getElementById('hpc_mem').value = hpc.mem || defaults.mem || '';
-            document.getElementById('hpc_cpus').value = hpc.cpus || defaults.cpus || 1;
+            const presetSel = document.getElementById('hpc_preset');
+            // Legacy projects saved before the preset dropdown existed have no
+            // hpc.preset -- default them to 'auto' so they immediately reflect
+            // the currently configured container instead of stale saved values.
+            if (presetSel) presetSel.value = hpc.preset || 'auto';
+
+            // Load raw saved partition/time/mem/cpus/gres first so 'custom'
+            // preset (a no-op on these fields) preserves them; applyHpcPreset
+            // then overwrites them for any non-custom preset as intended.
+            document.getElementById('hpc_partition').value = hpc.partition || '';
+            document.getElementById('hpc_time').value = hpc.time || '';
+            document.getElementById('hpc_mem').value = hpc.mem || '';
+            document.getElementById('hpc_cpus').value = hpc.cpus || 1;
+            document.getElementById('hpc_sbatch_gres').value = hpc.sbatch_gres || '';
+            applyHpcPreset({ silent: true });
+
             document.getElementById('hpc_job_name').value = hpc.job_name || '';
             document.getElementById('hpc_output_pattern').value = hpc.output_pattern || '';
             document.getElementById('hpc_error_pattern').value = hpc.error_pattern || '';
@@ -7403,6 +7616,7 @@
             document.getElementById('hpc_monitor_jobs').checked = hpc.monitor_jobs !== false;
             document.getElementById('cohort_max_concurrent').value = hpc.max_concurrent || 50;
             updateCohortDatasetDisplay();
+            validateHpcEmailField();
             scheduleHpcPreflightRefresh();
         }
 
@@ -7456,10 +7670,12 @@
             }
 
             return {
+                preset: document.getElementById('hpc_preset').value || 'auto',
                 partition: partition,
                 time: timeVal,
                 mem: memVal,
                 cpus: cpus,
+                sbatch_gres: (document.getElementById('hpc_sbatch_gres').value || '').trim(),
                 job_name: (document.getElementById('hpc_job_name').value || '').trim(),
                 output_pattern: (document.getElementById('hpc_output_pattern').value || '').trim(),
                 error_pattern: (document.getElementById('hpc_error_pattern').value || '').trim(),

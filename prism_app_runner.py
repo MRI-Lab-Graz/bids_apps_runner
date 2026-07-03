@@ -763,6 +763,16 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50):
     app_name = str(common.get("pipeline_app_name") or "").strip() or "bids_app"
     cohort_log_dir = Path(project_dir) / "logs" / "cohort"
 
+    # Custom SBATCH directives (e.g. sbatch_gres: "gpu:1" for GPU-capable
+    # apps like QSIPrep/FastSurfer) -- forwarded the same way the single-job
+    # HPC path already does (prism_hpc.py), so array/cohort runs actually
+    # request the resources the project's HPC settings ask for.
+    sbatch_directives = {
+        key: value
+        for key, value in hpc.items()
+        if key.startswith("sbatch_") and value
+    }
+
     return {
         "datasets": [dataset_id],
         "paths": {
@@ -794,6 +804,7 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50):
             "modules": hpc.get("modules") or [],
             "environment": hpc.get("environment") or {},
             "notify_email": hpc.get("notify_email") or "",
+            **sbatch_directives,
         },
         "bids_app": {
             "app_name": app_name,
