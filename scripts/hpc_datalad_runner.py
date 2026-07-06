@@ -28,7 +28,7 @@ import argparse
 from pathlib import Path
 from typing import Dict, Optional
 
-from app_profiles import resolve_app_profile
+from app_profiles import check_gpu_request_feasible, resolve_app_profile
 
 _SAFE_SUBJECT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _SAFE_SHELL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -113,6 +113,11 @@ def validate_compute_config(config: Dict) -> bool:
     paths = config.get("paths", {})
     if not paths.get("container"):
         logging.error("Missing required config: paths.container")
+        return False
+
+    gpu_error = check_gpu_request_feasible(config.get("hpc", {}))
+    if gpu_error:
+        logging.error(gpu_error)
         return False
     return True
 
@@ -367,6 +372,23 @@ echo "Scratch: ${{WORK_DIR}}"
             },
             container_ref=container_path,
         )
+        # Force CPU-only execution unless a GPU was actually requested via
+        # sbatch_gres (mirrors the --nv gating in prism_hpc.py/prism_local.py).
+        # DSI Studio (bundled in qsiprep) auto-probes CUDA at startup even
+        # when no --nv/GPU device is mounted into the container; on nodes
+        # with a partial/broken NVIDIA userspace stack that probe can hang
+        # indefinitely instead of failing fast, which is what stalled every
+        # task of job 5365074 at the raw_gqi (DSIStudioGQIReconstruction)
+        # step for the full 24h walltime. Setting CUDA_VISIBLE_DEVICES=
+        # makes any CUDA-aware tool see zero devices immediately and fall
+        # back to its CPU path.
+        hpc_requests_gpu = any(
+            "gpu" in str(v).lower()
+            for k, v in self.hpc.items()
+            if k.startswith("sbatch_") and v
+        )
+        env_pairs = [] if hpc_requests_gpu else ["CUDA_VISIBLE_DEVICES="]
+
         extra_env = ""
         if profile.get("supports_nipreps_resource_flags"):
             cpus = int(self.hpc.get("cpus", 8))
@@ -387,7 +409,7 @@ echo "Scratch: ${{WORK_DIR}}"
             # explicitly via --env so several array tasks sharing one large
             # node don't collectively exhaust its shared process limit
             # (ulimit -u) the same way unconstrained internal threading did.
-            thread_env = ",".join(
+            env_pairs.extend(
                 f"{var}={cpus}"
                 for var in (
                     "OMP_NUM_THREADS",
@@ -397,7 +419,8 @@ echo "Scratch: ${{WORK_DIR}}"
                     "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS",
                 )
             )
-            extra_env = f"    --env {_shell_quote(thread_env)} \\\n"
+        if env_pairs:
+            extra_env = f"    --env {_shell_quote(','.join(env_pairs))} \\\n"
         for auto_opt in profile.get("auto_options") or []:
             if auto_opt not in options:
                 options.append(auto_opt)

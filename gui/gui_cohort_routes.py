@@ -141,7 +141,11 @@ def register_cohort_routes(
         )
         if error_response:
             return error_response
-        return jsonify({"config": cohort_cfg})
+
+        import app_profiles  # lazy -- scripts/ is on sys.path at runtime
+
+        gpu_warning = app_profiles.check_gpu_request_feasible(cohort_cfg.get("hpc", {}))
+        return jsonify({"config": cohort_cfg, "gpu_warning": gpu_warning})
 
     @app.route("/cohort/check_open_jobs", methods=["GET"])
     def cohort_check_open_jobs():
@@ -249,6 +253,13 @@ def register_cohort_routes(
         )
         if error_response:
             return error_response
+
+        if command == "submit":
+            import app_profiles  # lazy -- scripts/ is on sys.path at runtime
+
+            gpu_error = app_profiles.check_gpu_request_feasible(cohort_cfg.get("hpc", {}))
+            if gpu_error:
+                return jsonify({"error": gpu_error}), 400
 
         project_dir = resolve_project_dir(project_id)
         cohort_dir = project_dir / "logs" / "cohort"

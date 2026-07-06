@@ -870,6 +870,12 @@ def register_run_routes(
                 400,
             )
 
+        import app_profiles  # lazy -- scripts/ is on sys.path at runtime
+
+        gpu_error = app_profiles.check_gpu_request_feasible(hpc)
+        if gpu_error:
+            return jsonify({"error": gpu_error}), 400
+
         def _sanitize_token(value, fallback):
             cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip())
             cleaned = cleaned.strip("_")
@@ -939,6 +945,24 @@ def register_run_routes(
                 f"#SBATCH --job-name={job_name}",
                 f"#SBATCH --output={output_pattern}",
                 f"#SBATCH --error={error_pattern}",
+            ]
+            # Extra directives, e.g. "sbatch_gres": "gpu:1" -> #SBATCH --gres=gpu:1
+            # (same convention as prism_hpc.py/hpc_datalad_runner.py) -- this is
+            # how a GPU actually gets requested/reserved for this job; without
+            # it, SLURM won't expose a GPU to the container even on a node
+            # that has one.
+            for key, value in hpc.items():
+                if not key.startswith("sbatch_") or value in (None, "", False):
+                    continue
+                directive = re.sub(r"[^A-Za-z0-9-]", "", key.replace("sbatch_", "").replace("_", "-"))
+                if not directive:
+                    continue
+                if value is True:
+                    lines.append(f"#SBATCH --{directive}")
+                else:
+                    safe_value = re.sub(r"[^A-Za-z0-9._%/@:+,=~-]", "", str(value))
+                    lines.append(f"#SBATCH --{directive}={safe_value}")
+            lines += [
                 "",
                 "set -euo pipefail",
                 "",

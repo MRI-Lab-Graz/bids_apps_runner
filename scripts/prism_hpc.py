@@ -20,7 +20,12 @@ from argparse import Namespace
 # Import from PRISM modules
 from prism_core import get_subjects_from_bids, run_command
 import prism_datalad
-from app_profiles import resolve_app_name, resolve_app_profile, CATALOG
+from app_profiles import (
+    check_gpu_request_feasible,
+    resolve_app_name,
+    resolve_app_profile,
+    CATALOG,
+)
 
 
 def _ensure_app_auto_options(common, app, container_ref, options):
@@ -621,6 +626,11 @@ def execute_hpc(config: Dict[str, Any], args: Namespace) -> bool:
     config.get("app", {})
     hpc = config.get("hpc", {})
     datalad_config = config.get("datalad", {})
+
+    gpu_error = check_gpu_request_feasible(hpc)
+    if gpu_error:
+        logging.error(gpu_error)
+        return False
 
     start_time = time.time()
 

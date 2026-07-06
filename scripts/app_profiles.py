@@ -25,7 +25,9 @@ custom MRIQC fork lacking --nprocs support: {"supports_nipreps_resource_flags": 
 
 import copy
 import os
-from typing import Any, Dict, Optional
+import shutil
+import subprocess
+from typing import Any, Dict, List, Optional
 
 DEFAULT_PROFILE: Dict[str, Any] = {
     "display_name": "BIDS App",
@@ -247,3 +249,89 @@ def resolve_app_profile(
                 profile[key] = value
 
     return profile
+
+
+def _sinfo_partition_gres(partition: str) -> Optional[List[str]]:
+    """GRES strings (one per node) that `sinfo` reports for a partition.
+    Returns None -- "couldn't check" -- if sinfo isn't on PATH or the query
+    fails, so callers skip validation rather than fail closed on a machine
+    without a live SLURM cluster (e.g. a laptop running the GUI)."""
+    if not shutil.which("sinfo"):
+        return None
+    try:
+        result = subprocess.run(
+            ["sinfo", "-h", "-p", partition, "-o", "%G", "--noheader"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _sinfo_gpu_partitions() -> List[str]:
+    """Partitions cluster-wide that have at least one node advertising a gpu
+    gres -- used only to make the "wrong partition" error actionable."""
+    if not shutil.which("sinfo"):
+        return []
+    try:
+        result = subprocess.run(
+            ["sinfo", "-h", "-o", "%P %G", "--noheader"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return []
+    if result.returncode != 0:
+        return []
+    seen: Dict[str, None] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and "gpu" in parts[1].lower():
+            seen.setdefault(parts[0].rstrip("*"), None)
+    return list(seen.keys())
+
+
+def check_gpu_request_feasible(hpc: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Guard against the classic SLURM footgun this cluster has: requesting
+    a GPU gres on a partition that has none. SLURM doesn't reject that at
+    submission time -- the job just sits PENDING forever, which looks
+    identical to "cluster is busy" until someone notices, sometimes days
+    later.
+
+    Returns None when the request is fine, or when sinfo/SLURM isn't
+    reachable (nothing to validate against, so don't block work on a
+    non-cluster machine). Otherwise returns a human-readable error naming
+    the partitions that actually have GPUs, for the caller to surface.
+    """
+    hpc_cfg = hpc if isinstance(hpc, dict) else {}
+    partition = str(hpc_cfg.get("partition") or "").strip()
+    wants_gpu = any(
+        "gpu" in str(v).lower()
+        for k, v in hpc_cfg.items()
+        if k.startswith("sbatch_") and v
+    )
+    if not wants_gpu or not partition:
+        return None
+
+    gres_list = _sinfo_partition_gres(partition)
+    if gres_list is None:
+        return None
+    if any("gpu" in g.lower() for g in gres_list):
+        return None
+
+    alternatives = _sinfo_gpu_partitions()
+    hint = (
+        f" GPU-capable partitions on this cluster: {', '.join(alternatives)}."
+        if alternatives
+        else ""
+    )
+    return (
+        f"Partition '{partition}' has no GPU nodes (sinfo reports no gpu gres "
+        f"there), but this job requests one via sbatch_gres -- it would sit "
+        f"PENDING forever instead of failing outright.{hint}"
+    )
