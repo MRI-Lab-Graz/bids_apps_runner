@@ -427,6 +427,17 @@ echo "Scratch: ${{WORK_DIR}}"
 
         container = _shell_quote(self.paths.get("container", "TODO_CONTAINER_PATH"))
 
+        # --nv exposes the node's NVIDIA driver/devices to the container --
+        # without it, requesting --gres=gpu:1 reserves a GPU at the SLURM
+        # level but the container still can't see it, so e.g. qsiprep's
+        # `eddy` wrapper (which auto-picks eddy_cuda vs eddy_cpu based on
+        # whether it finds a working CUDA driver) would silently fall back
+        # to CPU anyway. Mirrors prism_hpc.py's/prism_local.py's gating.
+        apptainer_args = [str(a) for a in (self.bids_app.get("apptainer_args") or [])]
+        if hpc_requests_gpu and "--nv" not in apptainer_args:
+            apptainer_args.append("--nv")
+        extra_apptainer_args = "".join(f"    {a} \\\n" for a in apptainer_args)
+
         extra_binds = ""
         tf = (self.paths.get("templateflow_dir") or "").strip()
         if tf:
@@ -444,7 +455,7 @@ echo "Scratch: ${{WORK_DIR}}"
 echo "--- Running {app_name} for sub-${{SUBJECT_LABEL}} ---"
 "$APPTAINER_BIN" run \\
     --cleanenv \\
-{extra_env}    -B "${{BIDS_DIR}}":/bids:ro \\
+{extra_apptainer_args}{extra_env}    -B "${{BIDS_DIR}}":/bids:ro \\
     -B "${{OUT_DIR}}":/output \\
 {extra_binds}    -B "${{TMP_DIR}}":/tmp \\
     {container} \\
