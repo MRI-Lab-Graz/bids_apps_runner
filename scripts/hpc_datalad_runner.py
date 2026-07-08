@@ -389,6 +389,29 @@ echo "Scratch: ${{WORK_DIR}}"
         )
         env_pairs = [] if hpc_requests_gpu else ["CUDA_VISIBLE_DEVICES="]
 
+        # QSIPrep's ExtendedEddy interface does NOT auto-detect CUDA -- it
+        # only runs eddy_cuda if the eddy config it's given has
+        # "use_cuda": true (default shipped config has it false, so eddy
+        # runs on CPU even with a GPU allocated and --nv passed). It also
+        # hardcodes the binary name "eddy_cuda10.2" regardless of which
+        # CUDA-versioned eddy binary the image actually ships (this image
+        # only has eddy_cuda11.0), so a same-named shim has to be bound in
+        # too. Verified against qsiprep_26.0.0.sif: bind-mounting a file
+        # onto a not-yet-existing path inside the image works fine even
+        # though the SIF itself is read-only.
+        qsiprep_gpu_dir = Path(__file__).resolve().parent.parent / "patches" / "qsiprep_gpu"
+        if hpc_requests_gpu and app_name == "qsiprep":
+            eddy_shim = qsiprep_gpu_dir / "eddy_cuda10.2"
+            eddy_config = qsiprep_gpu_dir / "eddy_params_gpu.json"
+            apptainer_args_gpu_eddy = [
+                f'-B "{eddy_shim}":/app/.pixi/envs/qsiprep/bin/eddy_cuda10.2:ro',
+                f'-B "{eddy_config}":/opt/eddy_params_gpu.json:ro',
+            ]
+            if not _has_flag(options, ("--eddy-config",)):
+                options.append("--eddy-config=/opt/eddy_params_gpu.json")
+        else:
+            apptainer_args_gpu_eddy = []
+
         extra_env = ""
         if profile.get("supports_nipreps_resource_flags"):
             cpus = int(self.hpc.get("cpus", 8))
@@ -429,13 +452,14 @@ echo "Scratch: ${{WORK_DIR}}"
 
         # --nv exposes the node's NVIDIA driver/devices to the container --
         # without it, requesting --gres=gpu:1 reserves a GPU at the SLURM
-        # level but the container still can't see it, so e.g. qsiprep's
-        # `eddy` wrapper (which auto-picks eddy_cuda vs eddy_cpu based on
-        # whether it finds a working CUDA driver) would silently fall back
-        # to CPU anyway. Mirrors prism_hpc.py's/prism_local.py's gating.
+        # level but the container still can't see it at all. Mirrors
+        # prism_hpc.py's/prism_local.py's gating. Note this alone is *not*
+        # sufficient for qsiprep's eddy step to actually use the GPU -- see
+        # the --eddy-config/eddy_cuda10.2 shim wiring above.
         apptainer_args = [str(a) for a in (self.bids_app.get("apptainer_args") or [])]
         if hpc_requests_gpu and "--nv" not in apptainer_args:
             apptainer_args.append("--nv")
+        apptainer_args.extend(apptainer_args_gpu_eddy)
         extra_apptainer_args = "".join(f"    {a} \\\n" for a in apptainer_args)
 
         extra_binds = ""

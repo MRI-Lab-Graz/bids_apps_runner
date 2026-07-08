@@ -106,10 +106,12 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         # This CPU-only variant is only reachable by explicitly picking it
         # from the Compute Preset dropdown -- e.g. while a GPU partition is
         # unavailable (LDAP/sssd not configured on those nodes yet, etc.).
-        # QSIPrep's only GPU-accelerated step is FSL eddy (eddy_cuda); it
-        # falls back to the CPU eddy_openmp implementation automatically,
-        # just slower for that one step -- everything else is CPU-bound
-        # regardless of this preset.
+        # QSIPrep's only GPU-accelerated step is FSL eddy (eddy_cuda). Eddy
+        # does NOT auto-detect CUDA -- hpc_datalad_runner.py has to opt in
+        # explicitly via --eddy-config (only done when this app is the
+        # "qsiprep" profile, not this "qsiprep_cpu" one), so picking this
+        # preset just means eddy runs on CPU the whole time, same as if
+        # --eddy-config were simply omitted.
         "container_match_names": [],
         "supports_nipreps_resource_flags": True,
         "recommended_hpc": {
