@@ -156,6 +156,30 @@ CATALOG: Dict[str, Dict[str, Any]] = {
             "sbatch_gres": "gpu:1",
         },
     },
+    "fastsurfer_bids": {
+        "display_name": "FastSurfer (BIDS, longitudinal-aware)",
+        "docs_url": "https://github.com/karl-koschutnig/FastSurfer-bids",
+        # Same container family as "fastsurfer" (a FastSurfer-bids fork build),
+        # so it can't be told apart by container-name sniffing -- explicit
+        # selection only, same precedent as "qsiprep_cpu" above.
+        "container_match_names": [],
+        "execution_adapter_default": "fastsurfer-bids",
+        "execution_adapter_aliases": {
+            "fastsurfer-bids": "fastsurfer-bids",
+            "fastsurfer_bids": "fastsurfer-bids",
+        },
+        # Longer walltime than the cross-sectional "fastsurfer" default
+        # (02:00:00): one job now runs run_fastsurfer_bids.py for a whole
+        # subject, which auto-dispatches to long_fastsurfer.sh and covers
+        # recon-surf for every timepoint (e.g. 3 sessions) in a single job.
+        "recommended_hpc": {
+            "partition": "gpu",
+            "time": "06:00:00",
+            "mem": "24G",
+            "cpus": 8,
+            "sbatch_gres": "gpu:1",
+        },
+    },
     "freesurfer": {
         "display_name": "FreeSurfer",
         "docs_url": "https://surfer.nmr.mgh.harvard.edu/",

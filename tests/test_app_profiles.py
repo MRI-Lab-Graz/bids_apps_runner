@@ -69,6 +69,41 @@ def test_fastsurfer_execution_adapter_aliases():
     assert aliases["bids-fastsurfer"] == "fastsurfer-cross"
 
 
+def test_fastsurfer_bids_execution_adapter_aliases():
+    aliases = CATALOG["fastsurfer_bids"]["execution_adapter_aliases"]
+    assert aliases["fastsurfer-bids"] == "fastsurfer-bids"
+    assert aliases["fastsurfer_bids"] == "fastsurfer-bids"
+
+
+def test_fastsurfer_bids_is_explicit_selection_only():
+    # Same container family as "fastsurfer" -- container-ref sniffing must
+    # keep resolving to the cross-sectional "fastsurfer" entry; only an
+    # explicit app_profile/pipeline_app_name should reach "fastsurfer_bids"
+    # (same precedent as qsiprep vs qsiprep_cpu).
+    assert resolve_app_name({}, {}, container_ref="/x/fastsurfer_3.0.sif") == "fastsurfer"
+
+    profile = resolve_app_profile({"pipeline_app_name": "fastsurfer_bids"}, {})
+    assert profile["name"] == "fastsurfer_bids"
+    assert profile["execution_adapter_default"] == "fastsurfer-bids"
+    assert profile["recommended_hpc"]["sbatch_gres"] == "gpu:1"
+
+
+def test_fastsurfer_bids_execution_adapter_survives_container_sniffing():
+    # scripts/prism_local.py::_infer_execution_adapter and
+    # scripts/prism_hpc.py::_infer_execution_adapter check
+    # app.execution_adapter against every catalog entry's own alias table
+    # (not just "fastsurfer"'s), so an explicit "fastsurfer-bids" request
+    # isn't silently downgraded to "fastsurfer-cross" by container-ref
+    # sniffing against the same underlying fastsurfer .sif.
+    from prism_local import _infer_execution_adapter
+
+    adapter = _infer_execution_adapter(
+        {"container": "/x/fastsurfer_3.0.sif"},
+        {"execution_adapter": "fastsurfer-bids"},
+    )
+    assert adapter == "fastsurfer-bids"
+
+
 def test_qsiprep_resolves_for_all_three_container_ref_shapes():
     for ref in ("pennlinc/qsiprep:1.1.1", "qsiprep:latest", "/x/qsiprep_1.1.1.sif"):
         assert resolve_app_name({}, {}, container_ref=ref) == "qsiprep"

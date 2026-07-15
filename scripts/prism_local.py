@@ -268,19 +268,21 @@ def _infer_execution_adapter(common, app):
 
     app.execution_adapter is a distinct, pre-existing field from
     app.app_profile: it's an explicit adapter request (kept for backward
-    compatibility), resolved via the fastsurfer catalog entry's own alias
-    table before falling through to the normal 3-tier catalog resolution.
+    compatibility), resolved via any catalog entry's own alias table
+    (fastsurfer's "fastsurfer-cross" family, fastsurfer_bids's
+    "fastsurfer-bids" family, etc.) before falling through to the normal
+    3-tier catalog resolution.
     """
     app_cfg = app if isinstance(app, dict) else {}
     common_cfg = common if isinstance(common, dict) else {}
     container_ref = str(common_cfg.get("container", "")).strip()
 
     explicit = str(app_cfg.get("execution_adapter", "")).strip().lower()
-    fastsurfer_aliases = CATALOG.get("fastsurfer", {}).get(
-        "execution_adapter_aliases", {}
-    )
-    if explicit in fastsurfer_aliases:
-        return fastsurfer_aliases[explicit]
+    if explicit:
+        for profile in CATALOG.values():
+            aliases = profile.get("execution_adapter_aliases", {})
+            if explicit in aliases:
+                return aliases[explicit]
 
     name = resolve_app_name(common_cfg, app_cfg, container_ref=container_ref)
     return CATALOG.get(name, {}).get("execution_adapter_default", "")
@@ -335,6 +337,25 @@ def _prepare_fastsurfer_options(options):
         "-w",
     }
     return _drop_runtime_flags(normalized, forbidden)
+
+
+def _prepare_fastsurfer_bids_options(options):
+    """Normalize passthrough options for run_fastsurfer_bids.py.
+
+    bids_dir/output_dir/analysis_level are positional and always
+    runner-supplied; --participant_label/--fs_license are runtime-managed
+    here too, so any of those accidentally left in app.options are dropped
+    rather than passed through twice.
+    """
+    opts = [str(x) for x in (options or [])]
+    forbidden = {
+        "--participant_label",
+        "--participant-label",
+        "--session_label",
+        "--session-label",
+        "--fs_license",
+    }
+    return _drop_runtime_flags(opts, forbidden)
 
 
 def _discover_fastsurfer_subject_inputs(bids_folder, subject):
@@ -1109,7 +1130,8 @@ def _process_subject(
 
         execution_adapter = _infer_execution_adapter(common, app)
         fastsurfer_mode = execution_adapter == "fastsurfer-cross"
-        if fastsurfer_mode and analysis_level != "participant":
+        fastsurfer_bids_mode = execution_adapter == "fastsurfer-bids"
+        if (fastsurfer_mode or fastsurfer_bids_mode) and analysis_level != "participant":
             logging.error(
                 "FastSurfer adapter supports participant-level runs only. "
                 "Set analysis_level to 'participant'."
@@ -1165,17 +1187,17 @@ def _process_subject(
             base_cmd.append(common["container"])
         else:
             # Apptainer/Singularity
-            action = "exec" if fastsurfer_mode else "run"
+            action = "exec" if (fastsurfer_mode or fastsurfer_bids_mode) else "run"
             base_cmd = [_apptainer_binary(), action]
 
             if app.get("apptainer_args"):
                 safe_args = _sanitize_apptainer_args(app["apptainer_args"])
-                if (fastsurfer_mode or gpu_enabled) and "--nv" not in safe_args:
+                if (fastsurfer_mode or fastsurfer_bids_mode or gpu_enabled) and "--nv" not in safe_args:
                     safe_args.append("--nv")
                 base_cmd.extend(safe_args)
             else:
                 base_cmd.append("--containall")
-                if fastsurfer_mode or gpu_enabled:
+                if fastsurfer_mode or fastsurfer_bids_mode or gpu_enabled:
                     base_cmd.append("--nv")
 
             for mnt in _build_common_mounts(common, tmp_dir, bids_mount_source):
@@ -1245,6 +1267,35 @@ def _process_subject(
                     cmd.extend(fs_options)
 
                 commands.append((cmd, fs_input["sid"]))
+        elif fastsurfer_bids_mode:
+            # run_fastsurfer_bids.py discovers subjects/sessions itself (via
+            # pybids) and auto-dispatches to brun_fastsurfer.sh or
+            # long_fastsurfer.sh internally -- one command covers the whole
+            # subject (all sessions), no per-T1w loop needed here.
+            cmd = list(base_cmd)
+            subject_label = subject.replace("sub-", "")
+            cmd.extend(
+                [
+                    "python3",
+                    "/fastsurfer/run_fastsurfer_bids.py",
+                    "/bids",
+                    "/output",
+                    analysis_level,
+                    "--participant_label",
+                    subject_label,
+                ]
+            )
+
+            fs_license_file = common.get("fs_license_file")
+            if fs_license_file:
+                cmd.extend(["--fs_license", "/fs/license.txt"])
+
+            fs_bids_options = _prepare_fastsurfer_bids_options(app.get("options", []))
+            if fs_bids_options:
+                cmd.append("--")
+                cmd.extend(fs_bids_options)
+
+            commands.append((cmd, subject))
         else:
             cmd = list(base_cmd)
             cmd.extend(["/bids", "/output", analysis_level])

@@ -50,19 +50,21 @@ def _infer_execution_adapter(common, app):
 
     app.execution_adapter is a distinct, pre-existing field from
     app.app_profile: it's an explicit adapter request (kept for backward
-    compatibility), resolved via the fastsurfer catalog entry's own alias
-    table before falling through to the normal 3-tier catalog resolution.
+    compatibility), resolved via any catalog entry's own alias table
+    (fastsurfer's "fastsurfer-cross" family, fastsurfer_bids's
+    "fastsurfer-bids" family, etc.) before falling through to the normal
+    3-tier catalog resolution.
     """
     app_cfg = app if isinstance(app, dict) else {}
     common_cfg = common if isinstance(common, dict) else {}
     container_ref = str(common_cfg.get("container", "")).strip()
 
     explicit = str(app_cfg.get("execution_adapter", "")).strip().lower()
-    fastsurfer_aliases = CATALOG.get("fastsurfer", {}).get(
-        "execution_adapter_aliases", {}
-    )
-    if explicit in fastsurfer_aliases:
-        return fastsurfer_aliases[explicit]
+    if explicit:
+        for profile in CATALOG.values():
+            aliases = profile.get("execution_adapter_aliases", {})
+            if explicit in aliases:
+                return aliases[explicit]
 
     name = resolve_app_name(common_cfg, app_cfg, container_ref=container_ref)
     return CATALOG.get(name, {}).get("execution_adapter_default", "")
@@ -115,6 +117,25 @@ def _prepare_fastsurfer_options(options):
     return _drop_runtime_flags(normalized, forbidden)
 
 
+def _prepare_fastsurfer_bids_options(options):
+    """Normalize passthrough options for run_fastsurfer_bids.py.
+
+    bids_dir/output_dir/analysis_level are positional and always
+    runner-supplied; --participant_label/--fs_license are runtime-managed
+    here too, so any of those accidentally left in app.options are dropped
+    rather than passed through twice.
+    """
+    opts = [str(x) for x in (options or [])]
+    forbidden = {
+        "--participant_label",
+        "--participant-label",
+        "--session_label",
+        "--session-label",
+        "--fs_license",
+    }
+    return _drop_runtime_flags(opts, forbidden)
+
+
 # ============================================================================
 # SLURM Job Management Functions
 # ============================================================================
@@ -134,7 +155,8 @@ def create_slurm_job(subject, config, work_dir, dry_run=False, debug=False):
         )
         execution_adapter = _infer_execution_adapter(common, app)
         fastsurfer_mode = execution_adapter == "fastsurfer-cross"
-        if fastsurfer_mode and analysis_level != "participant":
+        fastsurfer_bids_mode = execution_adapter == "fastsurfer-bids"
+        if (fastsurfer_mode or fastsurfer_bids_mode) and analysis_level != "participant":
             raise ValueError(
                 "FastSurfer adapter supports participant-level runs only in HPC mode."
             )
@@ -316,8 +338,7 @@ for FASTSURFER_T1_HOST in "${{FASTSURFER_T1_LIST[@]}}"; do
 
             script_content += f"""        -B {tmp_dir}:/tmp \\
         -B {output_dir}:/output \\
-        -B {bids_dir}:/bids \\
-"""
+        -B {bids_dir}:/bids \\"""
 
             if common.get("templateflow_dir"):
                 script_content += (
@@ -348,7 +369,7 @@ for FASTSURFER_T1_HOST in "${{FASTSURFER_T1_LIST[@]}}"; do
 """
 
             if common.get("fs_license_file"):
-                script_content += "\n        --fs_license /fs/license.txt \\\\"
+                script_content += "\n        --fs_license /fs/license.txt \\"
 
             app_options = _prepare_fastsurfer_options(app.get("options", []))
             for option in app_options:
@@ -367,7 +388,59 @@ done
 
 PROCESS_EXIT_CODE=$FASTSURFER_EXIT
 """
-        if not fastsurfer_mode:
+
+        if fastsurfer_bids_mode:
+            script_content += """
+"$APPTAINER_BIN" exec \\
+"""
+
+            apptainer_args = [str(arg) for arg in app.get("apptainer_args", [])]
+            if not apptainer_args:
+                apptainer_args = ["--containall"]
+            if "--nv" not in apptainer_args:
+                apptainer_args.append("--nv")
+
+            for arg in apptainer_args:
+                script_content += f"        {arg} \\\n"
+
+            script_content += f"""        -B {tmp_dir}:/tmp \\
+        -B {output_dir}:/output \\
+        -B {bids_dir}:/bids \\"""
+
+            if common.get("fs_license_file"):
+                script_content += (
+                    f"\n        -B {common['fs_license_file']}:/fs/license.txt:ro \\"
+                )
+
+            for mount in app.get("mounts", []):
+                if mount.get("source") and mount.get("target"):
+                    script_content += (
+                        f"\n        -B {mount['source']}:{mount['target']} \\"
+                    )
+
+            subject_label = subject.replace("sub-", "")
+            script_content += f"""
+        {common["container"]} \\
+        python3 /fastsurfer/run_fastsurfer_bids.py \\
+        /bids /output {analysis_level} \\
+        --participant_label {subject_label} \\
+"""
+
+            if common.get("fs_license_file"):
+                script_content += "        --fs_license /fs/license.txt \\\n"
+
+            app_options = _prepare_fastsurfer_bids_options(app.get("options", []))
+            if app_options:
+                script_content += "        -- \\\n"
+                for option in app_options:
+                    script_content += f"        {option} \\\n"
+
+            script_content += f"""        {container_log_redirection}
+
+PROCESS_EXIT_CODE=$?
+"""
+
+        if not fastsurfer_mode and not fastsurfer_bids_mode:
             script_content += """
 "$APPTAINER_BIN" run \\
 """
@@ -388,8 +461,7 @@ PROCESS_EXIT_CODE=$FASTSURFER_EXIT
 
             script_content += f"""    -B {tmp_dir}:/tmp \\
     -B {output_dir}:/output \\
-    -B {bids_dir}:/bids \\
-"""
+    -B {bids_dir}:/bids \\"""
 
             if common.get("templateflow_dir"):
                 script_content += (
