@@ -147,7 +147,28 @@ class ProjectStore:
         with open(project_json_path, "r", encoding="utf-8") as f:
             project_json = json.load(f)
 
-        project_json["config"] = self.config_normalizer(config)
+        # Merge at top-level-key granularity rather than replacing the whole
+        # config wholesale. Callers routinely save a partial payload (e.g.
+        # the HPC settings editor only sends {hpc: ...}) expecting everything
+        # else -- common/app/pipelines/validation -- to survive untouched.
+        # A key present in the incoming payload fully replaces that key's
+        # subtree (including an explicit {} or []); a key absent from the
+        # payload is left exactly as it was on disk.
+        existing_config = project_json.get("config")
+        merged_config = dict(existing_config) if isinstance(existing_config, dict) else {}
+        if isinstance(config, dict):
+            merged_config.update(config)
+
+        # Best-effort single-copy backup before overwriting, kept only for
+        # the transition to the merge semantics above.
+        try:
+            backup_path = project_json_path.parent / (project_json_path.name + ".bak")
+            with open(backup_path, "w", encoding="utf-8") as f:
+                json.dump(project_json, f, indent=2)
+        except OSError:
+            pass
+
+        project_json["config"] = self.config_normalizer(merged_config)
         project_json["last_modified"] = self.timestamp_factory()
 
         with open(project_json_path, "w", encoding="utf-8") as f:

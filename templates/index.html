@@ -503,7 +503,7 @@
                                                 <div class="col-md-6">
                                                     <label class="form-label">Select Local Image</label>
                                                     <div class="input-group" id="container_select_group" style="display:flex;">
-                                                        <select id="container_select" class="form-select" onchange="checkAppVersion()"></select>
+                                                        <select id="container_select" class="form-select" onchange="checkAppVersion(); updateFetchHelpBtnVisibility();"></select>
                                                         <button type="button" id="fetchHelpBtn" class="btn btn-accent" style="display:none;" onclick="fetchAppOptions()">Load Options</button>
                                                     </div>
                                                 </div>
@@ -523,9 +523,9 @@
                                                 <div class="col-md-6">
                                                     <label class="form-label">Select Version / Tag</label>
                                                     <div class="input-group">
-                                                        <select id="container_docker_tag" class="form-select"></select>
+                                                        <select id="container_docker_tag" class="form-select" onchange="updateFetchHelpBtnVisibility()"></select>
                                                         <button type="button" id="pullDockerBtn" class="btn btn-outline-info" onclick="pullDockerImage()"><i class="fas fa-download me-1"></i> Pull</button>
-                                                        <button type="button" class="btn btn-accent" onclick="fetchAppOptions()">Load Options</button>
+                                                        <button type="button" id="fetchHelpBtnDocker" class="btn btn-accent" style="display:none;" onclick="fetchAppOptions()">Load Options</button>
                                                     </div>
                                                 </div>
                                             </div>
@@ -836,10 +836,22 @@
                         </div>
                     </div>
 
+                    <!-- Deliberately a sibling .section-header, not nested inside
+                         dynamicOptionsSection: initializeRunnerMainAccordion()
+                         (see script below) only recognizes direct-child
+                         .section-header elements as their own accordion item --
+                         a header nested one level deeper (as this used to be)
+                         gets silently swept into the *previous* section's
+                         collapsed body instead, making freshly-loaded options
+                         invisible regardless of dynamicOptionsSection's own
+                         display style. -->
+                    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>App-Specific Arguments</span>
+                        <a id="docLink" href="#" target="_blank" class="footer-link" style="font-size: 0.8rem;"><i class="fas fa-book me-1"></i> Documentation</a>
+                    </div>
                     <div id="dynamicOptionsSection" style="display: none;">
-                        <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
-                            <span>App-Specific Arguments</span>
-                            <a id="docLink" href="#" target="_blank" class="footer-link" style="font-size: 0.8rem;"><i class="fas fa-book me-1"></i> Documentation</a>
+                        <div id="staleOptionsNotice" class="alert alert-warning d-flex justify-content-between align-items-center" style="display:none;">
+                            <span><i class="fas fa-exclamation-triangle me-1"></i> These options are for a different container than the one currently selected. Click "Load Options" to refresh.</span>
                         </div>
                         <div id="optionsContainer"></div>
                     </div>
@@ -887,6 +899,14 @@
                                 <label class="form-check-label" for="gpu_enabled">
                                     Enable GPU / CUDA passthrough (<code>--nv</code>)
                                     <span id="gpu_status_badge" class="badge bg-secondary ms-1" style="font-size:0.7rem;">detecting…</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-12 mb-3">
+                            <div class="form-check" id="fastsurfer_longitudinal_toggle_wrap" title="FastSurfer only. Runs run_fastsurfer_bids.py inside the container, which auto-discovers sessions per subject and dispatches to FastSurfer's longitudinal pipeline (long_fastsurfer.sh) for any subject with 2+ sessions, or the cross-sectional pipeline otherwise. Requires a FastSurfer-bids container (deep-mi.org run_fastsurfer_bids.py entrypoint). Leave unchecked to use the classic single-session cross-sectional adapter.">
+                                <input class="form-check-input" type="checkbox" id="fastsurfer_longitudinal" onchange="handleFastsurferLongitudinalToggle()">
+                                <label class="form-check-label" for="fastsurfer_longitudinal">
+                                    FastSurfer: use BIDS longitudinal auto-dispatch (<code>fastsurfer-bids</code>)
                                 </label>
                             </div>
                         </div>
@@ -947,6 +967,14 @@
                     </div>
                     <ul id="runnerPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem;"></ul>
                 </div>
+
+                <!-- Server-verified readiness (GET /local_run_readiness), a
+                     sibling to the client-only preflight panel above -- checks
+                     things a browser can't (container file actually exists,
+                     execution_adapter resolution). New/additive: rendered by
+                     static/js/readiness_panel.js, a self-contained file with
+                     no dependency on this page's own inline script. -->
+                <div id="localReadinessPanel" class="alert alert-secondary py-2 px-3 small mb-3"></div>
 
                 <div class="runner-action-bar">
                     <div class="runner-action-bar-inner">
@@ -1221,6 +1249,16 @@
                                     <i class="fas fa-broom me-1"></i>Close failed jobs
                                 </button>
                             </div>
+
+                            <!-- Server-verified readiness (GET /cohort/readiness) --
+                                 this is the gap the redesign specifically called
+                                 out: today, Setup/Submit prerequisites (Output
+                                 Folder, HPC partition/time/mem/cpus, container
+                                 existence, GPU-partition feasibility) only ever
+                                 surfaced as a plain error string after clicking
+                                 Setup/Submit, with no proactive checklist. New/
+                                 additive: rendered by static/js/readiness_panel.js. -->
+                            <div id="cohortReadinessPanel" class="alert alert-secondary py-2 px-3 small mb-3"></div>
 
                             <div class="d-flex flex-wrap gap-2 mb-3">
                                 <button class="btn btn-outline-secondary" id="cohortSetupBtn"
@@ -1727,6 +1765,11 @@
 {% endblock %}
 
 {% block scripts %}
+    <!-- New, additive, self-contained step-tracker widget -- deliberately a
+         separate file rather than appended to the inline <script> below, so
+         it carries zero risk to that already-working code. See its own
+         header comment for the full rationale. -->
+    <script src="{{ url_for('static', filename='js/readiness_panel.js') }}"></script>
     <script>
         let currentTargetId = '';
         let browserCurrentPath = '/data/local/software';
@@ -2301,6 +2344,21 @@
                 syncRunnerSubjectFilterWithAnalysisLevel();
                 const gpuChk = document.getElementById('gpu_enabled');
                 if (gpuChk && !gpuChk.disabled) gpuChk.checked = !app.disable_gpu;
+                const fastsurferLongitudinalChk = document.getElementById('fastsurfer_longitudinal');
+                if (fastsurferLongitudinalChk) {
+                    // Either signal counts: app.execution_adapter is the
+                    // authoritative field actually used at runtime, but
+                    // hpc.preset (set via the HPC tab's Compute Preset
+                    // dropdown) is an equally explicit user choice that must
+                    // not get silently lost if execution_adapter drifted out
+                    // of sync with it (e.g. a stale save from before the
+                    // preset was picked) -- restoring from execution_adapter
+                    // alone would un-check this and then re-save the stale
+                    // value right back on the next Save.
+                    const presetSaysLongitudinal = (currentProjectConfig && currentProjectConfig.hpc &&
+                        currentProjectConfig.hpc.preset === 'fastsurfer_bids');
+                    fastsurferLongitudinalChk.checked = app.execution_adapter === 'fastsurfer-bids' || !!presetSaysLongitudinal;
+                }
 
                 const engine = common.container_engine || 'apptainer';
                 document.getElementById('container_engine').value = engine;
@@ -2666,7 +2724,6 @@
             const tmpFolderEl = document.getElementById('tmp_folder');
             const apptainerFolderEl = document.getElementById('container_folder');
             const apptainerSelectEl = document.getElementById('container_select');
-            const fetchHelpBtnEl = document.getElementById('fetchHelpBtn');
             const dockerRepoEl = document.getElementById('container_docker_repo');
             const dockerTagEl = document.getElementById('container_docker_tag');
             const buildOutputDirEl = document.getElementById('build_output_dir');
@@ -2717,7 +2774,7 @@
                         apptainerSelectEl.add(new Option(defaultApptainerImage, defaultApptainerImage));
                     }
                     apptainerSelectEl.value = defaultApptainerImage;
-                    if (fetchHelpBtnEl) fetchHelpBtnEl.style.display = 'block';
+                    updateFetchHelpBtnVisibility();
                 }
             } else if (resolvedEngine === 'docker') {
                 if (!fillOnlyEmpty || !(dockerRepoEl.value || '').trim()) {
@@ -3530,7 +3587,7 @@
             container.insertBefore(notice, container.firstChild);
         }
 
-        const _OPTION_CACHE_MIN_PARSER_VERSION = 2;
+        const _OPTION_CACHE_MIN_PARSER_VERSION = 3;
 
         function _isOptionHelpCacheUsable(cache, container, engine) {
             if (!cache || typeof cache !== 'object') return false;
@@ -3564,6 +3621,22 @@
             syncCurrentProjectConfigWithPipelines();
         }
 
+        // Opens the "App-Specific Arguments" accordion item without closing
+        // whichever section the user is currently in (e.g. "1. Container &
+        // Tools", where the "Load Options" button lives) -- deliberately
+        // does not go through initializeRunnerMainAccordion()'s closure-local
+        // openItem(), which closes every other section as a side effect and
+        // would yank the user away from what they were just looking at.
+        function _revealAppSpecificOptionsSection() {
+            const section = document.getElementById('dynamicOptionsSection');
+            const item = section && section.closest('.main-accordion-item');
+            if (!item) return;
+            item.classList.add('is-open');
+            const header = item.querySelector('.main-accordion-header');
+            if (header) header.setAttribute('aria-expanded', 'true');
+            item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
         function _renderDynamicOptionsFromHelpData(
             data,
             container,
@@ -3581,6 +3654,7 @@
 
             const containerEl = document.getElementById('optionsContainer');
             document.getElementById('dynamicOptionsSection').style.display = 'block';
+            _revealAppSpecificOptionsSection();
 
             if (data.app_info) document.getElementById('docLink').href = data.app_info.url;
             currentDeprecatedFlags = new Set(data.deprecated_flags || []);
@@ -3743,6 +3817,16 @@
                 document.getElementById('jobs').value = common.jobs || 1;
                 document.getElementById('analysis_level').value = app.analysis_level || 'participant';
                 syncRunnerSubjectFilterWithAnalysisLevel();
+                const fastsurferLongitudinalEl = document.getElementById('fastsurfer_longitudinal');
+                if (fastsurferLongitudinalEl) {
+                    // See the matching comment in applyPipelineEntryToRunnerForm:
+                    // either signal (execution_adapter or hpc.preset) counts,
+                    // so an explicit Compute Preset choice can't get silently
+                    // reverted by a later save that only looked at the
+                    // checkbox's (stale) restored state.
+                    const presetSaysLongitudinal = (cfg && cfg.hpc && cfg.hpc.preset === 'fastsurfer_bids');
+                    fastsurferLongitudinalEl.checked = app.execution_adapter === 'fastsurfer-bids' || !!presetSaysLongitudinal;
+                }
                 document.getElementById('container_engine').value = common.container_engine || 'apptainer';
 
                 // Load saved Check Output settings when present
@@ -3855,6 +3939,16 @@
                 // can miss and silently fall back to the generic defaults.
                 if (!isStaleProjectLoad(loadToken)) {
                     updateHpcConfigDetails(currentProjectConfig);
+                    // container_select's value above was set programmatically
+                    // (selectEl.value = ...), which doesn't fire its onchange
+                    // handler -- finalize which Load-Options button shows now
+                    // that the restore has settled. Deliberately the button-
+                    // only variant, not the full recompute: fetchAppOptions()
+                    // (already awaited above, inside shouldLoadOptions) already
+                    // correctly resolved the stale-banner state for this load;
+                    // re-deriving it again here was observed re-showing a
+                    // banner it shouldn't have.
+                    _updateFetchHelpBtnOnly();
                 }
             } catch (e) {
                 console.warn('Background project restore failed:', e);
@@ -3913,26 +4007,28 @@
             }
         }
 
+        // Returns whether a run is actively producing output right now, so
+        // the caller can poll fast while it matters and back off otherwise.
         async function refreshLogs() {
-            if (!document.getElementById('autoScroll').checked) return;
+            if (!document.getElementById('autoScroll').checked) return false;
 
             if (!lastProjectId) {
                 setTerminalProjectContextMessage('[Load a project to view project-specific logs.]\n');
-                return;
+                return false;
             }
 
             try {
                 const resp = await fetch(`/get_log?project_id=${encodeURIComponent(lastProjectId)}`);
-                if (!resp.ok) return;
+                if (!resp.ok) return false;
                 const data = await resp.json();
                 const term = document.getElementById('terminal');
-                
+
                 if (data.content) {
                     const isAtBottom = term.scrollHeight - term.clientHeight <= term.scrollTop + 5;
                     term.innerText = data.content;
                     const filenameEl = document.getElementById('logFilename');
                     filenameEl.innerText = data.filename || 'none';
-                    
+
                     // Update visual indicator for active/idle status
                     const terminalHeader = document.querySelector('.terminal-header');
                     if (data.is_active === false) {
@@ -3942,8 +4038,9 @@
                         terminalHeader.style.opacity = '1';
                         filenameEl.style.color = 'inherit';
                     }
-                    
+
                     if (isAtBottom) term.scrollTop = term.scrollHeight;
+                    return data.is_active !== false;
                 } else {
                     // No active content for this project
                     const filenameEl = document.getElementById('logFilename');
@@ -3951,17 +4048,31 @@
                     const terminalHeader = document.querySelector('.terminal-header');
                     terminalHeader.style.opacity = '1';
                     filenameEl.style.color = 'inherit';
-                    
+
                     if (initialLoad) {
                         term.innerText = '[Project logs are ready. Waiting for project task output...]\n';
                         initialLoad = false;
                     }
+                    return false;
                 }
             } catch (e) {
                 console.error("Log refresh failed", e);
+                return false;
             }
         }
-        setInterval(refreshLogs, 2000);
+
+        // Adaptive polling: fast while a project's task is actually
+        // producing output, much slower otherwise -- refreshLogs() used to
+        // run unconditionally every 2s for the entire time the page was
+        // open (no project, no active run, didn't matter), which was pure
+        // network/console noise the vast majority of the time.
+        let _logPollTimer = null;
+        async function _scheduleLogPoll() {
+            const isActive = await refreshLogs();
+            if (_logPollTimer) clearTimeout(_logPollTimer);
+            _logPollTimer = setTimeout(_scheduleLogPoll, isActive ? 2000 : 15000);
+        }
+        _scheduleLogPoll();
 
         function clearTerminal() {
             const term = document.getElementById('terminal');
@@ -4223,6 +4334,7 @@
             }
             updateQsireconUI();
             applyVersionedOutputPaths({ source: 'engine-toggle' });
+            updateFetchHelpBtnVisibility();
             scheduleRunnerPreflightRefresh();
         }
 
@@ -4248,7 +4360,7 @@
                     data.containers.forEach(c => s.add(new Option(c, c)));
                     await checkAppVersion(loadToken);
                     applyVersionedOutputPaths({ source: 'scan-containers' });
-                    document.getElementById('fetchHelpBtn').style.display = 'block';
+                    updateFetchHelpBtnVisibility();
                     scheduleRunnerPreflightRefresh();
                     return true;
                 } else {
@@ -4356,11 +4468,108 @@
             }
         }
 
+        // Single source of truth for "which container is currently selected,"
+        // shared by fetchAppOptions() and updateFetchHelpBtnVisibility() so
+        // the two can never disagree about what "the current container" means.
+        // Returns null if the engine's fields aren't fully filled in yet.
+        function _getSelectedContainerRef() {
+            const engine = document.getElementById('container_engine').value;
+            if (engine === 'docker') {
+                const repo = document.getElementById('container_docker_repo').value.trim();
+                const tag = document.getElementById('container_docker_tag').value;
+                if (!repo || !tag) return null;
+                return { engine, container: `${repo}:${tag}` };
+            }
+            const f = document.getElementById('container_folder').value;
+            const c = document.getElementById('container_select').value;
+            if (!c) return null;
+            return { engine, container: f + '/' + c };
+        }
+
+        // Keeps the "Load Options" button available whenever a container is
+        // selected (it's a manual force-refresh escape hatch -- e.g. after
+        // rebuilding a .sif with new flags, the cache would still look
+        // "usable" even though the actual --help output changed, so this
+        // must never be hidden just because the cache matches), and reactively
+        // shows a stale-options banner when the selected container no longer
+        // matches what's actually loaded (currentOptionHelpCache) -- e.g.
+        // after picking a different image from the dropdown, which otherwise
+        // leaves the previous container's options displayed with no
+        // indication they're stale. Called on container_select/
+        // container_docker_tag change, on engine toggle, and after a
+        // successful fetchAppOptions() (to clear the banner again).
+        // Shows the right "Load Options" button for the current engine.
+        // Split out from the staleness recompute below because this part
+        // never depends on the (evidently still fragile in some code path)
+        // container-string comparison -- the button is always available as
+        // a manual force-refresh once a container is selected, full stop.
+        function _updateFetchHelpBtnOnly() {
+            const apptainerBtn = document.getElementById('fetchHelpBtn');
+            const dockerBtn = document.getElementById('fetchHelpBtnDocker');
+            const ref = _getSelectedContainerRef();
+
+            if (!ref) {
+                if (apptainerBtn) apptainerBtn.style.display = 'none';
+                if (dockerBtn) dockerBtn.style.display = 'none';
+                return;
+            }
+
+            const activeBtn = ref.engine === 'docker' ? dockerBtn : apptainerBtn;
+            const inactiveBtn = ref.engine === 'docker' ? apptainerBtn : dockerBtn;
+            if (inactiveBtn) inactiveBtn.style.display = 'none';
+            if (activeBtn) activeBtn.style.display = 'block';
+        }
+
+        // Full reactive check, including the stale-options banner recompute
+        // -- use this from genuine container-switch events (container_select/
+        // container_docker_tag onchange, engine toggle, scanContainers
+        // success). Deliberately NOT called from the post-project-load
+        // "settle" step in restoreProjectLoadDetails any more: that step ran
+        // immediately after fetchAppOptions() already correctly resolved and
+        // hid the banner for a load that just succeeded, and re-running this
+        // comparison there was observed re-showing a stale banner it
+        // shouldn't have -- root cause not fully pinned down, but there's
+        // nothing for this recompute to legitimately catch at that point
+        // that fetchAppOptions' own success path didn't already handle.
+        function updateFetchHelpBtnVisibility() {
+            _updateFetchHelpBtnOnly();
+            const staleNotice = document.getElementById('staleOptionsNotice');
+            const ref = _getSelectedContainerRef();
+
+            if (!ref) {
+                if (staleNotice) staleNotice.style.display = 'none';
+                return;
+            }
+
+            const usable = _isOptionHelpCacheUsable(currentOptionHelpCache, ref.container, ref.engine);
+            // Only flag existing rendered options as stale -- don't show the
+            // "different container" banner over an empty/not-yet-loaded panel.
+            const hasRenderedOptions = document.getElementById('dynamicOptionsSection').style.display !== 'none';
+            if (staleNotice) staleNotice.style.display = (!usable && hasRenderedOptions) ? 'flex' : 'none';
+        }
+
+        // Unconditionally hides the stale-options banner -- used right after
+        // a render that just succeeded for the *currently selected*
+        // container (both the cache-hit and fresh-fetch paths in
+        // fetchAppOptions), where by construction there is nothing stale to
+        // flag. Deliberately not a call to updateFetchHelpBtnVisibility()'s
+        // recompute-and-compare here: that path re-derives the container
+        // reference from live DOM state independently of what was just
+        // fetched, which is the right check for a genuine container-switch
+        // event but an unnecessary (and, if anything about those two
+        // derivations ever drifts, misleading) extra step immediately after
+        // a load that unambiguously just matched.
+        function _hideStaleOptionsNotice() {
+            const staleNotice = document.getElementById('staleOptionsNotice');
+            if (staleNotice) staleNotice.style.display = 'none';
+        }
+
         async function fetchAppOptions(loadToken = null, options = {}) {
             const quietSuccess = !!options.quietSuccess;
             const cachedHelp = options.cachedHelp || null;
             if (isStaleProjectLoad(loadToken)) return;
-            const engine = document.getElementById('container_engine').value;
+            const ref = _getSelectedContainerRef();
+            const engine = ref ? ref.engine : document.getElementById('container_engine').value;
             let container;
             if (engine === 'docker') {
                 const repo = document.getElementById('container_docker_repo').value.trim();
@@ -4382,6 +4591,7 @@
             // before any async work — so the user sees feedback right away.
             const containerEl = document.getElementById('optionsContainer');
             document.getElementById('dynamicOptionsSection').style.display = 'block';
+            _revealAppSpecificOptionsSection();
             containerEl.innerHTML = '<div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div><div class="mt-2">Analyzing container...</div></div>';
             beginRunnerOptionsLoad(`Loading options from ${container}`);
 
@@ -4416,6 +4626,7 @@
                             restoredFromCache: true,
                         }
                     );
+                    _hideStaleOptionsNotice();
                     return;
                 }
 
@@ -4501,6 +4712,7 @@
                         restoredFromCache: false,
                     }
                 );
+                _hideStaleOptionsNotice();
 
                 // Restore saved option values into the freshly-rendered form.
                 // This matters when the user pulls a Docker image and clicks "Load Options"
@@ -4732,7 +4944,10 @@
             }
 
             if (resolvedPipelineAppName === 'fastsurfer') {
-                activeApp.execution_adapter = 'fastsurfer-cross';
+                const fastsurferLongitudinalEl = document.getElementById('fastsurfer_longitudinal');
+                activeApp.execution_adapter = (fastsurferLongitudinalEl && fastsurferLongitudinalEl.checked)
+                    ? 'fastsurfer-bids'
+                    : 'fastsurfer-cross';
             }
 
             if (lastProjectId) {
@@ -4771,6 +4986,12 @@
             if (lastProjectId) {
                 config.pipelines = cloneJson(currentProjectPipelines) || {};
                 config.active_pipeline = currentPipelineId || 'default';
+                // Defense in depth: /save_project now merges rather than
+                // replaces (see gui/gui_projects.py::save_project), so this
+                // is no longer required to avoid wiping HPC settings -- but
+                // carrying it through keeps this payload self-consistent
+                // even before hitting the server.
+                config.hpc = cloneJson(currentProjectConfig?.hpc || {});
             }
 
             const filename = document.getElementById('config_name').value || 'config.json';
@@ -6710,10 +6931,13 @@
             }
         }
 
+        // Returns whether any run is currently active, so the caller can
+        // poll fast while something is actually happening and back off
+        // otherwise.
         async function updateNavbarRunStatus() {
             const badge = document.getElementById('navbar-run-status');
             const textEl = document.getElementById('navbarRunStatusText');
-            if (!badge || !textEl) return;
+            if (!badge || !textEl) return false;
 
             try {
                 const resp = await fetch('/run_status');
@@ -6761,6 +6985,7 @@
                     badge.setAttribute('aria-label', 'Idle. No pipeline is running right now.');
                 }
                 updateRunnerActiveRunsNotice(data);
+                return running;
             } catch (err) {
                 badge.classList.remove('status-idle', 'status-running');
                 badge.classList.add('status-error');
@@ -6768,6 +6993,7 @@
                 badge.title = `Failed to fetch run status: ${err.message || err}`;
                 badge.setAttribute('aria-label', 'Run status unavailable.');
                 updateRunnerActiveRunsNotice();
+                return false;
             }
         }
 
@@ -6989,11 +7215,47 @@
             initializeHpcPresetDivergenceTracking();
             loadHpcAppProfiles();
 
-            // Keep navbar status fresh without requiring user actions.
-            setInterval(updateNavbarRunStatus, 3000);
+            // Keep navbar status fresh without requiring user actions --
+            // adaptive: fast (3s) while something is actually running,
+            // much slower (20s) when idle, instead of polling forever
+            // unconditionally at a fixed 3s regardless of activity.
+            let _navbarStatusPollTimer = null;
+            (async function _scheduleNavbarStatusPoll() {
+                const isRunning = await updateNavbarRunStatus();
+                if (_navbarStatusPollTimer) clearTimeout(_navbarStatusPollTimer);
+                _navbarStatusPollTimer = setTimeout(_scheduleNavbarStatusPoll, isRunning ? 3000 : 20000);
+            })();
 
             // Restore run mode (local/hpc) from last session
             switchRunMode(_currentRunMode);
+
+            // Server-verified readiness panels (new/additive step-tracker
+            // widget, static/js/readiness_panel.js) -- sit alongside the
+            // existing client-only preflight panels, refreshed on load and
+            // periodically thereafter. getParams reads lastProjectId/
+            // currentPipelineId via closure since those are let-scoped to
+            // this inline script and not visible to the separate file.
+            if (typeof initReadinessPanel === 'function') {
+                const localReadiness = initReadinessPanel({
+                    containerId: 'localReadinessPanel',
+                    apiUrl: '/local_run_readiness',
+                    getParams: () => ({ project_id: lastProjectId, pipeline_id: currentPipelineId }),
+                });
+                localReadiness.refresh();
+                localReadiness.startPolling(20000);
+
+                const cohortReadiness = initReadinessPanel({
+                    containerId: 'cohortReadinessPanel',
+                    apiUrl: '/cohort/readiness',
+                    getParams: () => ({
+                        project_id: lastProjectId,
+                        pipeline_id: currentPipelineId,
+                        max_concurrent: document.getElementById('cohort_max_concurrent')?.value,
+                    }),
+                });
+                cohortReadiness.refresh();
+                cohortReadiness.startPolling(20000);
+            }
         });
 
         // ============================================================================
@@ -7533,6 +7795,24 @@
             return presetValue;
         }
 
+        // Keeps the HPC preset dropdown in sync with the FastSurfer longitudinal
+        // toggle so checking/unchecking it can't silently leave the SBATCH
+        // resources sized for the other adapter (fastsurfer-bids needs a much
+        // longer walltime -- one job now covers every session for a subject --
+        // than the single-session fastsurfer-cross default). Only overrides the
+        // preset dropdown itself; a 'custom' preset's hand-tuned numbers are
+        // left alone by applyHpcPreset().
+        function handleFastsurferLongitudinalToggle() {
+            const presetSel = document.getElementById('hpc_preset');
+            if (!presetSel) return;
+            const checked = !!document.getElementById('fastsurfer_longitudinal')?.checked;
+            const targetKey = checked ? 'fastsurfer_bids' : 'fastsurfer';
+            if (presetSel.value !== 'custom' && Array.from(presetSel.options).some((o) => o.value === targetKey)) {
+                presetSel.value = targetKey;
+                applyHpcPreset();
+            }
+        }
+
         // Derives partition/time/mem/cpus/GPU gres from the selected preset
         // and writes them into the Advanced fields. No-op on the fields when
         // preset is 'custom' (the saved/hand-edited values are left alone),
@@ -7710,7 +7990,30 @@
             setHpcSaveButtonBusy(true);
 
             try {
-                const baseConfig = currentProjectConfig || {};
+                const baseConfig = cloneJson(currentProjectConfig || {}) || {};
+
+                // Compute Preset is where users actually pick FastSurfer's
+                // longitudinal BIDS mode most of the time (this tab, not the
+                // Run App tab's checkbox) -- keep app.execution_adapter in
+                // sync here too when one of the two FastSurfer-family presets
+                // is explicitly selected, so this save can't silently leave
+                // the wrong adapter active. 'auto'/'custom' are left alone:
+                // they aren't an explicit FastSurfer choice and shouldn't
+                // clobber whatever the Run App tab already set.
+                if (hpcSettings.preset === 'fastsurfer_bids' || hpcSettings.preset === 'fastsurfer') {
+                    const adapter = hpcSettings.preset === 'fastsurfer_bids' ? 'fastsurfer-bids' : 'fastsurfer-cross';
+                    baseConfig.app = { ...(baseConfig.app || {}), execution_adapter: adapter };
+                    const activePipeline = baseConfig.active_pipeline;
+                    if (activePipeline && baseConfig.pipelines && baseConfig.pipelines[activePipeline]) {
+                        baseConfig.pipelines[activePipeline] = {
+                            ...baseConfig.pipelines[activePipeline],
+                            app: { ...(baseConfig.pipelines[activePipeline].app || {}), execution_adapter: adapter }
+                        };
+                    }
+                    const fastsurferLongitudinalEl = document.getElementById('fastsurfer_longitudinal');
+                    if (fastsurferLongitudinalEl) fastsurferLongitudinalEl.checked = (adapter === 'fastsurfer-bids');
+                }
+
                 const resp = await fetch(`/save_project/${lastProjectId}`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -7727,6 +8030,8 @@
                         currentProjectConfig = {};
                     }
                     currentProjectConfig.hpc = hpcSettings;
+                    if (baseConfig.app) currentProjectConfig.app = baseConfig.app;
+                    if (baseConfig.pipelines) currentProjectConfig.pipelines = baseConfig.pipelines;
                     lastProjectSavedAt = new Date().toISOString();
                     lastProjectSavePath = `projects/${lastProjectId}/project.json`;
                     lastSavedPath = lastProjectSavePath;

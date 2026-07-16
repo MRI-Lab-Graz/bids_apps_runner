@@ -817,6 +817,14 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50):
             # support the NiPreps --nprocs/--omp-nthreads/--mem convention.
             "app_profile": app.get("app_profile") or "",
             "app_profile_overrides": app.get("app_profile_overrides") or {},
+            # Carried through the same way -- FastSurfer's execution_adapter
+            # field (fastsurfer-cross / fastsurfer-bids) is a separate,
+            # pre-existing concept from app_profile (see
+            # prism_hpc.py/prism_local.py::_infer_execution_adapter); without
+            # this the SLURM-array path would silently fall back to the
+            # generic apptainer run /bids /output participant convention,
+            # which FastSurfer's container entrypoint doesn't understand.
+            "execution_adapter": app.get("execution_adapter") or "",
         },
     }
 

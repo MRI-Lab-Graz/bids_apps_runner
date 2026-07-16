@@ -361,3 +361,44 @@ def check_gpu_request_feasible(hpc: Optional[Dict[str, Any]]) -> Optional[str]:
         f"there), but this job requests one via sbatch_gres -- it would sit "
         f"PENDING forever instead of failing outright.{hint}"
     )
+
+
+def describe_execution_adapter_resolution(
+    common: Optional[Dict[str, Any]], app: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, str]]:
+    """Surfaces which execution adapter will actually be used and how it was
+    resolved (mirrors the 3-tier resolution in
+    prism_local.py/prism_hpc.py/hpc_datalad_runner.py's own
+    _infer_execution_adapter, and scripts/hpc_datalad_runner.py's copy) --
+    shared here so the Quick Test and Cohort readiness checklists
+    (gui/gui_run_routes.py, gui/gui_cohort_routes.py) can't independently
+    drift on how they describe this.
+
+    Returns None when the resolved app has no special execution_adapter
+    concept at all (the standard BIDS-App convention applies, nothing to
+    surface). Otherwise returns {"resolved_adapter": ..., "source": ...}.
+    """
+    common_cfg = common if isinstance(common, dict) else {}
+    app_cfg = app if isinstance(app, dict) else {}
+    container_ref = str(common_cfg.get("container") or "")
+    explicit = str(app_cfg.get("execution_adapter", "")).strip().lower()
+
+    resolved_adapter = ""
+    source = ""
+    if explicit:
+        for profile in CATALOG.values():
+            aliases = profile.get("execution_adapter_aliases", {})
+            if explicit in aliases:
+                resolved_adapter = aliases[explicit]
+                source = f"app.execution_adapter = '{explicit}'"
+                break
+
+    if not resolved_adapter:
+        app_name = resolve_app_name(common_cfg, app_cfg, container_ref=container_ref)
+        resolved_adapter = CATALOG.get(app_name, {}).get("execution_adapter_default", "")
+        if resolved_adapter:
+            source = f"auto-detected from container name ('{app_name}')"
+
+    if not resolved_adapter:
+        return None
+    return {"resolved_adapter": resolved_adapter, "source": source}

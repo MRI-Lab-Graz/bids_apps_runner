@@ -63,6 +63,81 @@ def test_array_generator_has_no_datalad_or_git_calls(tmp_path):
     assert "flock" not in script
 
 
+def _fastsurfer_bids_config():
+    config = _base_config()
+    config["paths"]["container"] = "/containers/fastsurfer_bids_cuda-v2.5.4.sif"
+    config["bids_app"] = {
+        "app_name": "fastsurfer",
+        "analysis_level": "participant",
+        "output_dir_name": "fastsurfer",
+        "execution_adapter": "fastsurfer-bids",
+        "options": ["--3T", "--cereb"],
+    }
+    return config
+
+
+def test_fastsurfer_bids_adapter_calls_run_fastsurfer_bids_py(tmp_path):
+    subj_list = _write_subject_list(tmp_path, ["sub-01", "sub-02"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _fastsurfer_bids_config(), "ds001", subj_list, 2
+    ).generate_script()
+
+    # Uses the FastSurfer-bids entrypoint via apptainer exec, not the
+    # generic apptainer run /bids /output participant convention -- the
+    # container's default ENTRYPOINT is run_fastsurfer.sh, which doesn't
+    # understand that convention at all.
+    assert "python3 /fastsurfer/run_fastsurfer_bids.py" in script
+    assert '"$APPTAINER_BIN" exec' in script
+    assert "--participant_label" in script
+    assert '"${SUBJECT_LABEL}"' in script
+    assert "--nv" in script
+    # And not the generic path's flags for this same job.
+    assert "--participant-label" not in script
+    assert "-w /tmp/wdir" not in script
+    # Passthrough options after the BIDS-App's own args, separated by --.
+    assert "-- \\\n    --3T \\\n    --cereb" in script
+
+
+def test_fastsurfer_bids_adapter_binds_fs_license(tmp_path):
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _fastsurfer_bids_config(), "ds001", subj_list, 1
+    ).generate_script()
+
+    assert "-B '/tmp/license file.txt':/fs/license.txt:ro" in script
+    assert "--fs_license \\\n    /fs/license.txt" in script
+
+
+def test_fastsurfer_bids_adapter_script_is_valid_bash(tmp_path):
+    import subprocess
+
+    subj_list = _write_subject_list(tmp_path, ["sub-01", "sub-02", "sub-03"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _fastsurfer_bids_config(), "ds001", subj_list, 3
+    ).generate_script()
+
+    script_path = subj_list.replace("subjects.txt", "job.sh")
+    with open(script_path, "w") as f:
+        f.write(script)
+    result = subprocess.run(["bash", "-n", script_path], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_fastsurfer_cross_execution_adapter_does_not_use_bids_entrypoint(tmp_path):
+    # execution_adapter "fastsurfer-cross" (or unset) must still fall through
+    # to the generic apptainer-run path here -- only "fastsurfer-bids" is
+    # implemented in this generator so far.
+    config = _fastsurfer_bids_config()
+    config["bids_app"]["execution_adapter"] = "fastsurfer-cross"
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        config, "ds001", subj_list, 1
+    ).generate_script()
+
+    assert "run_fastsurfer_bids.py" not in script
+    assert '"$APPTAINER_BIN" run' in script
+
+
 def test_array_generator_uses_persistent_clones_and_per_task_scratch():
     script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
         _base_config(), "ds001", "/tmp/subjects.txt", 2

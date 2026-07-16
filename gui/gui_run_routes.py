@@ -118,6 +118,156 @@ def register_run_routes(
     apptainer_builds_lock,
     mark_gui_session_started: Callable[[], None],
 ):
+    def _local_run_checks(project_id, pipeline_id):
+        """Load the project fresh from disk, derive its runtime config, and
+        run the same core existence/format checks /run_app performs inline
+        -- but as a full checklist (not stop-at-first-error), mirroring the
+        shape gui_cohort_routes.py::_build_cohort_config() already
+        established for the Cohort path, so a readiness UI can show
+        everything that needs fixing at once instead of one error per click.
+
+        This is intentionally a read-only, additive sibling to /run_app's
+        own inline checks, not a replacement of them: /run_app also accepts
+        a standalone config_path with no project_id at all (no project to
+        load), so its checks can't simply be extracted out from under it
+        without breaking that mode. The two are expected to drift only in
+        that /run_app's inline checks also cover host-environment probing
+        this checklist intentionally skips (macOS Docker file-sharing, the
+        NiPreps-specific fs_license/custom-mount resolution, and the
+        docker-daemon/apptainer-binary presence checks) -- those still only
+        surface at /run_app's actual submit time.
+
+        Returns (runtime_cfg_or_None, checks) where each check is
+        {id, label, ok, blocking, detail}.
+        """
+        checks = []
+
+        def add(check_id, label, ok, blocking=True, detail=""):
+            checks.append(
+                {"id": check_id, "label": label, "ok": ok, "blocking": blocking, "detail": detail}
+            )
+
+        if not project_id:
+            add("project", "Project selected", False, detail="No project_id provided.")
+            return None, checks
+
+        project_json = project_manager_getter().load_project(project_id)
+        if project_json is None:
+            add("project", "Project selected", False, detail=f"Project not found: {project_id}")
+            return None, checks
+        add("project", "Project selected", True)
+
+        runtime_cfg = extract_runtime_config(project_json, pipeline_id or None)
+        common = runtime_cfg.get("common", {})
+        engine = common.get("container_engine", "apptainer")
+
+        bids_folder = common.get("bids_folder")
+        add(
+            "bids_folder",
+            "BIDS Dataset Folder",
+            bool(bids_folder) and os.path.exists(bids_folder),
+            detail=(
+                "Not set." if not bids_folder
+                else "Set." if os.path.exists(bids_folder)
+                else f"Path does not exist: {bids_folder}"
+            ),
+        )
+
+        output_folder = common.get("output_folder")
+        add(
+            "output_folder",
+            "Output Folder",
+            bool(output_folder),
+            detail="Not set." if not output_folder else "Set (created automatically if missing).",
+        )
+
+        if engine != "docker":
+            container = common.get("container")
+            add(
+                "container",
+                "Container Image",
+                bool(container) and os.path.exists(container),
+                detail=(
+                    "Not set." if not container
+                    else "Found." if os.path.exists(container)
+                    else f"Path does not exist: {container}"
+                ),
+            )
+
+        templateflow_dir = common.get("templateflow_dir")
+        if templateflow_dir:
+            add(
+                "templateflow_dir",
+                "TemplateFlow Folder",
+                os.path.exists(templateflow_dir),
+                blocking=False,
+                detail="Found." if os.path.exists(templateflow_dir) else f"Path does not exist: {templateflow_dir}",
+            )
+
+        fs_license_file = common.get("fs_license_file")
+        if fs_license_file:
+            add(
+                "fs_license_file",
+                "FreeSurfer License File",
+                os.path.exists(fs_license_file),
+                detail="Found." if os.path.exists(fs_license_file) else f"Path does not exist: {fs_license_file}",
+            )
+
+        notify_email = str(common.get("notify_email", "")).strip()
+        if notify_email:
+            add(
+                "notify_email",
+                "Notification Email format",
+                bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", notify_email)),
+                detail="Valid." if re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", notify_email) else "Invalid email format.",
+            )
+
+        # Surfaces which execution adapter will actually be used and how it
+        # was resolved -- informational, not blocking, since which adapter
+        # is "correct" depends on user intent (e.g. cross-sectional vs
+        # longitudinal FastSurfer) that the system can't infer on its own.
+        # This exists to make that choice visible before a run, rather than
+        # only discoverable via a confusing failure at runtime -- exactly
+        # the class of bug hit in production when a FastSurfer-bids
+        # container's execution_adapter silently fell back to the
+        # cross-sectional default. Shared with the Cohort readiness
+        # checklist (gui_cohort_routes.py) via app_profiles.py so the two
+        # can't independently drift on how they describe this.
+        try:
+            import app_profiles  # lazy -- scripts/ is on sys.path at runtime
+
+            resolution = app_profiles.describe_execution_adapter_resolution(
+                common, runtime_cfg.get("app", {})
+            )
+            if resolution:
+                add(
+                    "execution_adapter",
+                    "Execution mode",
+                    True,
+                    blocking=False,
+                    detail=(
+                        f"Will use '{resolution['resolved_adapter']}' ({resolution['source']}). "
+                        "Confirm this matches your intent."
+                    ),
+                )
+        except Exception:
+            logging.exception("execution_adapter readiness check failed")
+
+        return runtime_cfg, checks
+
+    @app.route("/local_run_readiness", methods=["GET"])
+    def local_run_readiness():
+        """Read-only readiness report for the Quick Test (local / single-job
+        HPC) path -- lets the GUI show everything that needs fixing before
+        Save/Run, instead of one error per click. Mirrors
+        /cohort/preview_config's shape for the Cohort path."""
+        project_id = (request.args.get("project_id") or "").strip()
+        pipeline_id = (request.args.get("pipeline_id") or "").strip()
+
+        _runtime_cfg, checks = _local_run_checks(project_id, pipeline_id)
+        ready = all(c["ok"] for c in checks if c["blocking"])
+        return jsonify({"ready": ready, "checks": checks})
+
     @app.route("/run_app", methods=["POST"])
     def run_app():
         data = request.get_json(silent=True) or {}

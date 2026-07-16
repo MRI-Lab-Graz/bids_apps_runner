@@ -263,9 +263,9 @@ def register_misc_routes(
                     break
 
             usage_block = "\n".join(usage_lines)
-            usage_all_flags = set(re.findall(r"--[a-zA-Z0-9-]+", usage_block))
+            usage_all_flags = set(re.findall(r"--[a-zA-Z0-9_-]+", usage_block))
             usage_optional_flags = set(
-                re.findall(r"\[\s*(--[a-zA-Z0-9-]+)", usage_block)
+                re.findall(r"\[\s*(--[a-zA-Z0-9_-]+)", usage_block)
             )
             usage_required_flags = usage_all_flags - usage_optional_flags
 
@@ -273,7 +273,7 @@ def register_misc_routes(
             for line in output.splitlines():
                 if "deprecated" not in line.lower():
                     continue
-                for dep_flag in re.findall(r"--[a-zA-Z0-9-]+", line):
+                for dep_flag in re.findall(r"--[a-zA-Z0-9_-]+", line):
                     deprecated_flags.add(dep_flag)
 
             if (
@@ -343,11 +343,11 @@ def register_misc_routes(
                 for block in arg_blocks:
                     block = block.strip()
                     if not block.startswith("--"):
-                        flag_match = re.search(r"(--[a-zA-Z0-9-]+)", block)
+                        flag_match = re.search(r"(--[a-zA-Z0-9_-]+)", block)
                         if not flag_match:
                             continue
 
-                    flag_match = re.search(r"(--[a-zA-Z0-9-]+)", block)
+                    flag_match = re.search(r"(--[a-zA-Z0-9_-]+)", block)
                     if not flag_match:
                         continue
                     flag = flag_match.group(1)
@@ -512,7 +512,7 @@ def register_misc_routes(
                     "app_info": {"name": app_name, "url": doc_url},
                     "deprecated_flags": sorted(list(deprecated_flags)),
                     "raw_help": output if not sections else None,
-                    "parser_version": 2,
+                    "parser_version": 3,
                 }
             )
         except Exception as exc:

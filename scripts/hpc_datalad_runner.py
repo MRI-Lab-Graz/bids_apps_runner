@@ -28,7 +28,12 @@ import argparse
 from pathlib import Path
 from typing import Dict, Optional
 
-from app_profiles import check_gpu_request_feasible, resolve_app_profile
+from app_profiles import (
+    CATALOG,
+    check_gpu_request_feasible,
+    resolve_app_name,
+    resolve_app_profile,
+)
 
 _SAFE_SUBJECT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _SAFE_SHELL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -97,6 +102,57 @@ def _mem_to_gb(mem: str) -> int:
     value, unit = match.groups()
     gb = float(value) * _MEM_UNIT_TO_GB.get(unit or "M", 1 / 1024)
     return max(1, round(gb))
+
+
+def _infer_execution_adapter(bids_app: Dict, container_ref: str) -> str:
+    """Resolve execution adapter the same way prism_hpc.py/prism_local.py do:
+    an explicit bids_app.execution_adapter checked against every catalog
+    entry's own alias table (not just fastsurfer's), then falling through to
+    the normal app_profile/container-sniffing resolution's
+    execution_adapter_default."""
+    explicit = str(bids_app.get("execution_adapter", "")).strip().lower()
+    if explicit:
+        for profile in CATALOG.values():
+            aliases = profile.get("execution_adapter_aliases", {})
+            if explicit in aliases:
+                return aliases[explicit]
+
+    name = resolve_app_name(
+        {"container": container_ref},
+        {"app_profile": bids_app.get("app_profile", "")},
+        container_ref=container_ref,
+    )
+    return CATALOG.get(name, {}).get("execution_adapter_default", "")
+
+
+def _prepare_fastsurfer_bids_options(options) -> list:
+    """Normalize passthrough options for run_fastsurfer_bids.py (mirrors
+    prism_hpc.py/prism_local.py's helper of the same purpose): drop
+    runtime-managed flags so they can't be passed through twice."""
+    forbidden = {
+        "--participant_label",
+        "--participant-label",
+        "--session_label",
+        "--session-label",
+        "--fs_license",
+    }
+    opts = [str(x) for x in (options or [])]
+    cleaned = []
+    i = 0
+    while i < len(opts):
+        token = opts[i]
+        if token in forbidden:
+            if i + 1 < len(opts) and not opts[i + 1].startswith("-"):
+                i += 2
+            else:
+                i += 1
+            continue
+        if token.startswith("--") and "=" in token and token.split("=", 1)[0] in forbidden:
+            i += 1
+            continue
+        cleaned.append(token)
+        i += 1
+    return cleaned
 
 
 def setup_logging(log_level="INFO"):
@@ -349,6 +405,62 @@ echo "Output:  ${{OUT_DIR}}"
 echo "Scratch: ${{WORK_DIR}}"
 """
 
+    def _run_fastsurfer_bids(self) -> str:
+        """FastSurfer-bids adapter: run_fastsurfer_bids.py (inside the
+        container) auto-discovers a subject's sessions via pybids and
+        dispatches to FastSurfer's longitudinal pipeline (long_fastsurfer.sh)
+        for subjects with >=2 sessions, or the cross-sectional pipeline
+        (brun_fastsurfer.sh) otherwise. Mirrors the fastsurfer_bids_mode
+        branch in prism_hpc.py/prism_local.py, adapted for this array job's
+        runtime $SUBJECT_LABEL/$BIDS_DIR/$OUT_DIR/$TMP_DIR bash variables --
+        the subject isn't known at script-generation time here, it's
+        resolved from the subject list file via $SLURM_ARRAY_TASK_ID.
+        """
+        analysis_level = self.bids_app.get("analysis_level", "participant")
+        options = _prepare_fastsurfer_bids_options(self.bids_app.get("options", []))
+        container = _shell_quote(self.paths.get("container", "TODO_CONTAINER_PATH"))
+
+        apptainer_args = [str(a) for a in (self.bids_app.get("apptainer_args") or [])]
+        if "--nv" not in apptainer_args:
+            apptainer_args.append("--nv")
+        extra_apptainer_args = "".join(f"    {a} \\\n" for a in apptainer_args)
+
+        fs = (self.paths.get("fs_license") or "").strip()
+        extra_binds = f"    -B {_shell_quote(fs)}:/fs/license.txt:ro \\\n" if fs else ""
+
+        # Built as a list and joined explicitly (rather than juxtaposed
+        # f-string fragments) so the very last argument never ends up with a
+        # trailing " \" immediately followed by a blank line -- that pattern
+        # silently truncates the command in bash (fixed for the same reason
+        # in prism_hpc.py::create_slurm_job).
+        fs_args = [
+            "python3 /fastsurfer/run_fastsurfer_bids.py",
+            "/bids",
+            "/output",
+            _shell_quote(analysis_level),
+            "--participant_label",
+            '"${SUBJECT_LABEL}"',
+        ]
+        if fs:
+            fs_args += ["--fs_license", "/fs/license.txt"]
+        if options:
+            fs_args += ["--"] + [_shell_quote(str(opt)) for opt in options]
+        fs_cmd = " \\\n    ".join(fs_args)
+
+        return f"""
+# Run FastSurfer (BIDS, longitudinal-aware): {self._app_name}
+echo "--- Running run_fastsurfer_bids.py for sub-${{SUBJECT_LABEL}} ---"
+"$APPTAINER_BIN" exec \\
+    --cleanenv \\
+{extra_apptainer_args}    -B "${{BIDS_DIR}}":/bids:ro \\
+    -B "${{OUT_DIR}}":/output \\
+{extra_binds}    -B "${{TMP_DIR}}":/tmp \\
+    {container} \\
+    {fs_cmd}
+
+echo "run_fastsurfer_bids.py finished for sub-${{SUBJECT_LABEL}}"
+"""
+
     def _run_bids_app(self) -> str:
         app_name = self._app_name
         analysis_level = self.bids_app.get("analysis_level", "participant")
@@ -372,6 +484,11 @@ echo "Scratch: ${{WORK_DIR}}"
             },
             container_ref=container_path,
         )
+
+        execution_adapter = _infer_execution_adapter(self.bids_app, container_path)
+        if execution_adapter == "fastsurfer-bids":
+            return self._run_fastsurfer_bids()
+
         # Force CPU-only execution unless a GPU was actually requested via
         # sbatch_gres (mirrors the --nv gating in prism_hpc.py/prism_local.py).
         # DSI Studio (bundled in qsiprep) auto-probes CUDA at startup even

@@ -126,6 +126,137 @@ def register_cohort_routes(
 
         return cohort_cfg, None
 
+    def _cohort_readiness_checks(project_id, pipeline_id, max_concurrent):
+        """Load the project fresh and run every cohort-run precondition as a
+        full checklist (not stop-at-first-error), mirroring
+        gui_run_routes.py::_local_run_checks for the Quick Test path so both
+        entry points' step-tracker UI can render the same shape. Returns
+        (cohort_cfg_or_None, checks) where each check is
+        {id, label, ok, blocking, detail}.
+        """
+        checks = []
+
+        def add(check_id, label, ok, blocking=True, detail=""):
+            checks.append(
+                {"id": check_id, "label": label, "ok": ok, "blocking": blocking, "detail": detail}
+            )
+
+        if not project_id:
+            add("project", "Project selected", False, detail="No project_id provided.")
+            return None, checks
+
+        project_json = load_project(project_id)
+        if project_json is None:
+            add("project", "Project selected", False, detail=f"Project not found: {project_id}")
+            return None, checks
+        add("project", "Project selected", True)
+
+        runtime_cfg = extract_runtime_config(project_json, pipeline_id or None)
+        common = runtime_cfg.get("common", {})
+        hpc = runtime_cfg.get("hpc", {})
+
+        bids_folder = common.get("bids_folder")
+        add(
+            "bids_folder", "BIDS Dataset Folder", bool(bids_folder),
+            detail="Set." if bids_folder else "Not set.",
+        )
+
+        output_folder = common.get("output_folder")
+        add(
+            "output_folder", "Output Folder", bool(output_folder),
+            detail="Set." if output_folder else "Not set.",
+        )
+
+        engine = common.get("container_engine", "apptainer")
+        add(
+            "container_engine",
+            "Container engine is Apptainer/Singularity",
+            engine != "docker",
+            detail=(
+                "OK." if engine != "docker"
+                else "SLURM array execution only supports Apptainer/Singularity, not Docker."
+            ),
+        )
+
+        for field, label in (
+            ("partition", "SLURM Partition"),
+            ("time", "SLURM Time"),
+            ("mem", "SLURM Memory"),
+            ("cpus", "SLURM CPUs"),
+        ):
+            value = hpc.get(field)
+            add(
+                f"hpc_{field}", label, bool(value),
+                detail="Set." if value else "Not set -- fill in Advanced: SLURM Settings.",
+            )
+
+        # Only attempt to derive the full cohort config (and the checks that
+        # depend on it -- container existence, GPU feasibility) once the
+        # basics above are in place; derive_cohort_config would just raise
+        # on the same missing fields anyway.
+        cohort_cfg = None
+        if all(c["ok"] for c in checks if c["blocking"]):
+            project_dir = resolve_project_dir(project_id)
+            try:
+                cohort_cfg = derive_cohort_config(
+                    runtime_cfg, project_dir=project_dir, max_concurrent=max_concurrent
+                )
+            except ValueError as exc:
+                add("cohort_config", "Cohort config derivable", False, detail=str(exc))
+                return None, checks
+
+            container = cohort_cfg["paths"]["container"]
+            add(
+                "container",
+                "Container Image",
+                bool(container) and os.path.exists(container),
+                detail=(
+                    "Found." if container and os.path.exists(container)
+                    else f"Path does not exist: {container}"
+                ),
+            )
+
+            import app_profiles  # lazy -- scripts/ is on sys.path at runtime
+
+            gpu_warning = app_profiles.check_gpu_request_feasible(cohort_cfg.get("hpc", {}))
+            add(
+                "gpu_feasibility",
+                "GPU partition feasibility",
+                not gpu_warning,
+                detail=gpu_warning or "OK.",
+            )
+
+            resolution = app_profiles.describe_execution_adapter_resolution(
+                common, runtime_cfg.get("app", {})
+            )
+            if resolution:
+                add(
+                    "execution_adapter",
+                    "Execution mode",
+                    True,
+                    blocking=False,
+                    detail=(
+                        f"Will use '{resolution['resolved_adapter']}' ({resolution['source']}). "
+                        "Confirm this matches your intent."
+                    ),
+                )
+
+        return cohort_cfg, checks
+
+    @app.route("/cohort/readiness", methods=["GET"])
+    def cohort_readiness():
+        """Read-only readiness report for the Full Cohort Run (DataLad SLURM
+        array) path -- lets the GUI show everything that needs fixing before
+        Setup/Submit, instead of one error per click. Mirrors
+        /local_run_readiness's shape for the Quick Test path."""
+        project_id = (request.args.get("project_id") or "").strip()
+        pipeline_id = (request.args.get("pipeline_id") or "").strip()
+        max_concurrent = request.args.get("max_concurrent")
+
+        _cohort_cfg, checks = _cohort_readiness_checks(project_id, pipeline_id, max_concurrent)
+        ready = all(c["ok"] for c in checks if c["blocking"])
+        return jsonify({"ready": ready, "checks": checks})
+
     @app.route("/cohort/preview_config", methods=["GET"])
     def cohort_preview_config():
         """Return the cohort config that would be generated for a project,
