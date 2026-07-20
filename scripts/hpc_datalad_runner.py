@@ -420,8 +420,28 @@ echo "Scratch: ${{WORK_DIR}}"
         options = _prepare_fastsurfer_bids_options(self.bids_app.get("options", []))
         container = _shell_quote(self.paths.get("container", "TODO_CONTAINER_PATH"))
 
+        # slurm_nohog (the cluster's GPU-misuse watchdog) kills any job that
+        # doesn't use the exact GPU index SLURM assigned it, or that touches
+        # a GPU device at all with no gres/gpu allocation -- confirmed by
+        # the HPC admin against job IDs cancelled today. --cleanenv strips
+        # CUDA_VISIBLE_DEVICES (which SLURM sets on the host to the assigned
+        # index) before the container starts, so the container always fell
+        # back to physical device 0 regardless of what was actually granted.
+        # Mirrors the fix already applied in _run_bids_app below.
+        hpc_requests_gpu = any(
+            "gpu" in str(v).lower()
+            for k, v in self.hpc.items()
+            if k.startswith("sbatch_") and v
+        )
+        env_pairs = (
+            ["CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"]
+            if hpc_requests_gpu
+            else ["CUDA_VISIBLE_DEVICES="]
+        )
+        extra_env = f"    --env {_shell_quote(','.join(env_pairs))} \\\n"
+
         apptainer_args = [str(a) for a in (self.bids_app.get("apptainer_args") or [])]
-        if "--nv" not in apptainer_args:
+        if hpc_requests_gpu and "--nv" not in apptainer_args:
             apptainer_args.append("--nv")
         extra_apptainer_args = "".join(f"    {a} \\\n" for a in apptainer_args)
 
@@ -452,7 +472,7 @@ echo "Scratch: ${{WORK_DIR}}"
 echo "--- Running run_fastsurfer_bids.py for sub-${{SUBJECT_LABEL}} ---"
 "$APPTAINER_BIN" exec \\
     --cleanenv \\
-{extra_apptainer_args}    -B "${{BIDS_DIR}}":/bids:ro \\
+{extra_env}{extra_apptainer_args}    -B "${{BIDS_DIR}}":/bids:ro \\
     -B "${{OUT_DIR}}":/output \\
 {extra_binds}    -B "${{TMP_DIR}}":/tmp \\
     {container} \\
@@ -499,12 +519,25 @@ echo "run_fastsurfer_bids.py finished for sub-${{SUBJECT_LABEL}}"
         # step for the full 24h walltime. Setting CUDA_VISIBLE_DEVICES=
         # makes any CUDA-aware tool see zero devices immediately and fall
         # back to its CPU path.
+        #
+        # When a GPU *is* requested, --cleanenv still strips the
+        # CUDA_VISIBLE_DEVICES that SLURM sets on the host to the assigned
+        # GPU index -- confirmed by the HPC admin's slurm_nohog watchdog log
+        # ("Misuse detected: Job N assigned [X] but using [0]. Action:
+        # Immediate Cancel.") against several of our GPU jobs. Explicitly
+        # re-passing it through is required, not optional, or a GPU job is
+        # just as likely to get killed as a CPU-only one that touches a
+        # device it was never allocated.
         hpc_requests_gpu = any(
             "gpu" in str(v).lower()
             for k, v in self.hpc.items()
             if k.startswith("sbatch_") and v
         )
-        env_pairs = [] if hpc_requests_gpu else ["CUDA_VISIBLE_DEVICES="]
+        env_pairs = (
+            ["CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"]
+            if hpc_requests_gpu
+            else ["CUDA_VISIBLE_DEVICES="]
+        )
 
         # QSIPrep's ExtendedEddy interface does NOT auto-detect CUDA -- it
         # only runs eddy_cuda if the eddy config it's given has

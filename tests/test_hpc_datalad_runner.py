@@ -63,7 +63,7 @@ def test_array_generator_has_no_datalad_or_git_calls(tmp_path):
     assert "flock" not in script
 
 
-def _fastsurfer_bids_config():
+def _fastsurfer_bids_config(gpu=True):
     config = _base_config()
     config["paths"]["container"] = "/containers/fastsurfer_bids_cuda-v2.5.4.sif"
     config["bids_app"] = {
@@ -73,13 +73,15 @@ def _fastsurfer_bids_config():
         "execution_adapter": "fastsurfer-bids",
         "options": ["--3T", "--cereb"],
     }
+    if gpu:
+        config["hpc"]["sbatch_gres"] = "gpu:1"
     return config
 
 
 def test_fastsurfer_bids_adapter_calls_run_fastsurfer_bids_py(tmp_path):
     subj_list = _write_subject_list(tmp_path, ["sub-01", "sub-02"])
     script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
-        _fastsurfer_bids_config(), "ds001", subj_list, 2
+        _fastsurfer_bids_config(gpu=True), "ds001", subj_list, 2
     ).generate_script()
 
     # Uses the FastSurfer-bids entrypoint via apptainer exec, not the
@@ -91,11 +93,50 @@ def test_fastsurfer_bids_adapter_calls_run_fastsurfer_bids_py(tmp_path):
     assert "--participant_label" in script
     assert '"${SUBJECT_LABEL}"' in script
     assert "--nv" in script
+    # slurm_nohog kills any job that touches a GPU index other than the one
+    # SLURM assigned -- --cleanenv strips CUDA_VISIBLE_DEVICES before the
+    # container starts unless explicitly re-passed via --env. _shell_quote
+    # wraps the value in single quotes since it contains ${...}.
+    assert "--env 'CUDA_VISIBLE_DEVICES" in script
+    assert "${CUDA_VISIBLE_DEVICES:-}" in script
     # And not the generic path's flags for this same job.
     assert "--participant-label" not in script
     assert "-w /tmp/wdir" not in script
     # Passthrough options after the BIDS-App's own args, separated by --.
     assert "-- \\\n    --3T \\\n    --cereb" in script
+
+
+def test_fastsurfer_bids_adapter_cpu_only_forces_empty_cuda_visible_devices(tmp_path):
+    subj_list = _write_subject_list(tmp_path, ["sub-01", "sub-02"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _fastsurfer_bids_config(gpu=False), "ds001", subj_list, 2
+    ).generate_script()
+
+    # No sbatch_gres requesting a GPU -- --nv must not be added (the node's
+    # GPUs, if any, aren't reserved for this job), and CUDA_VISIBLE_DEVICES
+    # must be forced empty so any CUDA-probing library (e.g. PyTorch just
+    # checking torch.cuda.is_available()) can't touch a device slurm_nohog
+    # would flag as misuse against an allocation with zero GPUs.
+    assert "--nv" not in script
+    assert "--env CUDA_VISIBLE_DEVICES=" in script
+    assert "${CUDA_VISIBLE_DEVICES:-}" not in script
+
+
+def test_generic_bids_app_gpu_request_passes_through_cuda_visible_devices(tmp_path):
+    # Same slurm_nohog exposure as fastsurfer-bids: a GPU job whose
+    # CUDA_VISIBLE_DEVICES doesn't survive --cleanenv will use physical GPU 0
+    # regardless of what SLURM actually assigned, and gets killed as
+    # "misuse". Covers the generic _run_bids_app path (qsiprep/fmriprep/etc,
+    # not just the FastSurfer-specific one).
+    config = _base_config()
+    config["hpc"]["sbatch_gres"] = "gpu:1"
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        config, "ds001", subj_list, 1
+    ).generate_script()
+
+    assert "--env" in script
+    assert "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}" in script
 
 
 def test_fastsurfer_bids_adapter_binds_fs_license(tmp_path):
