@@ -6671,7 +6671,7 @@
         // root means this project's data came from the remote source; otherwise
         // assume a plain local folder. There's no separate persisted "mode" field.
         function inferBidsSourceMode(bidsFolder) {
-            return (bidsFolder || '').startsWith('/usr/people/mrilabgraz/data/') ? 'remote' : 'local';
+            return (bidsFolder || '').startsWith('/cl_tmp/mrilab/') ? 'remote' : 'local';
         }
 
         async function loadRemoteStudies() {
@@ -6696,7 +6696,7 @@
                     : '<option value="">No studies found</option>';
                 // Restore study selection from bids_folder if it matches the remote clone pattern
                 const savedBids = (document.getElementById('bids_folder').value || '').trim();
-                const remotePrefix = '/usr/people/mrilabgraz/data/';
+                const remotePrefix = '/cl_tmp/mrilab/';
                 if (savedBids.startsWith(remotePrefix)) {
                     const studyName = savedBids.slice(remotePrefix.length).split('/')[0];
                     if (studyName && studies.includes(studyName)) {
@@ -6714,7 +6714,7 @@
 
         function updateRemoteCloneDirPreview() {
             const study = document.getElementById('remote_dataset_study').value;
-            const cloneDir = study ? `/usr/people/mrilabgraz/data/${study}` : '';
+            const cloneDir = study ? `/cl_tmp/mrilab/${study}` : '';
             document.getElementById('remote_dataset_clone_dir').value = cloneDir;
             // Keep bids_folder in sync — path is deterministic from study name,
             // so save/validation always has the right value even before cloning.

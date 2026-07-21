@@ -22,7 +22,7 @@ _clone_jobs_lock = threading.Lock()
 # shell with a DNS search domain; non-interactive SSH needs the configured alias.
 REMOTE_DATASET_SSH_HOST = "datalad-server"
 REMOTE_DATASET_BASE_PATH = "/datalad/mri/MRI-Lab_Repository"
-LOCAL_DATASET_BASE_DIR = "/usr/people/mrilabgraz/data"
+LOCAL_DATASET_BASE_DIR = "/cl_tmp/mrilab"
 _STUDY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
