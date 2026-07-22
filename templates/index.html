@@ -445,7 +445,7 @@
             <div class="card-header">
                 Configuration & Launch
             </div>
-            <div class="card-body">
+            <div class="card-body" id="runnerCardBody">
                 <div id="runnerProjectScopeNotice" class="alert alert-warning py-2 px-3 small mb-3">
                     Runs and terminal output are project-scoped. Load a project in Projects before starting a run.
                 </div>
@@ -838,16 +838,16 @@
                     </div>
 
                     <!-- Deliberately a sibling .section-header, not nested inside
-                         dynamicOptionsSection: initializeRunnerMainAccordion()
-                         (see script below) only recognizes direct-child
-                         .section-header elements as their own accordion item --
-                         a header nested one level deeper (as this used to be)
-                         gets silently swept into the *previous* section's
-                         collapsed body instead, making freshly-loaded options
-                         invisible regardless of dynamicOptionsSection's own
-                         display style. -->
+                         dynamicOptionsSection: buildSectionAccordion()
+                         (static/js/collapsible_sections.js) only recognizes
+                         direct-child .section-header elements as their own
+                         accordion item -- a header nested one level deeper
+                         (as this used to be) gets silently swept into the
+                         *previous* section's collapsed body instead, making
+                         freshly-loaded options invisible regardless of
+                         dynamicOptionsSection's own display style. -->
                     <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
-                        <span>App-Specific Arguments</span>
+                        <span>3. App-Specific Arguments</span>
                         <a id="docLink" href="#" target="_blank" class="footer-link" style="font-size: 0.8rem;"><i class="fas fa-book me-1"></i> Documentation</a>
                     </div>
                     <div id="dynamicOptionsSection" style="display: none;">
@@ -866,7 +866,7 @@
                         <div id="optionsContainer"></div>
                     </div>
 
-                    <div class="section-header">3. Custom Options & Mounts</div>
+                    <div class="section-header">4. Custom Options & Mounts</div>
                     <div class="row">
                         <div class="col-md-6 mb-4">
                             <label class="form-label" title="Additional command-line arguments passed directly to the BIDS App (e.g., --fs-license-file /fs/license.txt --output-spaces MNI152NLin2009cAsym:res-native)">Custom App Arguments</label>
@@ -880,7 +880,7 @@
                         </div>
                     </div>
 
-                    <div class="section-header">4. Execution Parameters</div>
+                    <div class="section-header">5. Execution Parameters</div>
                     <div class="row">
                         <div class="col-md-3 mb-4">
                             <label class="form-label">Analysis Level</label>
@@ -1314,7 +1314,7 @@
                             <div class="card-header bg-primary bg-opacity-10 border-primary">
                                 <i class="fas fa-microchip me-2"></i><strong>SLURM Job Settings</strong>
                             </div>
-                            <div class="card-body">
+                            <div class="card-body" id="hpcConfigEditorBody">
                                 <div class="row mb-3">
                                     <div class="col-md-6">
                                         <label class="form-label">Compute Preset</label>
@@ -1805,6 +1805,11 @@
          shared `var`-declared state (lastProjectId, currentPipelineId) from
          the inline script below. See its own header comment. -->
     <script src="{{ url_for('static', filename='js/cohort_panel.js') }}"></script>
+    <!-- Generalized section-header accordion builder (fold/collapse behavior
+         for the Run App page) -- fully self-contained, no shared state with
+         the inline script beyond the DOM elements it's told to operate on.
+         See its own header comment for the bug this generalizes away. -->
+    <script src="{{ url_for('static', filename='js/collapsible_sections.js') }}"></script>
     <script>
         let currentTargetId = '';
         let browserCurrentPath = '/data/local/software';
@@ -5349,93 +5354,6 @@
             }
         }
 
-        function initializeRunnerMainAccordion() {
-            const runnerForm = document.getElementById('runnerForm');
-            if (!runnerForm) return;
-
-            const headers = Array.from(runnerForm.children).filter((node) =>
-                node.nodeType === 1 && node.classList.contains('section-header')
-            );
-            if (!headers.length) return;
-
-            headers.forEach((header) => {
-                const section = document.createElement('section');
-                section.className = 'main-accordion-item';
-
-                const body = document.createElement('div');
-                body.className = 'main-accordion-body';
-
-                header.classList.add('main-accordion-header');
-                header.setAttribute('role', 'button');
-                header.setAttribute('tabindex', '0');
-                header.setAttribute('aria-expanded', 'false');
-
-                runnerForm.insertBefore(section, header);
-                section.appendChild(header);
-                section.appendChild(body);
-
-                let cursor = section.nextSibling;
-                while (cursor) {
-                    const next = cursor.nextSibling;
-                    if (
-                        cursor.nodeType === 1 &&
-                        cursor.classList &&
-                        cursor.classList.contains('section-header')
-                    ) {
-                        break;
-                    }
-                    body.appendChild(cursor);
-                    cursor = next;
-                }
-            });
-
-            const items = Array.from(runnerForm.querySelectorAll('.main-accordion-item'));
-
-            function closeItem(item) {
-                item.classList.remove('is-open');
-                const header = item.querySelector('.main-accordion-header');
-                if (header) header.setAttribute('aria-expanded', 'false');
-            }
-
-            function openItem(item) {
-                items.forEach((other) => {
-                    if (other !== item) closeItem(other);
-                });
-                item.classList.add('is-open');
-                const header = item.querySelector('.main-accordion-header');
-                if (header) header.setAttribute('aria-expanded', 'true');
-            }
-
-            items.forEach((item) => {
-                const header = item.querySelector('.main-accordion-header');
-                if (!header) return;
-
-                header.addEventListener('click', (event) => {
-                    if (event.target.closest('a, button, input, select, textarea, label')) {
-                        return;
-                    }
-                    if (item.classList.contains('is-open')) {
-                        closeItem(item);
-                    } else {
-                        openItem(item);
-                    }
-                });
-
-                header.addEventListener('keydown', (event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
-                    event.preventDefault();
-                    if (item.classList.contains('is-open')) {
-                        closeItem(item);
-                    } else {
-                        openItem(item);
-                    }
-                });
-
-                // Keep all sections collapsed on initial load.
-                closeItem(item);
-            });
-        }
-
         function initializeTabCardAccordions() {
             const panelIds = ['projectsTab', 'runnerTab', 'checkTab', 'buildTab'];
 
@@ -5573,7 +5491,18 @@
 
             syncBuildTopCandidateFromRepo();
 
-            initializeRunnerMainAccordion();
+            // Five independent scopes, each with its own top-level
+            // .section-header(s) that previously had no working fold
+            // mechanism at all (Container & Tools / Execution / Runner
+            // Overrides / Resource Controls / Preview & Submit all live
+            // outside #runnerForm, which is the only container the old
+            // single-purpose initializeRunnerMainAccordion() ever scanned).
+            // See static/js/collapsible_sections.js for the shared builder.
+            buildSectionAccordion(document.getElementById('runnerForm'), { exclusive: true });
+            buildSectionAccordion(document.getElementById('sharedRunSection'));
+            buildSectionAccordion(document.getElementById('runnerCardBody'));
+            buildSectionAccordion(document.getElementById('localRunPanel'));
+            buildSectionAccordion(document.getElementById('hpcConfigEditorBody'));
             initializeRunnerPreflightTracking();
             initializeCheckPreflightTracking();
             initializeBuildPreflightTracking();

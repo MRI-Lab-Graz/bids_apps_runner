@@ -430,20 +430,37 @@ cmd_submit() {
         # slurm-schedule declares/prepares the per-subject outputs and
         # submits via sbatch itself; we parse the SLURM job id back out of
         # its JSON result.
-        local schedule_stdout job_id
+        #
+        # stdout and stderr are captured SEPARATELY (not 2>&1-merged) --
+        # confirmed real regression: merging them so the failure branch
+        # below could report datalad-slurm's own reason also fed stderr
+        # chatter into the job_id jq parse on the *success* path. A 1-subject
+        # pilot's schedule call apparently produces little/no stderr, so this
+        # went unnoticed there; declaring outputs for a 150-subject array
+        # produces enough non-JSON stderr text that jq's parse of the merged
+        # stream broke ("Invalid numeric literal...") even though the
+        # schedule itself (and the real sbatch submission behind it)
+        # succeeded -- silently skipping the dependent finish-job submission
+        # for an already-running array job.
+        local schedule_stdout schedule_stderr schedule_exit job_id
+        local schedule_stderr_file
+        schedule_stderr_file=$(mktemp)
         schedule_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
             "${output_flags[@]}" \
             -m "${commit_prefix}${APP_NAME} array for ${DS} (${n_subjects} subjects)" \
-            sbatch "$array_script" 2>&1)
-        if [[ $? -ne 0 ]]; then
+            sbatch "$array_script" 2>"$schedule_stderr_file")
+        schedule_exit=$?
+        schedule_stderr=$(cat "$schedule_stderr_file"); rm -f "$schedule_stderr_file"
+        if [[ $schedule_exit -ne 0 ]]; then
             # Surface datalad-slurm's own reason (e.g. "There are
             # conflicting outputs with previously scheduled jobs..." when
             # an earlier job for this dataset hasn't been finished yet)
             # instead of a bare "failed" -- confirmed real gap: this was
             # previously swallowed entirely, requiring manual reproduction
-            # to find out why.
+            # to find out why. Checks both streams since the JSON error
+            # record could land on either.
             local schedule_reason
-            schedule_reason=$(printf '%s\n' "$schedule_stdout" \
+            schedule_reason=$(printf '%s\n%s\n' "$schedule_stdout" "$schedule_stderr" \
                 | jq -r 'select(.message) | .message' 2>/dev/null | tail -1)
             warn "[$DS] datalad slurm-schedule failed${schedule_reason:+: $schedule_reason}"
             failed=$((failed + 1)); continue
