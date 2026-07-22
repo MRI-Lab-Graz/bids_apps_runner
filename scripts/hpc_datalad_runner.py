@@ -155,6 +155,38 @@ def _prepare_fastsurfer_bids_options(options) -> list:
     return cleaned
 
 
+def _prepare_freesurfer_bids_options(options) -> list:
+    """Normalize passthrough options for run.py (bids-apps/freesurfer,
+    fs8.2 branch; mirrors prism_hpc.py/prism_local.py's helper of the same
+    purpose): drop runtime-managed flags so they can't be passed through
+    twice. --session_label is deliberately NOT forbidden -- unlike
+    participant_label/license_file, the adapter never sets it itself, so
+    there's no double-set conflict, and it's the documented way to
+    restrict a longitudinal run to a subset of a subject's BIDS sessions
+    (default with no flag: every session found)."""
+    forbidden = {
+        "--participant_label",
+        "--license_file",
+    }
+    opts = [str(x) for x in (options or [])]
+    cleaned = []
+    i = 0
+    while i < len(opts):
+        token = opts[i]
+        if token in forbidden:
+            if i + 1 < len(opts) and not opts[i + 1].startswith("-"):
+                i += 2
+            else:
+                i += 1
+            continue
+        if token.startswith("--") and "=" in token and token.split("=", 1)[0] in forbidden:
+            i += 1
+            continue
+        cleaned.append(token)
+        i += 1
+    return cleaned
+
+
 def setup_logging(log_level="INFO"):
     """Setup logging configuration."""
     logging.basicConfig(
@@ -481,6 +513,53 @@ echo "--- Running run_fastsurfer_bids.py for sub-${{SUBJECT_LABEL}} ---"
 echo "run_fastsurfer_bids.py finished for sub-${{SUBJECT_LABEL}}"
 """
 
+    def _run_freesurfer_bids(self) -> str:
+        """FreeSurfer-bids adapter: run.py (bids-apps/freesurfer, fs8.2
+        branch, inside the container) auto-discovers a subject's sessions
+        and dispatches cross-sectional -> base template -> longitudinal
+        internally in one call. Mirrors the freesurfer_bids_mode branch in
+        prism_hpc.py/prism_local.py, adapted for this array job's runtime
+        $SUBJECT_LABEL/$BIDS_DIR/$OUT_DIR/$TMP_DIR bash variables -- the
+        subject isn't known at script-generation time here, it's resolved
+        from the subject list file via $SLURM_ARRAY_TASK_ID.
+
+        Unlike _run_fastsurfer_bids above, recon-all is CPU-only: no --nv,
+        no CUDA_VISIBLE_DEVICES handling needed.
+        """
+        analysis_level = self.bids_app.get("analysis_level", "participant")
+        options = _prepare_freesurfer_bids_options(self.bids_app.get("options", []))
+        container = _shell_quote(self.paths.get("container", "TODO_CONTAINER_PATH"))
+
+        apptainer_args = [str(a) for a in (self.bids_app.get("apptainer_args") or [])]
+        extra_apptainer_args = "".join(f"    {a} \\\n" for a in apptainer_args)
+
+        fs = (self.paths.get("fs_license") or "").strip()
+        extra_binds = f"    -B {_shell_quote(fs)}:/fs/license.txt:ro \\\n" if fs else ""
+
+        # Built as a list and joined explicitly, same reasoning as
+        # _run_fastsurfer_bids above: avoids a trailing " \" immediately
+        # followed by a blank line, which silently truncates the command.
+        fs_args = ["python /run.py", "/bids", "/output", _shell_quote(analysis_level)]
+        if analysis_level == "participant":
+            fs_args += ["--participant_label", '"${SUBJECT_LABEL}"']
+        if fs:
+            fs_args += ["--license_file", "/fs/license.txt"]
+        fs_args += [_shell_quote(str(opt)) for opt in options]
+        fs_cmd = " \\\n    ".join(fs_args)
+
+        return f"""
+# Run FreeSurfer (BIDS, longitudinal-aware): {self._app_name}
+echo "--- Running run.py for sub-${{SUBJECT_LABEL}} ---"
+"$APPTAINER_BIN" exec \\
+{extra_apptainer_args}    -B "${{BIDS_DIR}}":/bids:ro \\
+    -B "${{OUT_DIR}}":/output \\
+{extra_binds}    -B "${{TMP_DIR}}":/tmp \\
+    {container} \\
+    {fs_cmd}
+
+echo "run.py finished for sub-${{SUBJECT_LABEL}}"
+"""
+
     def _run_bids_app(self) -> str:
         app_name = self._app_name
         analysis_level = self.bids_app.get("analysis_level", "participant")
@@ -508,6 +587,8 @@ echo "run_fastsurfer_bids.py finished for sub-${{SUBJECT_LABEL}}"
         execution_adapter = _infer_execution_adapter(self.bids_app, container_path)
         if execution_adapter == "fastsurfer-bids":
             return self._run_fastsurfer_bids()
+        if execution_adapter == "freesurfer-bids":
+            return self._run_freesurfer_bids()
 
         # Force CPU-only execution unless a GPU was actually requested via
         # sbatch_gres (mirrors the --nv gating in prism_hpc.py/prism_local.py).

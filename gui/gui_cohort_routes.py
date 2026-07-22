@@ -377,6 +377,8 @@ def register_cohort_routes(
         project_id = (data.get("project_id") or "").strip()
         pipeline_id = (data.get("pipeline_id") or "").strip()
         dry_run = bool(data.get("dry_run", False))
+        resume = bool(data.get("resume", False))
+        pilot = bool(data.get("pilot", False))
         max_concurrent = data.get("max_concurrent")
 
         cohort_cfg, error_response = _build_cohort_config(
@@ -410,6 +412,10 @@ def register_cohort_routes(
         cmd = ["bash", str(cohort_script), command, "--config", str(generated_config_path)]
         if dry_run:
             cmd.append("--dry-run")
+        if resume:
+            cmd.append("--resume")
+        if pilot:
+            cmd.append("--pilot")
 
         with _cohort_jobs_lock:
             _cohort_jobs[job_id] = {

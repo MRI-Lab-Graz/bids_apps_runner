@@ -40,6 +40,13 @@ DEFAULT_PROFILE: Dict[str, Any] = {
     "completion_wait_seconds": 90,
     "supports_datalad_self_fetch": False,
     "recommended_hpc": None,
+    # Command run inside the container to fetch its --help text for option
+    # auto-detection (gui_misc_routes.get_app_help). None means "run the
+    # container with a bare --help", which works for BIDS-App-style images
+    # with a single CLI entrypoint. Apps whose image has no such entrypoint
+    # (e.g. freesurfer below, which defaults to /bin/bash) need an explicit
+    # in-container executable instead.
+    "help_args": None,
 }
 
 # recommended_hpc values are starting points tuned from a real production run
@@ -184,11 +191,54 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "display_name": "FreeSurfer",
         "docs_url": "https://surfer.nmr.mgh.harvard.edu/",
         "container_match_names": ["freesurfer"],
+        # The official freesurfer/freesurfer image has no CLI entrypoint --
+        # it defaults to /bin/bash, so "run <container> --help" fails (the
+        # bare --help gets misparsed by the container's own runscript
+        # rather than reaching anything help-aware). recon-all is the
+        # actual pipeline driver and does understand --help.
+        "help_args": ["recon-all", "--help"],
+        # mem/cpus validated against a real staged cross->base->long run
+        # (template_run.sbatch): recon-all/segment_subregions are
+        # single-threaded per call, and FreeSurfer 8.x's own docs cite
+        # ~24GB peak (SynthSeg) -- 32G gives headroom, 16G OOM'd in practice.
         "recommended_hpc": {
             "partition": "hpc",
             "time": "20:00:00",
-            "mem": "16G",
-            "cpus": 4,
+            "mem": "32G",
+            "cpus": 1,
+        },
+    },
+    "freesurfer_bids": {
+        "display_name": "FreeSurfer (BIDS, longitudinal-aware)",
+        "docs_url": "https://github.com/karl-koschutnig/freesurfer/tree/fs8.2",
+        # Unlike "fastsurfer_bids" below, this doesn't need to be empty --
+        # resolve_app_name() prefers the longest matching app_key across all
+        # catalog entries, so a "freesurfer_bids_*" filename resolves here
+        # even though it also technically starts with "freesurfer".
+        "container_match_names": ["freesurfer_bids"],
+        # The fs8.2 branch's %runscript is a bare "python /run.py" with no
+        # "$@" -- verified against the built image: "apptainer run <image>
+        # --help" silently drops --help entirely (0 args reach run.py) and
+        # argparse errors on missing positionals instead of printing help.
+        # "apptainer exec <image> python /run.py --help" bypasses the
+        # runscript and works correctly -- same fix shape as the raw
+        # "freesurfer" profile's help_args above, different underlying bug.
+        "help_args": ["python", "/run.py", "--help"],
+        "execution_adapter_default": "freesurfer-bids",
+        "execution_adapter_aliases": {
+            "freesurfer-bids": "freesurfer-bids",
+            "freesurfer_bids": "freesurfer-bids",
+        },
+        # run.py (bids-apps/freesurfer, fs8.2 branch) auto-discovers a
+        # subject's sessions and runs cross-sectional -> base template ->
+        # longitudinal for all of them in one call -- same walltime/mem
+        # envelope as the "freesurfer" profile above, just one job per
+        # subject instead of manifest-driven staged jobs.
+        "recommended_hpc": {
+            "partition": "hpc",
+            "time": "20:00:00",
+            "mem": "32G",
+            "cpus": 1,
         },
     },
     "cat12": {
@@ -246,10 +296,21 @@ def resolve_app_name(
 
     ref = container_ref if container_ref is not None else common_cfg.get("container")
     if ref:
+        # Prefer the longest (most specific) matching app_key across every
+        # catalog entry, not just the first match in dict-insertion order --
+        # e.g. "freesurfer_bids_8.2.0.sif" starts with both "freesurfer" and
+        # "freesurfer_bids"; the latter must win regardless of which entry
+        # happens to be declared first.
+        best_name = ""
+        best_match_len = -1
         for name, profile in CATALOG.items():
             match_names = profile.get("container_match_names") or [name]
-            if any(container_matches_app(ref, m) for m in match_names):
-                return name
+            for m in match_names:
+                if len(m) > best_match_len and container_matches_app(ref, m):
+                    best_name = name
+                    best_match_len = len(m)
+        if best_name:
+            return best_name
 
     return ""
 

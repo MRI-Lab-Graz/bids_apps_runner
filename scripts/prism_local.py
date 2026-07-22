@@ -358,6 +358,26 @@ def _prepare_fastsurfer_bids_options(options):
     return _drop_runtime_flags(opts, forbidden)
 
 
+def _prepare_freesurfer_bids_options(options):
+    """Normalize passthrough options for run.py (bids-apps/freesurfer, fs8.2).
+
+    bids_dir/output_dir/analysis_level are positional and always
+    runner-supplied; --participant_label/--license_file are runtime-managed
+    here too, so any of those accidentally left in app.options are dropped
+    rather than passed through twice. --session_label is deliberately NOT
+    forbidden -- unlike participant_label/license_file, the adapter never
+    sets it itself, so there's no double-set conflict, and it's the
+    documented way to restrict a longitudinal run to a subset of a
+    subject's BIDS sessions (default with no flag: every session found).
+    """
+    opts = [str(x) for x in (options or [])]
+    forbidden = {
+        "--participant_label",
+        "--license_file",
+    }
+    return _drop_runtime_flags(opts, forbidden)
+
+
 def _discover_fastsurfer_subject_inputs(bids_folder, subject):
     """Discover per-subject T1 inputs and derive FastSurfer SIDs.
 
@@ -1131,6 +1151,10 @@ def _process_subject(
         execution_adapter = _infer_execution_adapter(common, app)
         fastsurfer_mode = execution_adapter == "fastsurfer-cross"
         fastsurfer_bids_mode = execution_adapter == "fastsurfer-bids"
+        # Unlike fastsurfer-bids, run.py (bids-apps/freesurfer) supports
+        # group1/group2 analysis levels too, so freesurfer_bids_mode is
+        # deliberately excluded from the participant-only restriction below.
+        freesurfer_bids_mode = execution_adapter == "freesurfer-bids"
         if (fastsurfer_mode or fastsurfer_bids_mode) and analysis_level != "participant":
             logging.error(
                 "FastSurfer adapter supports participant-level runs only. "
@@ -1187,7 +1211,11 @@ def _process_subject(
             base_cmd.append(common["container"])
         else:
             # Apptainer/Singularity
-            action = "exec" if (fastsurfer_mode or fastsurfer_bids_mode) else "run"
+            action = (
+                "exec"
+                if (fastsurfer_mode or fastsurfer_bids_mode or freesurfer_bids_mode)
+                else "run"
+            )
             base_cmd = [_apptainer_binary(), action]
 
             if app.get("apptainer_args"):
@@ -1293,6 +1321,28 @@ def _process_subject(
             fs_bids_options = _prepare_fastsurfer_bids_options(app.get("options", []))
             if fs_bids_options:
                 cmd.append("--")
+                cmd.extend(fs_bids_options)
+
+            commands.append((cmd, subject))
+        elif freesurfer_bids_mode:
+            # run.py (bids-apps/freesurfer, fs8.2 branch) discovers a
+            # subject's sessions itself and auto-dispatches cross-sectional
+            # -> base template -> longitudinal internally -- one command
+            # covers the whole subject (all sessions), no per-session loop
+            # needed here. Group-level runs (group1/group2 stats tables)
+            # don't take --participant_label.
+            cmd = list(base_cmd)
+            subject_label = subject.replace("sub-", "")
+            cmd.extend(["python", "/run.py", "/bids", "/output", analysis_level])
+            if analysis_level == "participant":
+                cmd.extend(["--participant_label", subject_label])
+
+            fs_license_file = common.get("fs_license_file")
+            if fs_license_file:
+                cmd.extend(["--license_file", "/fs/license.txt"])
+
+            fs_bids_options = _prepare_freesurfer_bids_options(app.get("options", []))
+            if fs_bids_options:
                 cmd.extend(fs_bids_options)
 
             commands.append((cmd, subject))

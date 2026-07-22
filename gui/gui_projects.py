@@ -78,7 +78,7 @@ class ProjectStore:
             "pipeline_output_root": "",
             "pipeline_app_name": "",
             "pipeline_version": "",
-            "pipeline_auto_versioning": False,
+            "pipeline_auto_versioning": True,
             "notify_email": "",
             "container_engine": default_engine,
             "container": default_container,

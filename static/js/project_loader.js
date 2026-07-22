@@ -272,6 +272,16 @@ async function applyPipelineEntryToRunnerForm(entry, options = {}) {
             fastsurferLongitudinalChk.checked =
                 app.execution_adapter === 'fastsurfer-bids' || !!presetSaysLongitudinal;
         }
+        const freesurferBidsLongitudinalChk = document.getElementById('freesurfer_bids_longitudinal');
+        if (freesurferBidsLongitudinalChk) {
+            // Mirrors the fastsurfer_longitudinal restore logic above.
+            const presetSaysFreesurferBids =
+                currentProjectConfig &&
+                currentProjectConfig.hpc &&
+                currentProjectConfig.hpc.preset === 'freesurfer_bids';
+            freesurferBidsLongitudinalChk.checked =
+                app.execution_adapter === 'freesurfer-bids' || !!presetSaysFreesurferBids;
+        }
 
         const engine = common.container_engine || 'apptainer';
         document.getElementById('container_engine').value = engine;
@@ -1187,8 +1197,12 @@ async function applyProjectData(project, projectIdOverride) {
             common.pipeline_output_root || inferredRoot || '';
         document.getElementById('pipeline_app_name').value = common.pipeline_app_name || '';
         document.getElementById('pipeline_version').value = common.pipeline_version || '';
+        // Default to enabled: only an explicit `false` (user turned it off
+        // and saved) should load unchecked -- see the matching fix/comment
+        // in the inline loadConfigDetails() for why missing/undefined must
+        // not silently downgrade to manual paths.
         document.getElementById('pipeline_auto_versioning').checked =
-            common.pipeline_auto_versioning === true;
+            common.pipeline_auto_versioning !== false;
         document.getElementById('notify_email').value = common.notify_email || '';
         document.getElementById('jobs').value = common.jobs || 1;
         document.getElementById('analysis_level').value = app.analysis_level || 'participant';
@@ -1203,6 +1217,13 @@ async function applyProjectData(project, projectIdOverride) {
             const presetSaysLongitudinal = cfg && cfg.hpc && cfg.hpc.preset === 'fastsurfer_bids';
             fastsurferLongitudinalEl.checked =
                 app.execution_adapter === 'fastsurfer-bids' || !!presetSaysLongitudinal;
+        }
+        const freesurferBidsLongitudinalEl = document.getElementById('freesurfer_bids_longitudinal');
+        if (freesurferBidsLongitudinalEl) {
+            // Mirrors the fastsurfer_longitudinal restore logic above.
+            const presetSaysFreesurferBids = cfg && cfg.hpc && cfg.hpc.preset === 'freesurfer_bids';
+            freesurferBidsLongitudinalEl.checked =
+                app.execution_adapter === 'freesurfer-bids' || !!presetSaysFreesurferBids;
         }
         document.getElementById('container_engine').value = common.container_engine || 'apptainer';
 
@@ -1851,5 +1872,23 @@ async function fetchAppOptions(loadToken = null, options = {}) {
         endRunnerOptionsLoad('Could not retrieve container options.', true);
     } finally {
         scheduleRunnerPreflightRefresh();
+    }
+}
+
+// Mirrors handleFastsurferLongitudinalToggle (templates/index.html): the
+// checkbox itself just retargets the HPC Compute Preset dropdown, which
+// pulls in the right partition/time/mem/cpus via applyHpcPreset() (both
+// still inline in templates/index.html, but globally accessible -- see the
+// file header comment on why that boundary is cosmetic). The actual
+// app.execution_adapter write-on-save happens where the checkbox is read,
+// same as the FastSurfer one.
+function handleFreesurferBidsLongitudinalToggle() {
+    const presetSel = document.getElementById('hpc_preset');
+    if (!presetSel) return;
+    const checked = !!document.getElementById('freesurfer_bids_longitudinal')?.checked;
+    const targetKey = checked ? 'freesurfer_bids' : 'freesurfer';
+    if (presetSel.value !== 'custom' && Array.from(presetSel.options).some((o) => o.value === targetKey)) {
+        presetSel.value = targetKey;
+        applyHpcPreset();
     }
 }

@@ -179,6 +179,99 @@ def test_fastsurfer_cross_execution_adapter_does_not_use_bids_entrypoint(tmp_pat
     assert '"$APPTAINER_BIN" run' in script
 
 
+def _freesurfer_bids_config():
+    config = _base_config()
+    config["paths"]["container"] = "/containers/freesurfer_bids_8.2.0.sif"
+    config["bids_app"] = {
+        "app_name": "freesurfer",
+        "analysis_level": "participant",
+        "output_dir_name": "freesurfer",
+        "execution_adapter": "freesurfer-bids",
+        "options": ["--3T"],
+    }
+    return config
+
+
+def test_freesurfer_bids_adapter_calls_run_py(tmp_path):
+    subj_list = _write_subject_list(tmp_path, ["sub-01", "sub-02"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _freesurfer_bids_config(), "ds001", subj_list, 2
+    ).generate_script()
+
+    # Uses the wrapper's own entrypoint via apptainer exec, not the generic
+    # apptainer run convention -- run.py auto-discovers a subject's sessions
+    # and dispatches cross-sectional -> base template -> longitudinal
+    # internally, so no per-session looping is needed at this layer either.
+    assert "python /run.py" in script
+    assert '"$APPTAINER_BIN" exec' in script
+    assert "--participant_label" in script
+    assert '"${SUBJECT_LABEL}"' in script
+    # recon-all is CPU-only: no GPU handling at all for this adapter.
+    assert "--nv" not in script
+    assert "CUDA_VISIBLE_DEVICES" not in script
+    # And not the generic path's flags for this same job.
+    assert "--participant-label" not in script
+    assert "-w /tmp/wdir" not in script
+    # Passthrough options after the wrapper's own runtime-managed args.
+    assert "--3T" in script
+
+
+def test_freesurfer_bids_adapter_binds_fs_license(tmp_path):
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _freesurfer_bids_config(), "ds001", subj_list, 1
+    ).generate_script()
+
+    assert "-B '/tmp/license file.txt':/fs/license.txt:ro" in script
+    assert "--license_file \\\n    /fs/license.txt" in script
+
+
+def test_freesurfer_bids_group_level_omits_participant_label(tmp_path):
+    # Unlike fastsurfer-bids (participant-only), run.py supports group1/
+    # group2 analysis levels too, and --participant_label must not be
+    # passed for those.
+    config = _freesurfer_bids_config()
+    config["bids_app"]["analysis_level"] = "group1"
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        config, "ds001", subj_list, 1
+    ).generate_script()
+
+    assert "--participant_label" not in script
+    assert "group1" in script
+
+
+def test_freesurfer_bids_session_label_passes_through(tmp_path):
+    # --session_label restricts a longitudinal run to a subset of a
+    # subject's BIDS sessions (default with no flag: every session found).
+    # Unlike --participant_label/--license_file, the adapter never sets
+    # this itself, so it must survive _prepare_freesurfer_bids_options
+    # rather than being silently dropped as a runtime-managed flag.
+    config = _freesurfer_bids_config()
+    config["bids_app"]["options"] = ["--session_label", "1", "2"]
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        config, "ds001", subj_list, 1
+    ).generate_script()
+
+    assert "--session_label \\\n    1 \\\n    2" in script
+
+
+def test_freesurfer_bids_adapter_script_is_valid_bash(tmp_path):
+    import subprocess
+
+    subj_list = _write_subject_list(tmp_path, ["sub-01", "sub-02", "sub-03"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _freesurfer_bids_config(), "ds001", subj_list, 3
+    ).generate_script()
+
+    script_path = subj_list.replace("subjects.txt", "job.sh")
+    with open(script_path, "w") as f:
+        f.write(script)
+    result = subprocess.run(["bash", "-n", script_path], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_array_generator_uses_persistent_clones_and_per_task_scratch():
     script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
         _base_config(), "ds001", "/tmp/subjects.txt", 2

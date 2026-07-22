@@ -39,3 +39,4 @@ venv
 .coverage
 coverage.xml
 .secret_key
+scripts/.nfs00000000023cc65000011cfe

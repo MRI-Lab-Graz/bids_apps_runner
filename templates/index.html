@@ -625,6 +625,7 @@
                                         <i class="fas fa-plug me-1"></i>Connect &amp; Clone
                                     </button>
                                     <div id="remoteDatasetStatus" class="alert alert-secondary py-2 px-3 small mt-3 mb-2" style="display:none;"></div>
+                                    <div id="remoteDatasetDerivHint" class="alert alert-warning py-2 px-3 small mt-2 mb-2" style="display:none;"></div>
                                     <pre id="remoteDatasetLog" class="utility-log" style="display:none; max-height:200px; overflow-y:auto; margin-bottom:0;"></pre>
                                 </div>
                             </div>
@@ -916,6 +917,14 @@
                                 <input class="form-check-input" type="checkbox" id="fastsurfer_longitudinal" onchange="handleFastsurferLongitudinalToggle()">
                                 <label class="form-check-label" for="fastsurfer_longitudinal">
                                     FastSurfer: use BIDS longitudinal auto-dispatch (<code>fastsurfer-bids</code>)
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-12 mb-3">
+                            <div class="form-check" id="freesurfer_bids_toggle_wrap" title="FreeSurfer only. Runs run.py (bids-apps/freesurfer, fs8.2 branch) inside the container, which auto-discovers a subject's sessions and dispatches cross-sectional -> base template -> longitudinal internally. Requires a FreeSurfer-BIDS container (freesurfer_bids_* image with the run.py entrypoint). Leave unchecked to use the raw recon-all container instead.">
+                                <input class="form-check-input" type="checkbox" id="freesurfer_bids_longitudinal" onchange="handleFreesurferBidsLongitudinalToggle()">
+                                <label class="form-check-label" for="freesurfer_bids_longitudinal">
+                                    FreeSurfer: use BIDS longitudinal auto-dispatch (<code>freesurfer-bids</code>)
                                 </label>
                             </div>
                         </div>
@@ -1239,6 +1248,10 @@
                                 <div class="form-check form-switch">
                                     <input class="form-check-input" type="checkbox" id="cohortResume">
                                     <label class="form-check-label" for="cohortResume">Resume (skip existing)</label>
+                                </div>
+                                <div class="form-check form-switch" title="Submit only ONE randomly-selected subject instead of the whole cohort -- validates the real container/mount/DataLad-provenance path end-to-end (not a dry-run) before committing to every subject.">
+                                    <input class="form-check-input" type="checkbox" id="cohortPilot">
+                                    <label class="form-check-label" for="cohortPilot">Pilot (1 random subject)</label>
                                 </div>
                             </div>
 
@@ -1787,6 +1800,11 @@
          inline script specifically so it's visible here too. See its own
          header comment for the full rationale. -->
     <script src="{{ url_for('static', filename='js/project_loader.js') }}"></script>
+    <!-- Cohort panel (multi-subject SLURM array submission via
+         datalad-slurm) -- same pattern as project_loader.js above: reads
+         shared `var`-declared state (lastProjectId, currentPipelineId) from
+         the inline script below. See its own header comment. -->
+    <script src="{{ url_for('static', filename='js/cohort_panel.js') }}"></script>
     <script>
         let currentTargetId = '';
         let browserCurrentPath = '/data/local/software';
@@ -3026,7 +3044,12 @@
                 text = el.value ? `${flag} ${el.value}` : '(default)';
             } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
                 const val = el.value.trim();
-                text = val ? `${flag} ${val.split(/[\s\n]+/)[0]}${val.includes(' ') || val.includes('\n') ? ' ...' : ''}` : '(empty)';
+                // Matches the split regex in the actual save-time parser
+                // below (whitespace/newlines/commas) so this preview can't
+                // show "one value" for something that will actually save
+                // as several.
+                const parts = val.split(/[\s,]+/).filter(Boolean);
+                text = val ? `${flag} ${parts[0]}${parts.length > 1 ? ' ...' : ''}` : '(empty)';
             }
 
             previewEl.innerText = text;
@@ -3086,8 +3109,13 @@
                 } else if (el.value.trim()) {
                     opts.push(el.dataset.flag);
                     if (el.tagName === 'TEXTAREA') {
-                        // Split by newlines or spaces for multiple values
-                        const vals = el.value.trim().split(/[\s\n]+/);
+                        // Split on whitespace/newlines AND commas -- e.g.
+                        // "1,2" (no space) is a very natural way to type a
+                        // list despite the "one per line" placeholder, and
+                        // no legitimate single value for these multi-value
+                        // flags (session labels, participant labels, etc.)
+                        // would ever legitimately contain a literal comma.
+                        const vals = el.value.trim().split(/[\s,]+/);
                         vals.forEach(v => { if(v) opts.push(v); });
                     } else {
                         opts.push(el.value.trim());
@@ -3251,6 +3279,11 @@
                 activeApp.execution_adapter = (fastsurferLongitudinalEl && fastsurferLongitudinalEl.checked)
                     ? 'fastsurfer-bids'
                     : 'fastsurfer-cross';
+            } else if (resolvedPipelineAppName === 'freesurfer') {
+                const freesurferBidsLongitudinalEl = document.getElementById('freesurfer_bids_longitudinal');
+                if (freesurferBidsLongitudinalEl && freesurferBidsLongitudinalEl.checked) {
+                    activeApp.execution_adapter = 'freesurfer-bids';
+                }
             }
 
             if (lastProjectId) {
@@ -3631,7 +3664,11 @@
                 document.getElementById('pipeline_output_root').value = activeCommon.pipeline_output_root || inferredRoot || '';
                 document.getElementById('pipeline_app_name').value = activeCommon.pipeline_app_name || '';
                 document.getElementById('pipeline_version').value = activeCommon.pipeline_version || '';
-                document.getElementById('pipeline_auto_versioning').checked = activeCommon.pipeline_auto_versioning === true;
+                // Default to enabled: only an explicit `false` (user turned it off
+                // and saved) should load unchecked. Missing/undefined -- e.g. any
+                // project saved before this feature existed -- must not silently
+                // downgrade to manual paths on next load.
+                document.getElementById('pipeline_auto_versioning').checked = activeCommon.pipeline_auto_versioning !== false;
                 document.getElementById('jobs').value = activeCommon.jobs || 1;
                 document.getElementById('analysis_level').value = activeApp.analysis_level || 'participant';
                 syncRunnerSubjectFilterWithAnalysisLevel();
@@ -5495,6 +5532,20 @@
             updateVersionedOutputControls();
             applyVersionedOutputPaths({ source: 'initial-load' });
 
+            // Effective pipeline name can change independently of the study
+            // (manual "Pipeline App" pick, or switching container image) --
+            // re-check the "derivatives already exists" hint whenever it might.
+            ['pipeline_app_name', 'container_select', 'container_docker_repo'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                const recheck = () => {
+                    const cloneDir = (document.getElementById('remote_dataset_clone_dir')?.value || '').trim();
+                    if (cloneDir) checkExistingDerivativesForPipeline(cloneDir);
+                };
+                el.addEventListener('input', recheck);
+                el.addEventListener('change', recheck);
+            });
+
             // Clear tags if repo changes
             const buildRepoInput = document.getElementById('build_docker_repo');
             if (buildRepoInput) {
@@ -6317,6 +6368,34 @@
                     if (fastsurferLongitudinalEl) fastsurferLongitudinalEl.checked = (adapter === 'fastsurfer-bids');
                 }
 
+                // Same idea for FreeSurfer, except the plain "freesurfer"
+                // preset has no execution_adapter concept of its own (unlike
+                // fastsurfer-cross above) -- picking it just clears any
+                // previously-set freesurfer-bids override instead of writing
+                // a fake adapter name.
+                if (hpcSettings.preset === 'freesurfer_bids' || hpcSettings.preset === 'freesurfer') {
+                    const adapter = hpcSettings.preset === 'freesurfer_bids' ? 'freesurfer-bids' : undefined;
+                    const patchApp = (existing) => {
+                        const next = { ...(existing || {}) };
+                        if (adapter) {
+                            next.execution_adapter = adapter;
+                        } else {
+                            delete next.execution_adapter;
+                        }
+                        return next;
+                    };
+                    baseConfig.app = patchApp(baseConfig.app);
+                    const activePipeline = baseConfig.active_pipeline;
+                    if (activePipeline && baseConfig.pipelines && baseConfig.pipelines[activePipeline]) {
+                        baseConfig.pipelines[activePipeline] = {
+                            ...baseConfig.pipelines[activePipeline],
+                            app: patchApp(baseConfig.pipelines[activePipeline].app)
+                        };
+                    }
+                    const freesurferBidsLongitudinalEl = document.getElementById('freesurfer_bids_longitudinal');
+                    if (freesurferBidsLongitudinalEl) freesurferBidsLongitudinalEl.checked = (adapter === 'freesurfer-bids');
+                }
+
                 const resp = await fetch(`/save_project/${lastProjectId}`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -6637,10 +6716,7 @@
             logHPC('Log cleared');
         }
 
-        // ── Cohort panel ────────────────────────────────────────────────────
-        let _cohortJobId = null;
-        let _cohortPollTimer = null;
-        let _cohortLastLogLen = 0;
+        // ── Cohort panel ── moved to static/js/cohort_panel.js ──────────────
 
         let _remoteStudiesLoaded = false;
         let _bidsSourceMode = 'local';
@@ -6722,6 +6798,60 @@
                 document.getElementById('bids_folder').value = cloneDir;
                 updateCohortDatasetDisplay();
             }
+            autoFillDerivativesRootFromClone(cloneDir);
+        }
+
+        // Auto-derive "Derivatives Root (Versioned Mode)" as <clone_dir>/derivatives
+        // once a study is picked, so Output Folder auto-populates via the existing
+        // Auto Paths mechanism instead of the user having to type it in by hand.
+        // Only touches the field while it still holds a value *we* set previously —
+        // a manual edit (or a value loaded from a saved project config) is left alone.
+        function autoFillDerivativesRootFromClone(cloneDir) {
+            const rootEl = document.getElementById('pipeline_output_root');
+            if (rootEl) {
+                const wasAutoFilled = rootEl.dataset.remoteAutoFilled === 'true';
+                const target = cloneDir ? `${cloneDir}/derivatives` : '';
+                if (target && (!rootEl.value || wasAutoFilled)) {
+                    rootEl.value = target;
+                    rootEl.dataset.remoteAutoFilled = 'true';
+                } else if (!target && wasAutoFilled) {
+                    rootEl.value = '';
+                    delete rootEl.dataset.remoteAutoFilled;
+                }
+                applyVersionedOutputPaths({ source: 'remote-study-change' });
+            }
+            checkExistingDerivativesForPipeline(cloneDir);
+        }
+
+        // Warn (never block) when the pipeline already has a derivatives folder
+        // for this study — e.g. from an earlier run — so re-runs/longitudinal
+        // processing don't silently look "empty" when output already exists.
+        // Only fires once a pipeline name is actually known: either picked
+        // explicitly in "Pipeline App", or inferred from the selected container.
+        async function checkExistingDerivativesForPipeline(cloneDir) {
+            const hintEl = document.getElementById('remoteDatasetDerivHint');
+            if (!hintEl) return;
+            hintEl.style.display = 'none';
+            if (!cloneDir) return;
+
+            const manualAppName = (document.getElementById('pipeline_app_name')?.value || '').trim();
+            const appName = manualAppName || inferCurrentPipelineAppName();
+            if (!appName) return;
+
+            const candidate = `${cloneDir}/derivatives/${appName}`;
+            try {
+                const resp = await fetch(`/check_path_exists?path=${encodeURIComponent(candidate)}`);
+                const data = await resp.json();
+                if (data.has_content) {
+                    hintEl.textContent =
+                        `Heads up: ${candidate} already exists and has content` +
+                        (manualAppName ? '' : ` (pipeline "${appName}" auto-detected from container)`) +
+                        ` — this run will add to/reuse that folder rather than starting from empty.`;
+                    hintEl.style.display = 'block';
+                }
+            } catch (err) {
+                // Best-effort hint only; ignore failures.
+            }
         }
 
         let _remoteDatasetPollTimer = null;
@@ -6801,258 +6931,6 @@
             }, 2000);
         }
 
-        function toggleCohortPanel() {
-            const body = document.getElementById('cohortPanelBody');
-            const icon = document.getElementById('cohortPanelIcon');
-            const open = body.style.display !== 'none';
-            body.style.display = open ? 'none' : 'block';
-            icon.style.transform = open ? '' : 'rotate(180deg)';
-            if (!open) checkCohortOpenJobs();
-        }
-
-        let _cohortOpenJobsCheck = { checking: false, error: null, openJobs: [] };
-
-        async function checkCohortOpenJobs() {
-            const panel = document.getElementById('cohortJobsPanel');
-            const badge = document.getElementById('cohortJobsBadge');
-            const detail = document.getElementById('cohortJobsDetail');
-            const closeBtn = document.getElementById('cohortCloseJobsBtn');
-            if (!panel || !lastProjectId) { if (panel) panel.style.display = 'none'; return; }
-
-            panel.style.display = 'block';
-            panel.className = 'alert alert-secondary py-2 px-3 small mb-3';
-            _cohortOpenJobsCheck.checking = true;
-            badge.className = 'badge bg-secondary';
-            badge.textContent = 'Checking...';
-            detail.textContent = '';
-            closeBtn.style.display = 'none';
-
-            const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
-            const params = new URLSearchParams({
-                project_id: lastProjectId,
-                pipeline_id: currentPipelineId || '',
-                max_concurrent: maxConcurrent,
-            });
-
-            let data;
-            try {
-                const resp = await fetch(`/cohort/check_open_jobs?${params}`);
-                data = await resp.json();
-            } catch (err) {
-                _cohortOpenJobsCheck = { checking: false, error: 'Request failed: ' + err, openJobs: [] };
-                badge.className = 'badge bg-danger';
-                badge.textContent = 'Error';
-                detail.textContent = _cohortOpenJobsCheck.error;
-                return;
-            }
-
-            _cohortOpenJobsCheck.checking = false;
-            _cohortOpenJobsCheck.error = data.error || null;
-            _cohortOpenJobsCheck.openJobs = data.open_jobs || [];
-
-            if (data.error) {
-                badge.className = 'badge bg-secondary';
-                badge.textContent = 'Unknown';
-                detail.textContent = data.error;
-                return;
-            }
-
-            if (_cohortOpenJobsCheck.openJobs.length === 0) {
-                panel.className = 'alert alert-success py-2 px-3 small mb-3';
-                badge.className = 'badge bg-success';
-                badge.textContent = 'Clear';
-                detail.textContent = 'No stuck datalad-slurm jobs for this dataset.';
-                return;
-            }
-
-            const closeable = _cohortOpenJobsCheck.openJobs.filter(
-                (j) => j.status !== 'RUNNING' && j.status !== 'PENDING'
-            );
-            panel.className = 'alert alert-warning py-2 px-3 small mb-3';
-            badge.className = 'badge bg-warning text-dark';
-            badge.textContent = `${_cohortOpenJobsCheck.openJobs.length} open`;
-            detail.innerHTML = 'Unfinished datalad-slurm job(s) will block Submit for overlapping subjects: '
-                + _cohortOpenJobsCheck.openJobs.map(
-                    (j) => `<code>${escapeHtml(j.job_id)}</code> (${escapeHtml(j.status)})`
-                ).join(', ');
-            if (closeable.length > 0) {
-                closeBtn.style.display = 'inline-flex';
-            }
-        }
-
-        async function closeCohortOpenJobs() {
-            const closeBtn = document.getElementById('cohortCloseJobsBtn');
-            closeBtn.disabled = true;
-            const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
-            try {
-                const resp = await fetch('/cohort/close_open_jobs', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        project_id: lastProjectId,
-                        pipeline_id: currentPipelineId || '',
-                        max_concurrent: maxConcurrent,
-                    }),
-                });
-                const data = await resp.json();
-                logHPC(data.output || (data.ok ? 'Closed failed datalad-slurm jobs.' : 'Failed to close jobs.'), !data.ok);
-            } catch (err) {
-                logHPC('Request failed: ' + err, true);
-            } finally {
-                closeBtn.disabled = false;
-                checkCohortOpenJobs();
-            }
-        }
-
-        function _basenameOf(path) {
-            const trimmed = (path || '').replace(/\/+$/, '');
-            const parts = trimmed.split('/');
-            return parts[parts.length - 1] || '';
-        }
-
-        function updateCohortDatasetDisplay(bidsFolderOverride) {
-            const display = document.getElementById('cohortDatasetIdDisplay');
-            if (!display) return;
-            const bidsFolder = bidsFolderOverride !== undefined
-                ? bidsFolderOverride
-                : (document.getElementById('bids_folder')?.value || '');
-            display.value = bidsFolder ? _basenameOf(bidsFolder) : '(load a project with a BIDS Dataset Folder set)';
-        }
-
-        async function previewCohortConfig() {
-            const pre = document.getElementById('cohortConfigPreview');
-            if (!_requireSavedProjectForHpc('previewing the cohort config')) return;
-
-            const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
-            const params = new URLSearchParams({
-                project_id: lastProjectId,
-                pipeline_id: currentPipelineId || '',
-                max_concurrent: maxConcurrent,
-            });
-
-            try {
-                const resp = await fetch(`/cohort/preview_config?${params}`);
-                const data = await resp.json();
-                if (!resp.ok || data.error) {
-                    pre.style.display = 'block';
-                    pre.textContent = 'Error: ' + (data.error || 'Failed to derive config.');
-                    return;
-                }
-                pre.style.display = 'block';
-                pre.textContent = JSON.stringify(data.config, null, 2);
-            } catch (err) {
-                pre.style.display = 'block';
-                pre.textContent = 'Request failed: ' + err.message;
-            }
-        }
-
-        function _cohortSetBusy(busy, command) {
-            ['cohortSetupBtn','cohortSubmitBtn','cohortStatusBtn'].forEach(id => {
-                document.getElementById(id).disabled = busy;
-            });
-            document.getElementById('cohortCancelBtn').style.display = busy ? 'inline-flex' : 'none';
-            const badge = document.getElementById('cohortBadge');
-            const msg   = document.getElementById('cohortStatusMsg');
-            document.getElementById('cohortStatusBadge').style.display = 'block';
-            if (busy) {
-                badge.className = 'badge bg-warning text-dark';
-                badge.textContent = 'running';
-                msg.textContent   = command;
-            }
-        }
-
-        function _cohortSetDone(status, command) {
-            ['cohortSetupBtn','cohortSubmitBtn','cohortStatusBtn'].forEach(id => {
-                document.getElementById(id).disabled = false;
-            });
-            document.getElementById('cohortCancelBtn').style.display = 'none';
-            const badge = document.getElementById('cohortBadge');
-            const msg   = document.getElementById('cohortStatusMsg');
-            badge.className = status === 'completed'
-                ? 'badge bg-success' : status === 'cancelled'
-                ? 'badge bg-secondary' : 'badge bg-danger';
-            badge.textContent = status;
-            msg.textContent   = `${command} finished`;
-            checkCohortOpenJobs();
-        }
-
-        async function runCohort(command) {
-            if (!_requireSavedProjectForHpc(`running cohort ${command}`)) return;
-
-            const dryRun = document.getElementById('cohortDryRun').checked;
-            const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
-
-            _cohortLastLogLen = 0;
-            _cohortSetBusy(true, command);
-            logHPC(`Starting cohort ${command}${dryRun ? ' (dry-run)' : ''}…`);
-
-            let resp;
-            try {
-                resp = await fetch('/cohort/run', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        command,
-                        project_id: lastProjectId,
-                        pipeline_id: currentPipelineId || '',
-                        dry_run: dryRun,
-                        max_concurrent: maxConcurrent,
-                    }),
-                });
-            } catch (err) {
-                logHPC(`Network error: ${err}`, true);
-                _cohortSetDone('failed', command);
-                return;
-            }
-
-            const data = await resp.json();
-            if (!resp.ok || data.error) {
-                logHPC(data.error || 'Unknown error', true);
-                _cohortSetDone('failed', command);
-                return;
-            }
-
-            _cohortJobId = data.job_id;
-            logHPC(`Job started: ${_cohortJobId}`);
-            _cohortPollTimer = setInterval(() => _cohortPoll(command), 1500);
-        }
-
-        async function _cohortPoll(command) {
-            if (!_cohortJobId) return;
-            let data;
-            try {
-                const r = await fetch(`/cohort/job_status?job_id=${_cohortJobId}`);
-                data = await r.json();
-            } catch { return; }
-
-            const log = data.log_tail || '';
-            if (log.length > _cohortLastLogLen) {
-                const newText = log.slice(_cohortLastLogLen);
-                const out = document.getElementById('hpcLogOutput');
-                out.textContent += newText;
-                out.scrollTop = out.scrollHeight;
-                _cohortLastLogLen = log.length;
-            }
-
-            if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
-                clearInterval(_cohortPollTimer);
-                _cohortPollTimer = null;
-                _cohortSetDone(data.status, command);
-                logHPC(`Cohort ${command} ${data.status}` + (data.returncode != null ? ` (exit ${data.returncode})` : ''));
-            }
-        }
-
-        async function cancelCohort() {
-            if (!_cohortJobId) return;
-            await fetch('/cohort/cancel', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ job_id: _cohortJobId }),
-            });
-            if (_cohortPollTimer) { clearInterval(_cohortPollTimer); _cohortPollTimer = null; }
-            _cohortSetDone('cancelled', 'cancel');
-            logHPC('Cohort job cancelled');
-        }
 
     </script>
 {% endblock %}

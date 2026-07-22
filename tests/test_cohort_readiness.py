@@ -114,3 +114,36 @@ def test_cohort_readiness_passes_and_surfaces_execution_adapter(client, disposab
     assert "execution_adapter" in by_id
     assert "fastsurfer-bids" in by_id["execution_adapter"]["detail"]
     assert data["ready"] is True
+
+
+def test_cohort_readiness_passes_and_surfaces_freesurfer_bids_adapter(client, disposable_project, tmp_path):
+    bids_dir = tmp_path / "bids"
+    bids_dir.mkdir()
+    container = tmp_path / "freesurfer_bids_8.2.0.sif"
+    container.write_text("fake")
+
+    _save(
+        disposable_project,
+        {
+            "bids_folder": str(bids_dir),
+            "output_folder": str(tmp_path / "derivatives"),
+            "container": str(container),
+            "container_engine": "apptainer",
+        },
+        {
+            "analysis_level": "participant",
+            "options": [],
+            "mounts": [],
+            "execution_adapter": "freesurfer-bids",
+        },
+        hpc={"partition": "hpc", "time": "20:00:00", "mem": "32G", "cpus": 1},
+    )
+
+    resp = client.get(f"/cohort/readiness?project_id={disposable_project}")
+    data = resp.get_json()
+
+    by_id = {c["id"]: c for c in data["checks"]}
+    assert by_id["container"]["ok"] is True
+    assert "execution_adapter" in by_id
+    assert "freesurfer-bids" in by_id["execution_adapter"]["detail"]
+    assert data["ready"] is True

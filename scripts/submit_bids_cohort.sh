@@ -35,6 +35,12 @@
 #   -d DATASET_ID  Process only this dataset (can be repeated)
 #   --dry-run      Print commands without executing
 #   --resume       Skip datasets whose subject list or job script already exist
+#   --pilot        submit only: narrow to one randomly-chosen subject per
+#                  dataset (separate _pilot-suffixed subject list/array
+#                  script, never touches the real cohort's files) -- a real
+#                  "submit" through the full container/mount/DataLad
+#                  provenance path, just for one subject, to sanity-check
+#                  everything before committing to the whole cohort
 #
 # Prerequisites
 # ─────────────
@@ -68,6 +74,7 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG="${REPO_DIR}/configs/cohort_hpc_example.json"
 DRY_RUN=false
 RESUME=false
+PILOT=false
 FILTER_DATASETS=()
 SUBJ_LISTS_DIR=""        # resolved from config
 
@@ -108,6 +115,7 @@ while [[ $# -gt 0 ]]; do
         -d|--dataset)     FILTER_DATASETS+=("$2"); shift 2 ;;
         --dry-run)        DRY_RUN=true;           shift ;;
         --resume)         RESUME=true;            shift ;;
+        --pilot)          PILOT=true;             shift ;;
         -h|--help)        COMMAND=help;           shift ;;
         *) die "Unknown option: $1" ;;
     esac
@@ -287,7 +295,14 @@ cmd_submit() {
     resolve_config
 
     local scripts_dir="$(dirname "$(realpath "$CONFIG")")/generated"
-    local submission_log="${REPO_DIR}/logs/submission_$(date '+%Y%m%d_%H%M%S').log"
+    # Pilot submissions log to a "pilot_"-prefixed file specifically so
+    # `cmd_status`'s `submission_*.log` glob (which always picks the most
+    # recent match) can never pick up a pilot run's tiny 1-subject log in
+    # place of the real cohort's -- e.g. piloting a fix while a real array
+    # job is still in progress must not make status checks blind to it.
+    local submission_log_prefix="submission"
+    $PILOT && submission_log_prefix="pilot_submission"
+    local submission_log="${REPO_DIR}/logs/${submission_log_prefix}_$(date '+%Y%m%d_%H%M%S').log"
     mkdir -p "$scripts_dir" "$(dirname "$submission_log")"
 
     log "Submitting ${#DATASETS[@]} dataset(s)..."
@@ -296,15 +311,22 @@ cmd_submit() {
     local submitted=0 skipped=0 failed=0
 
     for DS in "${DATASETS[@]}"; do
-        local subj_list="${SUBJ_LISTS_DIR}/${DS}_subjects.txt"
-        local array_script="${scripts_dir}/${DS}_bids_array.sh"
+        # Pilot mode gets its own _pilot-suffixed subject list/array/finish
+        # scripts -- entirely separate from the real cohort's files, so a
+        # pilot run can never clobber (or be skipped in favor of, under
+        # --resume) the real subject list, and vice versa.
+        local subj_list_suffix=""
+        $PILOT && subj_list_suffix="_pilot"
+        local subj_list="${SUBJ_LISTS_DIR}/${DS}_subjects${subj_list_suffix}.txt"
+        local array_script="${scripts_dir}/${DS}_bids_array${subj_list_suffix}.sh"
         resolve_input_clone "$DS"
         local input_clone="$INPUT_CLONE"
         resolve_output_clone "$DS"
         local output_clone="$OUTPUT_CLONE"
-        local finish_script="${scripts_dir}/${DS}_bids_finish.sh"
+        local finish_script="${scripts_dir}/${DS}_bids_finish${subj_list_suffix}.sh"
 
         log "[$DS] --- submit ---"
+        $PILOT && log "[$DS] PILOT MODE: will submit only 1 randomly-chosen subject"
 
         # Build subject list from pre-cloned dataset (reads BIDS directory names)
         if [[ -f "$subj_list" ]] && $RESUME; then
@@ -314,11 +336,19 @@ cmd_submit() {
                 warn "[$DS] Input not cloned at ${input_clone} – run setup first"
                 failed=$((failed + 1)); continue
             fi
-            log "[$DS] Building subject list..."
-            run bash -c "ls -d ${input_clone}/sub-*/ 2>/dev/null \
-                | xargs -I{} basename {} \
-                | sort > ${subj_list}" \
-                || { warn "[$DS] Failed to build subject list"; failed=$((failed + 1)); continue; }
+            if $PILOT; then
+                log "[$DS] Picking 1 random subject for pilot..."
+                run bash -c "ls -d ${input_clone}/sub-*/ 2>/dev/null \
+                    | xargs -I{} basename {} \
+                    | shuf -n 1 > ${subj_list}" \
+                    || { warn "[$DS] Failed to build pilot subject list"; failed=$((failed + 1)); continue; }
+            else
+                log "[$DS] Building subject list..."
+                run bash -c "ls -d ${input_clone}/sub-*/ 2>/dev/null \
+                    | xargs -I{} basename {} \
+                    | sort > ${subj_list}" \
+                    || { warn "[$DS] Failed to build subject list"; failed=$((failed + 1)); continue; }
+            fi
         fi
 
         local n_subjects
@@ -327,7 +357,10 @@ cmd_submit() {
             warn "[$DS] Subject list is empty – skipping"
             failed=$((failed + 1)); continue
         fi
-        log "[$DS] ${n_subjects} subjects"
+        log "[$DS] ${n_subjects} subjects$($PILOT && echo ' (PILOT)')"
+
+        local commit_prefix=""
+        $PILOT && commit_prefix="[PILOT] "
 
         # Generate SLURM array script
         if [[ -f "$array_script" ]] && $RESUME; then
@@ -381,7 +414,7 @@ cmd_submit() {
         local schedule_stdout job_id
         schedule_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
             "${output_flags[@]}" \
-            -m "${APP_NAME} array for ${DS} (${n_subjects} subjects)" \
+            -m "${commit_prefix}${APP_NAME} array for ${DS} (${n_subjects} subjects)" \
             sbatch "$array_script") \
             || { warn "[$DS] datalad slurm-schedule failed"; failed=$((failed + 1)); continue; }
 
@@ -392,7 +425,7 @@ cmd_submit() {
             warn "[$DS] Could not determine SLURM job id from slurm-schedule output"
             failed=$((failed + 1)); continue
         fi
-        log "[$DS] Scheduled array job ${job_id} (${n_subjects} subjects)"
+        log "[$DS] ${commit_prefix}Scheduled array job ${job_id} (${n_subjects} subjects)"
 
         # Chain a finish job: once the whole array completes, this is the
         # only step that touches git -- one `datalad slurm-finish` commit
@@ -414,7 +447,7 @@ cmd_submit() {
         fi
         cat > "$finish_script" <<EOF
 #!/bin/bash
-#SBATCH --job-name=finish_${DS}
+#SBATCH --job-name=finish_${DS}${subj_list_suffix}
 #SBATCH --dependency=afterany:${job_id}
 #SBATCH --partition=$(cfg '.hpc.partition')
 #SBATCH --time=00:30:00
@@ -437,7 +470,7 @@ ${module_load_line}
 export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
 DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
-"\$DATALAD_BIN" slurm-finish -m "Finish ${APP_NAME} array job ${job_id} for ${DS}"
+"\$DATALAD_BIN" slurm-finish -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${DS}"
 "\$DATALAD_BIN" push --to origin
 EOF
         chmod +x "$finish_script"

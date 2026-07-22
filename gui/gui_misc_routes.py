@@ -215,6 +215,12 @@ def register_misc_routes(
                 400,
             )
 
+        import app_profiles  # lazy -- scripts/ is on sys.path at runtime
+
+        profile = app_profiles.resolve_app_profile({}, {}, container_ref=container)
+        explicit_help_args = profile.get("help_args")
+        help_args = explicit_help_args or ["--help"]
+
         try:
             print(f"[GUI] Fetching help for {container} using {engine}...", flush=True)
             if engine == "docker":
@@ -238,12 +244,18 @@ def register_misc_routes(
                         "--platform",
                         "linux/amd64",
                         container,
-                        "--help",
+                        *help_args,
                     ]
                 else:
-                    cmd = ["docker", "run", "--rm", container, "--help"]
+                    cmd = ["docker", "run", "--rm", container, *help_args]
             else:
-                cmd = [apptainer_bin, "run", "--containall", container, "--help"]
+                # A profile-supplied help_args means the container's own
+                # entrypoint/runscript can't be trusted to forward args to
+                # a --help-aware command ("run" depends on that) -- "exec"
+                # bypasses the runscript entirely and invokes the given
+                # command directly, which is more reliable in that case.
+                action = "exec" if explicit_help_args else "run"
+                cmd = [apptainer_bin, action, "--containall", container, *help_args]
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             output = result.stdout + result.stderr
@@ -500,9 +512,6 @@ def register_misc_routes(
                         target_section_options, key=lambda option: option["name"]
                     )
 
-            import app_profiles  # lazy -- scripts/ is on sys.path at runtime
-
-            profile = app_profiles.resolve_app_profile({}, {}, container_ref=container)
             app_name = profile["display_name"]
             doc_url = profile["docs_url"]
 

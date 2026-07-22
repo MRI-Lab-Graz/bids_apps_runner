@@ -104,6 +104,62 @@ def test_fastsurfer_bids_execution_adapter_survives_container_sniffing():
     assert adapter == "fastsurfer-bids"
 
 
+def test_freesurfer_recommended_hpc_matches_validated_manual_run():
+    # 16G/4cpu previously under-provisioned a real staged cross->base->long
+    # run (template_run.sbatch validated 32G/1cpu against FreeSurfer 8.x's
+    # own ~24GB SynthSeg peak).
+    profile = resolve_app_profile({"pipeline_app_name": "freesurfer"}, {})
+    assert profile["recommended_hpc"]["mem"] == "32G"
+    assert profile["recommended_hpc"]["cpus"] == 1
+
+
+def test_freesurfer_bids_execution_adapter_aliases():
+    aliases = CATALOG["freesurfer_bids"]["execution_adapter_aliases"]
+    assert aliases["freesurfer-bids"] == "freesurfer-bids"
+    assert aliases["freesurfer_bids"] == "freesurfer-bids"
+
+
+def test_freesurfer_bids_resolves_via_container_sniffing():
+    # Unlike fastsurfer_bids, freesurfer_bids carries a real
+    # container_match_names entry, and resolve_app_name() prefers the
+    # longest matching app_key across all catalog entries -- so a
+    # "freesurfer_bids_*" filename resolves here even though it also
+    # technically starts with "freesurfer".
+    assert resolve_app_name({}, {}, container_ref="/x/freesurfer_8.2.0.sif") == "freesurfer"
+    assert (
+        resolve_app_name({}, {}, container_ref="/x/freesurfer_bids_8.2.0.sif")
+        == "freesurfer_bids"
+    )
+
+    profile = resolve_app_profile({}, {}, container_ref="/x/freesurfer_bids_8.2.0.sif")
+    assert profile["name"] == "freesurfer_bids"
+    assert profile["execution_adapter_default"] == "freesurfer-bids"
+
+
+def test_freesurfer_bids_execution_adapter_survives_container_sniffing():
+    from prism_local import _infer_execution_adapter
+
+    adapter = _infer_execution_adapter(
+        {"container": "/x/freesurfer_bids_8.2.0.sif"},
+        {"execution_adapter": "freesurfer-bids"},
+    )
+    assert adapter == "freesurfer-bids"
+
+
+def test_longest_match_precedence_also_fixes_fastsurfer_bids_sniffing():
+    # Dormant version of the same collision fastsurfer/fastsurfer_bids
+    # already had (fastsurfer_bids's container_match_names is left empty,
+    # per its own comment, specifically because sniffing couldn't tell it
+    # apart from "fastsurfer" under the old first-match-in-dict-order
+    # behavior). The container_match_names-or-[name] fallback means the
+    # entry's own key is still an implicit match name, so the longest-match
+    # fix now resolves this correctly too, with no config change needed.
+    assert (
+        resolve_app_name({}, {}, container_ref="/x/fastsurfer_bids_cuda-v2.5.4.sif")
+        == "fastsurfer_bids"
+    )
+
+
 def test_qsiprep_resolves_for_all_three_container_ref_shapes():
     for ref in ("pennlinc/qsiprep:1.1.1", "qsiprep:latest", "/x/qsiprep_1.1.1.sif"):
         assert resolve_app_name({}, {}, container_ref=ref) == "qsiprep"

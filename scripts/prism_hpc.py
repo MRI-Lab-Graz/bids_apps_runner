@@ -136,6 +136,26 @@ def _prepare_fastsurfer_bids_options(options):
     return _drop_runtime_flags(opts, forbidden)
 
 
+def _prepare_freesurfer_bids_options(options):
+    """Normalize passthrough options for run.py (bids-apps/freesurfer, fs8.2).
+
+    bids_dir/output_dir/analysis_level are positional and always
+    runner-supplied; --participant_label/--license_file are runtime-managed
+    here too, so any of those accidentally left in app.options are dropped
+    rather than passed through twice. --session_label is deliberately NOT
+    forbidden -- unlike participant_label/license_file, the adapter never
+    sets it itself, so there's no double-set conflict, and it's the
+    documented way to restrict a longitudinal run to a subset of a
+    subject's BIDS sessions (default with no flag: every session found).
+    """
+    opts = [str(x) for x in (options or [])]
+    forbidden = {
+        "--participant_label",
+        "--license_file",
+    }
+    return _drop_runtime_flags(opts, forbidden)
+
+
 # ============================================================================
 # SLURM Job Management Functions
 # ============================================================================
@@ -156,6 +176,10 @@ def create_slurm_job(subject, config, work_dir, dry_run=False, debug=False):
         execution_adapter = _infer_execution_adapter(common, app)
         fastsurfer_mode = execution_adapter == "fastsurfer-cross"
         fastsurfer_bids_mode = execution_adapter == "fastsurfer-bids"
+        # Unlike fastsurfer-bids, run.py (bids-apps/freesurfer) supports
+        # group1/group2 analysis levels too, so freesurfer_bids_mode is
+        # deliberately excluded from the participant-only restriction below.
+        freesurfer_bids_mode = execution_adapter == "freesurfer-bids"
         if (fastsurfer_mode or fastsurfer_bids_mode) and analysis_level != "participant":
             raise ValueError(
                 "FastSurfer adapter supports participant-level runs only in HPC mode."
@@ -440,7 +464,62 @@ PROCESS_EXIT_CODE=$FASTSURFER_EXIT
 PROCESS_EXIT_CODE=$?
 """
 
-        if not fastsurfer_mode and not fastsurfer_bids_mode:
+        if freesurfer_bids_mode:
+            # run.py (bids-apps/freesurfer, fs8.2 branch) discovers a
+            # subject's sessions itself and auto-dispatches cross-sectional
+            # -> base template -> longitudinal internally -- one command
+            # covers the whole subject (all sessions). recon-all is
+            # CPU-only, so unlike fastsurfer-bids above there's no --nv /
+            # GPU handling here.
+            script_content += """
+"$APPTAINER_BIN" exec \\
+"""
+
+            apptainer_args = [str(arg) for arg in app.get("apptainer_args", [])]
+            if not apptainer_args:
+                apptainer_args = ["--containall"]
+
+            for arg in apptainer_args:
+                script_content += f"        {arg} \\\n"
+
+            script_content += f"""        -B {tmp_dir}:/tmp \\
+        -B {output_dir}:/output \\
+        -B {bids_dir}:/bids \\"""
+
+            if common.get("fs_license_file"):
+                script_content += (
+                    f"\n        -B {common['fs_license_file']}:/fs/license.txt:ro \\"
+                )
+
+            for mount in app.get("mounts", []):
+                if mount.get("source") and mount.get("target"):
+                    script_content += (
+                        f"\n        -B {mount['source']}:{mount['target']} \\"
+                    )
+
+            subject_label = subject.replace("sub-", "")
+            script_content += f"""
+        {common["container"]} \\
+        python /run.py \\
+        /bids /output {analysis_level} \\"""
+
+            if analysis_level == "participant":
+                script_content += f"\n        --participant_label {subject_label} \\"
+
+            if common.get("fs_license_file"):
+                script_content += "\n        --license_file /fs/license.txt \\"
+
+            app_options = _prepare_freesurfer_bids_options(app.get("options", []))
+            for option in app_options:
+                script_content += f"\n        {option} \\"
+
+            script_content += f"""
+        {container_log_redirection}
+
+PROCESS_EXIT_CODE=$?
+"""
+
+        if not fastsurfer_mode and not fastsurfer_bids_mode and not freesurfer_bids_mode:
             script_content += """
 "$APPTAINER_BIN" run \\
 """

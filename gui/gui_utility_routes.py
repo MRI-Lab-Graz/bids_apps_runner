@@ -298,6 +298,33 @@ def register_utility_routes(
             }
         )
 
+    @app.route("/check_path_exists", methods=["GET"])
+    def check_path_exists():
+        """Report whether a folder already exists and already has content.
+
+        Used e.g. to warn (not block) when an auto-derived derivatives
+        folder for a pipeline already has prior output before a run starts.
+
+        Query params:
+          path (required) – absolute path to inspect
+        """
+        path = (request.args.get("path") or "").strip()
+        if not path:
+            return jsonify({"error": "path query parameter is required"}), 400
+
+        expanded = os.path.expanduser(path)
+        is_dir = os.path.isdir(expanded)
+        has_content = is_dir and bool(os.listdir(expanded))
+
+        return jsonify(
+            {
+                "path": expanded,
+                "exists": os.path.exists(expanded),
+                "is_dir": is_dir,
+                "has_content": has_content,
+            }
+        )
+
     @app.route("/clone_openneuro", methods=["POST"])
     def clone_openneuro():
         """Start an async DataLad clone of an OpenNeuro dataset.
