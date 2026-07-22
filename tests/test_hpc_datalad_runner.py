@@ -214,6 +214,12 @@ def test_freesurfer_bids_adapter_calls_run_py(tmp_path):
     assert "-w /tmp/wdir" not in script
     # Passthrough options after the wrapper's own runtime-managed args.
     assert "--3T" in script
+    # Regression: /scratch and /local-scratch are empty dirs baked into the
+    # image (meant to be bind-mounted at runtime), not writable otherwise --
+    # confirmed root cause of a real pilot failure (mri_binarize/seg2cc
+    # "could not open file" during corpus-callosum segmentation).
+    assert '-B "${TMP_DIR}":/scratch' in script
+    assert '-B "${TMP_DIR}":/local-scratch' in script
 
 
 def test_freesurfer_bids_adapter_binds_fs_license(tmp_path):

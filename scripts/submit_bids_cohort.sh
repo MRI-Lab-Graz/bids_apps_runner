@@ -277,10 +277,29 @@ REMOTE_SCRIPT
 
         # 4. Prefetch all subject data now, since array tasks no longer call
         #    `datalad get` themselves (datalad-slurm keeps all git/annex
-        #    operations outside the job).
+        #    operations outside the job). git-annex's own parallel transfer
+        #    workers can transiently race on the same lock ("transfer
+        #    already in progress, or unable to take transfer lock") under
+        #    heavy concurrency across many subjects -- confirmed against a
+        #    real 150-subject dataset: a second `datalad get` cleared 27
+        #    such errors with zero new failures. Retrying is safe/idempotent
+        #    (already-fetched content just reports "notneeded"), so retry a
+        #    few times before actually giving up -- a real, unrecoverable
+        #    problem (bad URL, missing permissions, etc) will still fail all
+        #    3 attempts and surface the same way as before.
         log "[$DS] Prefetching subject data..."
-        run bash -c "cd '${input_clone}' && datalad get sub-*/ 2>/dev/null" \
-            || warn "[$DS] Prefetch failed or found no sub-* dirs yet"
+        local prefetch_ok=false
+        for attempt in 1 2 3; do
+            if run bash -c "cd '${input_clone}' && datalad get sub-*/ 2>/dev/null"; then
+                prefetch_ok=true
+                break
+            fi
+            if [[ $attempt -lt 3 ]]; then
+                warn "[$DS] Prefetch attempt ${attempt}/3 had failures, retrying..."
+                sleep 5
+            fi
+        done
+        $prefetch_ok || warn "[$DS] Prefetch failed after 3 attempts (or found no sub-* dirs)"
 
         log "[$DS] Setup complete"
     done
@@ -415,8 +434,20 @@ cmd_submit() {
         schedule_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
             "${output_flags[@]}" \
             -m "${commit_prefix}${APP_NAME} array for ${DS} (${n_subjects} subjects)" \
-            sbatch "$array_script") \
-            || { warn "[$DS] datalad slurm-schedule failed"; failed=$((failed + 1)); continue; }
+            sbatch "$array_script" 2>&1)
+        if [[ $? -ne 0 ]]; then
+            # Surface datalad-slurm's own reason (e.g. "There are
+            # conflicting outputs with previously scheduled jobs..." when
+            # an earlier job for this dataset hasn't been finished yet)
+            # instead of a bare "failed" -- confirmed real gap: this was
+            # previously swallowed entirely, requiring manual reproduction
+            # to find out why.
+            local schedule_reason
+            schedule_reason=$(printf '%s\n' "$schedule_stdout" \
+                | jq -r 'select(.message) | .message' 2>/dev/null | tail -1)
+            warn "[$DS] datalad slurm-schedule failed${schedule_reason:+: $schedule_reason}"
+            failed=$((failed + 1)); continue
+        fi
 
         job_id=$(printf '%s\n' "$schedule_stdout" \
             | jq -r 'select(.action=="slurm-schedule") | .slurm_run_info.slurm_job_id // empty' \
@@ -493,10 +524,17 @@ EOF
 cmd_status() {
     resolve_config
 
-    # Find most recent submission log
+    # Find most recent submission log -- pilot submissions log to a
+    # separately-prefixed pilot_submission_*.log (see cmd_submit), so
+    # --pilot here reads that instead of the real cohort's log; without
+    # it, checking status right after only a pilot submit would silently
+    # fall through to whatever unrelated dataset's real submission log
+    # happens to be most recent.
+    local log_glob="submission_"
+    $PILOT && log_glob="pilot_submission_"
     local log_file
-    log_file=$(ls -t "${REPO_DIR}/logs/submission_"*.log 2>/dev/null | head -1) \
-        || die "No submission log found in ${REPO_DIR}/logs/"
+    log_file=$(ls -t "${REPO_DIR}/logs/${log_glob}"*.log 2>/dev/null | head -1) \
+        || die "No $($PILOT && echo 'pilot ')submission log found in ${REPO_DIR}/logs/"
 
     log "Reading: ${log_file}"
     echo ""

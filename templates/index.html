@@ -3042,6 +3042,18 @@
                 }
             } else if (el.tagName === 'SELECT') {
                 text = el.value ? `${flag} ${el.value}` : '(default)';
+            } else if (el.classList.contains('dynamic-opt-multi')) {
+                // Checkbox-list multi-value option (e.g. --steps): reflect
+                // every checked box sharing this flag, not just the one
+                // checkbox that happened to trigger this update -- this
+                // used to only ever run once, at initial render, against
+                // whichever checkbox querySelector() found first (always
+                // the first choice in list order, checked or not), so it
+                // never changed no matter what the user actually toggled.
+                const checked = Array.from(
+                    container.querySelectorAll(`.dynamic-opt-multi[data-flag="${flag}"]:checked`)
+                ).map((c) => c.value);
+                text = checked.length ? `${flag} ${checked.join(' ')}` : '(default)';
             } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
                 const val = el.value.trim();
                 // Matches the split regex in the actual save-time parser

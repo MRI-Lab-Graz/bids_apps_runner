@@ -846,7 +846,18 @@ function applySavedAppConfig(cfg) {
             continue;
         }
 
-        const el = document.querySelector(`[data-flag="${opt}"]`);
+        // Excludes .dynamic-opt-multi (the checkboxes themselves) and their
+        // wrapping .dynamic-opt-multi-wrap <div> (also carries data-flag,
+        // and precedes its own children in document order) for
+        // checkbox-choices options like --steps: an unscoped selector
+        // always matched one of those first, so `el` was never null and
+        // the dedicated checkbox-restoration branch below never ran.
+        // Confirmed real bug: --steps saved as all three checked came back
+        // from a reload with none checked.
+        const el = document.querySelector(
+            `select[data-flag="${opt}"], textarea[data-flag="${opt}"],` +
+            ` input[data-flag="${opt}"]:not(.dynamic-opt-multi)`,
+        );
         if (!el) {
             const multiEls = document.querySelectorAll(`.dynamic-opt-multi[data-flag="${opt}"]`);
             if (multiEls.length > 0) {
@@ -857,6 +868,12 @@ function applySavedAppConfig(cfg) {
                         .querySelectorAll(`.dynamic-opt-multi[data-flag="${opt}"][value="${val}"]`)
                         .forEach((checkedEl) => (checkedEl.checked = true));
                 }
+                // Setting .checked programmatically doesn't fire a change
+                // event, so the badge (only wired to onchange, for live
+                // user interaction) never refreshes on restore without
+                // this -- confirmed: reload showed "(default)" despite all
+                // three boxes correctly checked, until manually toggled.
+                if (typeof updateOptPreview === 'function') updateOptPreview(multiEls[0]);
             } else if (opt.startsWith('-')) {
                 unhandledArgs.push(opt);
                 while (i + 1 < options.length && !options[i + 1].startsWith('-')) {
@@ -1056,7 +1073,7 @@ function _renderDynamicOptionsFromHelpData(
                     if (opt.is_multiple) {
                         let chks = '';
                         opt.choices.forEach((ch) => {
-                            chks += `<div class="form-check"><input type="checkbox" class="form-check-input dynamic-opt-multi" data-flag="${opt.flag}" value="${ch}"> <label class="form-check-label">${ch}</label></div>`;
+                            chks += `<div class="form-check"><input type="checkbox" class="form-check-input dynamic-opt-multi" data-flag="${opt.flag}" value="${ch}" onchange="updateOptPreview(this)"> <label class="form-check-label">${ch}</label></div>`;
                         });
                         input = `<label class="form-label">${opt.name}${reqMark}</label><div${reqAttr} class="dynamic-opt-multi-wrap" data-flag="${opt.flag}" style="max-height:120px;overflow:auto;border:1px solid #dee2e6;padding:10px;background:white;border-radius:6px;">${chks}</div>`;
                     } else {

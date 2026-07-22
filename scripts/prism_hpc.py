@@ -482,7 +482,18 @@ PROCESS_EXIT_CODE=$?
             for arg in apptainer_args:
                 script_content += f"        {arg} \\\n"
 
+            # /scratch and /local-scratch are empty directories baked into
+            # the freesurfer-bids image (Dockerfile_fs8), meant to be
+            # bind-mounted to real writable storage at runtime -- unmounted,
+            # they're stuck on the read-only squashfs layer. FreeSurfer's
+            # own internal tools (confirmed: mri_binarize during the
+            # corpus-callosum segmentation step, seg2cc) use /scratch for
+            # temp files regardless, and fail with "could not open file" if
+            # it isn't writable. Reuses the same per-task tmp_dir already
+            # mounted at /tmp.
             script_content += f"""        -B {tmp_dir}:/tmp \\
+        -B {tmp_dir}:/scratch \\
+        -B {tmp_dir}:/local-scratch \\
         -B {output_dir}:/output \\
         -B {bids_dir}:/bids \\"""
 

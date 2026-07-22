@@ -525,6 +525,16 @@ echo "run_fastsurfer_bids.py finished for sub-${{SUBJECT_LABEL}}"
 
         Unlike _run_fastsurfer_bids above, recon-all is CPU-only: no --nv,
         no CUDA_VISIBLE_DEVICES handling needed.
+
+        /scratch and /local-scratch are bind-mounted to the same per-task
+        TMP_DIR as /tmp: they're empty directories baked into the
+        freesurfer-bids image (Dockerfile_fs8), meant to be mapped to real
+        writable storage at runtime -- unmounted, they're stuck on the
+        read-only squashfs layer. Confirmed root cause of a real pilot
+        failure: FreeSurfer's own internal tools (mri_binarize, during the
+        corpus-callosum segmentation step run by seg2cc) write temp files
+        under /scratch regardless, and fail with "could not open file" if
+        it isn't writable.
         """
         analysis_level = self.bids_app.get("analysis_level", "participant")
         options = _prepare_freesurfer_bids_options(self.bids_app.get("options", []))
@@ -554,6 +564,8 @@ echo "--- Running run.py for sub-${{SUBJECT_LABEL}} ---"
 {extra_apptainer_args}    -B "${{BIDS_DIR}}":/bids:ro \\
     -B "${{OUT_DIR}}":/output \\
 {extra_binds}    -B "${{TMP_DIR}}":/tmp \\
+    -B "${{TMP_DIR}}":/scratch \\
+    -B "${{TMP_DIR}}":/local-scratch \\
     {container} \\
     {fs_cmd}
 

@@ -205,8 +205,15 @@ async function runCohort(command) {
     // to one randomly-chosen subject instead of the whole cohort -- lets you
     // validate the full container/mount/DataLad-provenance path (the actual
     // "submit" command, not a dry-run) before committing to every subject.
+    // Meaningful for "submit" (narrows the array) and "status" (reads the
+    // separate pilot_submission_*.log instead of the real cohort's, so
+    // checking status right after a pilot-only submit doesn't fall through
+    // to whatever unrelated dataset's real submission happens to be most
+    // recent). cmd_setup() never looks at $PILOT at all -- Setup always
+    // clones/prefetches the whole dataset regardless -- so it's excluded
+    // here too, consistent with the request/log actually sent for it.
     const pilotEl = document.getElementById('cohortPilot');
-    const pilot = !!(pilotEl && pilotEl.checked);
+    const pilot = command !== 'setup' && !!(pilotEl && pilotEl.checked);
 
     _cohortLastLogLen = 0;
     _cohortSetBusy(true, command);

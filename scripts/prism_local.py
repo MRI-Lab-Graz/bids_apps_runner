@@ -1231,6 +1231,19 @@ def _process_subject(
             for mnt in _build_common_mounts(common, tmp_dir, bids_mount_source):
                 base_cmd.extend(["-B", mnt])
 
+            if freesurfer_bids_mode:
+                # /scratch and /local-scratch are empty directories baked
+                # into the freesurfer-bids image (Dockerfile_fs8), meant to
+                # be bind-mounted to real writable storage at runtime --
+                # unmounted, they're stuck on the read-only squashfs layer.
+                # FreeSurfer's own internal tools (confirmed: mri_binarize
+                # during the corpus-callosum segmentation step, seg2cc) use
+                # /scratch for temp files regardless, and fail with
+                # "could not open file" if it isn't writable. Reuses the
+                # same per-task tmp_dir already mounted at /tmp above.
+                base_cmd.extend(["-B", f"{tmp_dir}:/scratch"])
+                base_cmd.extend(["-B", f"{tmp_dir}:/local-scratch"])
+
             for mount in app.get("mounts", []):
                 if mount.get("source") and mount.get("target"):
                     base_cmd.extend(["-B", f"{mount['source']}:{mount['target']}"])
