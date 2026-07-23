@@ -445,11 +445,20 @@ cmd_submit() {
         local schedule_stdout schedule_stderr schedule_exit job_id
         local schedule_stderr_file
         schedule_stderr_file=$(mktemp)
+        # `|| schedule_exit=$?` directly on the assignment (not a separate
+        # `schedule_exit=$?` statement afterward) is required for this to be
+        # set -e safe: a bare `var=$(cmd)` with no attached `||`/`if` is a
+        # simple command in its own right, and set -e aborts the whole
+        # script on its failure immediately -- before a following statement
+        # ever runs. Confirmed real regression: a genuine slurm-schedule
+        # failure (conflicting outputs from an unfinished prior job) killed
+        # the entire submit run silently, with no [WARN] and no per-dataset
+        # Submitted/Skipped/Failed summary at all.
+        schedule_exit=0
         schedule_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
             "${output_flags[@]}" \
             -m "${commit_prefix}${APP_NAME} array for ${DS} (${n_subjects} subjects)" \
-            sbatch "$array_script" 2>"$schedule_stderr_file")
-        schedule_exit=$?
+            sbatch "$array_script" 2>"$schedule_stderr_file") || schedule_exit=$?
         schedule_stderr=$(cat "$schedule_stderr_file"); rm -f "$schedule_stderr_file"
         if [[ $schedule_exit -ne 0 ]]; then
             # Surface datalad-slurm's own reason (e.g. "There are
