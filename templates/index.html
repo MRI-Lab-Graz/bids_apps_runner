@@ -563,11 +563,11 @@
                     <label class="form-label fw-semibold mb-1">BIDS Dataset Source</label>
                     <div class="d-flex gap-0 mb-3 bids-source-toggle-bar" role="group" aria-label="BIDS data source">
                         <button type="button" id="bidsSourceLocalBtn" class="btn btn-primary btn-sm px-3"
-                                onclick="switchBidsSourceMode('local')" title="Point directly at a BIDS folder already on local/shared disk">
+                                onclick="switchBidsSourceMode('local', true)" title="Point directly at a BIDS folder already on local/shared disk">
                             <i class="fas fa-folder me-1"></i>Local Folder
                         </button>
                         <button type="button" id="bidsSourceRemoteBtn" class="btn btn-outline-primary btn-sm px-3"
-                                onclick="switchBidsSourceMode('remote')" title="Clone a study from the lab's DataLad server over SSH">
+                                onclick="switchBidsSourceMode('remote', true)" title="Clone a study from the lab's DataLad server over SSH">
                             <i class="fas fa-network-wired me-1"></i>Remote (SSH)
                         </button>
                     </div>
@@ -1805,6 +1805,12 @@
          shared `var`-declared state (lastProjectId, currentPipelineId) from
          the inline script below. See its own header comment. -->
     <script src="{{ url_for('static', filename='js/cohort_panel.js') }}"></script>
+    <!-- BIDS Dataset Source toggle (Local Folder vs Remote (SSH)) -- same
+         pattern as project_loader.js above: reads/writes shared `var`-declared
+         state (_bidsSourceMode, _remoteStudiesLoaded) from the inline script
+         below. See its own header comment for the mixed local/remote bug this
+         fixes. -->
+    <script src="{{ url_for('static', filename='js/bids_source_mode.js') }}"></script>
     <!-- Generalized section-header accordion builder (fold/collapse behavior
          for the Run App page) -- fully self-contained, no shared state with
          the inline script beyond the DOM elements it's told to operate on.
@@ -6659,37 +6665,12 @@
 
         // ── Cohort panel ── moved to static/js/cohort_panel.js ──────────────
 
-        let _remoteStudiesLoaded = false;
-        let _bidsSourceMode = 'local';
-
-        function switchBidsSourceMode(mode) {
-            _bidsSourceMode = mode === 'remote' ? 'remote' : 'local';
-
-            const localBtn = document.getElementById('bidsSourceLocalBtn');
-            const remoteBtn = document.getElementById('bidsSourceRemoteBtn');
-            const remoteRow = document.getElementById('remoteDatasetRow');
-            const bidsFolderCol = document.getElementById('bidsFolderCol');
-
-            const isRemote = _bidsSourceMode === 'remote';
-            localBtn.className = isRemote ? 'btn btn-outline-primary btn-sm px-3' : 'btn btn-primary btn-sm px-3';
-            remoteBtn.className = isRemote ? 'btn btn-primary btn-sm px-3' : 'btn btn-outline-primary btn-sm px-3';
-            remoteRow.style.display = isRemote ? '' : 'none';
-            bidsFolderCol.style.display = isRemote ? 'none' : '';
-
-            if (isRemote && !_remoteStudiesLoaded) {
-                loadRemoteStudies();
-            }
-            if (isRemote) {
-                triggerDataladSSHCheck();
-            }
-        }
-
-        // Best-effort default: a bids_folder already under the lab's local clone
-        // root means this project's data came from the remote source; otherwise
-        // assume a plain local folder. There's no separate persisted "mode" field.
-        function inferBidsSourceMode(bidsFolder) {
-            return (bidsFolder || '').startsWith('/cl_tmp/mrilab/') ? 'remote' : 'local';
-        }
+        // switchBidsSourceMode / inferBidsSourceMode moved to
+        // static/js/bids_source_mode.js. Declared with `var` (not `let`) so
+        // they attach to `window` and are visible to that file, the same
+        // reason lastProjectId etc. are `var` for static/js/project_loader.js.
+        var _remoteStudiesLoaded = false;
+        var _bidsSourceMode = 'local';
 
         async function loadRemoteStudies() {
             const select = document.getElementById('remote_dataset_study');

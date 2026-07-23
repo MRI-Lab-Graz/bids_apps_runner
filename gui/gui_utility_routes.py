@@ -521,13 +521,20 @@ def register_utility_routes(
                 [
                     "ssh",
                     "-o", "BatchMode=yes",
-                    "-o", "ConnectTimeout=5",
+                    "-o", "ConnectTimeout=10",
+                    # ~/.ssh/config pins publickey auth for this host (IdentityFile +
+                    # IdentitiesOnly); skip GSSAPI's slow AD/Kerberos negotiation so
+                    # this probe doesn't time out while the same handshake (used by
+                    # /list_remote_studies and the actual clone, both with a 15s
+                    # budget) still succeeds.
+                    "-o", "GSSAPIAuthentication=no",
+                    "-o", "PreferredAuthentications=publickey",
                     REMOTE_DATASET_SSH_HOST,
                     "exit",
                 ],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=15,
             )
             if result.returncode == 0:
                 return jsonify({"ok": True})
