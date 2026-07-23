@@ -176,6 +176,45 @@ resolve_output_clone() {
     fi
 }
 
+# Refuses to schedule work against a stale output clone. A local "derivatives"
+# branch that's behind origin/derivatives (because an earlier run from
+# somewhere else already pushed there since this clone last synced) will
+# silently reprocess subjects whose derivatives already exist upstream --
+# the array job burns hours of compute per subject, then the dependent
+# finish job's `datalad push` fails with a non-fast-forward rejection,
+# discovered only after everything already ran. Confirmed real incident:
+# 069_BW01/qsiprep reprocessed all 23 subjects because its output clone
+# hadn't been updated since a prior run pushed 17 days earlier.
+# Fast-forwards automatically when that's all that's needed; a true
+# divergence (this clone has its own unpushed commit too) needs a human,
+# so it aborts instead of guessing which side to keep.
+# Returns 1 (caller should skip the dataset) on divergence or fetch failure.
+check_output_clone_fresh() {
+    local ds="$1" output_clone="$2"
+    [[ -d "${output_clone}/.datalad" ]] || return 0
+
+    run git -C "$output_clone" fetch origin \
+        || { warn "[$ds] Could not fetch origin to check output clone freshness"; return 1; }
+    git -C "$output_clone" show-ref --verify --quiet refs/remotes/origin/derivatives || return 0
+
+    local local_rev origin_rev
+    local_rev=$(git -C "$output_clone" rev-parse derivatives 2>/dev/null) || return 0
+    origin_rev=$(git -C "$output_clone" rev-parse origin/derivatives 2>/dev/null) || return 0
+    [[ "$local_rev" == "$origin_rev" ]] && return 0
+
+    if git -C "$output_clone" merge-base --is-ancestor "$local_rev" origin/derivatives; then
+        log "[$ds] Output clone is behind origin/derivatives -- fast-forwarding..."
+        run git -C "$output_clone" merge --ff-only origin/derivatives \
+            || { warn "[$ds] Fast-forward update of output clone failed"; return 1; }
+        return 0
+    fi
+
+    warn "[$ds] Output clone's derivatives branch has DIVERGED from origin/derivatives" \
+         "-- refusing to submit (would reprocess subjects already pushed upstream and" \
+         "fail to push its own results). Reconcile manually first: cd ${output_clone}"
+    return 1
+}
+
 # ── Phase 1: setup ────────────────────────────────────────────────────────────
 cmd_setup() {
     check_todos
@@ -346,6 +385,9 @@ cmd_submit() {
 
         log "[$DS] --- submit ---"
         $PILOT && log "[$DS] PILOT MODE: will submit only 1 randomly-chosen subject"
+
+        check_output_clone_fresh "$DS" "$output_clone" \
+            || { failed=$((failed + 1)); continue; }
 
         # Build subject list from pre-cloned dataset (reads BIDS directory names)
         if [[ -f "$subj_list" ]] && $RESUME; then
