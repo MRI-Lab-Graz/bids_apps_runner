@@ -24,6 +24,10 @@ scripts/generated/
 # Virtual environments
 .appsrunner/
 .datalad-slurm-venv/
+# Portable Node.js runtime for the JS test suite (npm test) -- self-contained,
+# no root/sudo needed to set up, same spirit as .datalad-slurm-venv above.
+# Re-download with: see tests_js/README.md
+.node-runtime/
 
 # macOS
 .DS_Store

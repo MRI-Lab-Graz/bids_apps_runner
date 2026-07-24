@@ -1,0 +1,29 @@
+{
+  "name": "bids_apps_runner",
+  "version": "1.0.0",
+  "description": "A comprehensive tool for running BIDS Apps with automatic output validation and reprocessing capabilities.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MRI-Lab-Graz/bids_apps_runner.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/MRI-Lab-Graz/bids_apps_runner/issues"
+  },
+  "homepage": "https://github.com/MRI-Lab-Graz/bids_apps_runner#readme",
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.10"
+  }
+}

@@ -13,6 +13,24 @@ function toggleSubregionSegmentationOptions() {
     options.style.display = enabled.checked ? '' : 'none';
 }
 
+// Unlike most pipeline-specific fields in this form (which stay visible for
+// every pipeline, labeled "X only" in a tooltip), this section and its
+// Cohort-panel button actually DO something wrong if used against a
+// non-FreeSurfer pipeline (segment_subregions has nothing to run against a
+// QSIPrep/etc. output tree) -- confirmed as a real point of confusion: the
+// "Submit Subregions Only" button stayed visible after switching the active
+// pipeline to qsiprep. Hide both outright rather than relying on a tooltip.
+function updateSubregionSegmentationVisibility() {
+    const isFreesurfer = typeof inferCurrentPipelineAppName === 'function'
+        && inferCurrentPipelineAppName() === 'freesurfer';
+
+    const sectionWrap = document.getElementById('subregion_segmentation_section_wrap');
+    if (sectionWrap) sectionWrap.style.display = isFreesurfer ? '' : 'none';
+
+    const cohortBtn = document.getElementById('cohortSubmitSubregionsBtn');
+    if (cohortBtn) cohortBtn.style.display = isFreesurfer ? '' : 'none';
+}
+
 // Populate the UI from a loaded pipeline's app config.
 function restoreSubregionSegmentationUI(app) {
     const cfg = (app && app.subregion_segmentation) || {};
@@ -35,6 +53,7 @@ function restoreSubregionSegmentationUI(app) {
     if (sessionsEl) sessionsEl.value = (cfg.sessions || []).join(',');
 
     toggleSubregionSegmentationOptions();
+    updateSubregionSegmentationVisibility();
 }
 
 // Read the UI state back into the shape stored on app.subregion_segmentation.

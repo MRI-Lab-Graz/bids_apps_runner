@@ -1459,6 +1459,7 @@ async function checkAppVersion(loadToken = null) {
         }
     } catch (e) {}
     updateQsireconUI();
+    if (typeof updateSubregionSegmentationVisibility === 'function') updateSubregionSegmentationVisibility();
     applyVersionedOutputPaths({ source: 'check-app-version' });
 }
 

@@ -761,7 +761,15 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50):
 
     dataset_id = os.path.basename(bids_folder) or "dataset"
     app_name = str(common.get("pipeline_app_name") or "").strip() or "bids_app"
-    cohort_log_dir = Path(project_dir) / "logs" / "cohort"
+    # .resolve(): a relative project_dir would silently write a relative
+    # log_dir/subject_lists_dir into the generated cohort config. Harmless
+    # for the main array (its own bash steps run from REPO_DIR too, so it
+    # happens to resolve), but datalad-slurm submits via
+    # `datalad -C output_clone ... sbatch`, which changes the *job's* cwd to
+    # the output dataset -- a relative timepoint-list path then resolves
+    # against output_clone on the compute node instead, failing every array
+    # task instantly with a confusing "No such file" deep in a SLURM log.
+    cohort_log_dir = Path(project_dir).resolve() / "logs" / "cohort"
 
     # Custom SBATCH directives (e.g. sbatch_gres: "gpu:1" for GPU-capable
     # apps like QSIPrep/FastSurfer) -- forwarded the same way the single-job
