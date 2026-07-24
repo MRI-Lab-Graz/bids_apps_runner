@@ -826,6 +826,13 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50):
             # which FastSurfer's container entrypoint doesn't understand.
             "execution_adapter": app.get("execution_adapter") or "",
         },
+        # Cohort/SLURM-array-only follow-up: runs FreeSurfer's
+        # segment_subregions (thalamus/hippo-amygdala/brainstem) against
+        # this dataset's already-completed recon-all output once the main
+        # array's finish job has committed+pushed (see
+        # submit_bids_cohort.sh::submit_subregion_segmentation). Not used
+        # by Local/single-job HPC execution.
+        "subregion_segmentation": app.get("subregion_segmentation") or {},
     }
 
 

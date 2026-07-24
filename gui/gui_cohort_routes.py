@@ -371,7 +371,7 @@ def register_cohort_routes(
     def cohort_run():
         data = request.get_json(silent=True) or {}
         command = (data.get("command") or "").strip()
-        if command not in {"setup", "submit", "status"}:
+        if command not in {"setup", "submit", "submit-subregions", "status"}:
             return jsonify({"error": f"Invalid command: {command}"}), 400
 
         project_id = (data.get("project_id") or "").strip()

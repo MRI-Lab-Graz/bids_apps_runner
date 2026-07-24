@@ -162,7 +162,7 @@ async function previewCohortConfig() {
 }
 
 function _cohortSetBusy(busy, command) {
-    ['cohortSetupBtn','cohortSubmitBtn','cohortStatusBtn'].forEach(id => {
+    ['cohortSetupBtn','cohortSubmitBtn','cohortStatusBtn','cohortSubmitSubregionsBtn'].forEach(id => {
         document.getElementById(id).disabled = busy;
     });
     document.getElementById('cohortCancelBtn').style.display = busy ? 'inline-flex' : 'none';
@@ -177,7 +177,7 @@ function _cohortSetBusy(busy, command) {
 }
 
 function _cohortSetDone(status, command) {
-    ['cohortSetupBtn','cohortSubmitBtn','cohortStatusBtn'].forEach(id => {
+    ['cohortSetupBtn','cohortSubmitBtn','cohortStatusBtn','cohortSubmitSubregionsBtn'].forEach(id => {
         document.getElementById(id).disabled = false;
     });
     document.getElementById('cohortCancelBtn').style.display = 'none';

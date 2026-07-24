@@ -928,6 +928,59 @@
                                 </label>
                             </div>
                         </div>
+                        <div class="col-md-12 mb-3">
+                            <div class="card bg-light border-0">
+                                <div class="card-body p-3">
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="subregion_segmentation_enabled" onchange="toggleSubregionSegmentationOptions()">
+                                        <label class="form-check-label fw-semibold" for="subregion_segmentation_enabled">
+                                            FreeSurfer: run subregion segmentation after the cohort finishes
+                                        </label>
+                                        <div class="form-text">
+                                            Runs FreeSurfer's <code>segment_subregions</code> (thalamic nuclei, hippocampus/amygdala,
+                                            and/or brainstem subfields) against the completed recon-all output.
+                                            <strong>BIDS App Cohort (SLURM array) submissions only</strong> below -- chained as a
+                                            follow-up job after the cohort's own finish job commits and pushes.
+                                            <a href="https://surfer.nmr.mgh.harvard.edu/fswiki/SubregionSegmentation" target="_blank" rel="noopener">Docs</a>
+                                        </div>
+                                    </div>
+                                    <div id="subregion_segmentation_options" style="display:none; padding-left:1.5rem;">
+                                        <div class="mb-2">
+                                            <label class="form-label mb-1 small fw-semibold d-block">Structures</label>
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input" type="checkbox" id="subregion_structure_thalamus" value="thalamus">
+                                                <label class="form-check-label" for="subregion_structure_thalamus">Thalamus</label>
+                                            </div>
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input" type="checkbox" id="subregion_structure_hippo_amygdala" value="hippo-amygdala">
+                                                <label class="form-check-label" for="subregion_structure_hippo_amygdala">Hippocampus &amp; Amygdala</label>
+                                            </div>
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input" type="checkbox" id="subregion_structure_brainstem" value="brainstem">
+                                                <label class="form-check-label" for="subregion_structure_brainstem">Brainstem</label>
+                                            </div>
+                                        </div>
+                                        <div class="row g-2 align-items-end">
+                                            <div class="col-md-5">
+                                                <label class="form-label mb-1 small fw-semibold d-block">Mode</label>
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="radio" name="subregion_mode" id="subregion_mode_cross" value="cross" checked>
+                                                    <label class="form-check-label" for="subregion_mode_cross">Cross-sectional (per session)</label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="radio" name="subregion_mode" id="subregion_mode_longitudinal" value="longitudinal">
+                                                    <label class="form-check-label" for="subregion_mode_longitudinal">Longitudinal (per subject base)</label>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-7">
+                                                <label class="form-label mb-1 small fw-semibold" for="subregion_sessions">Sessions (cross-sectional only)</label>
+                                                <input type="text" class="form-control form-control-sm" id="subregion_sessions" placeholder="All sessions (e.g. 1,2 to restrict)">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="row mt-4 justify-content-center">
@@ -1294,6 +1347,11 @@
                                 <button class="btn btn-outline-info" id="cohortStatusBtn"
                                         onclick="runCohort('status')" title="Check SLURM status of submitted jobs">
                                     <i class="fas fa-tasks me-1"></i>3. Status
+                                </button>
+                                <button class="btn btn-outline-warning" id="cohortSubmitSubregionsBtn"
+                                        onclick="runCohort('submit-subregions')"
+                                        title="Run subregion segmentation (see the checkbox in Execution Parameters above) directly against this dataset's ALREADY-FINISHED output -- no fresh recon-all array, unlike Submit. Use this to add subregion segmentation to a cohort that already completed.">
+                                    <i class="fas fa-brain me-1"></i>Submit Subregions Only
                                 </button>
                                 <button class="btn btn-outline-danger ms-auto" id="cohortCancelBtn"
                                         onclick="cancelCohort()" style="display:none;">
@@ -1800,6 +1858,10 @@
          inline script specifically so it's visible here too. See its own
          header comment for the full rationale. -->
     <script src="{{ url_for('static', filename='js/project_loader.js') }}"></script>
+    <!-- FreeSurfer subregion segmentation (thalamus/hippo-amygdala/brainstem)
+         options: toggles/restores/serializes the checkbox section above.
+         Self-contained (only reads its own form fields), no shared state. -->
+    <script src="{{ url_for('static', filename='js/subregion_segmentation.js') }}"></script>
     <!-- Cohort panel (multi-subject SLURM array submission via
          datalad-slurm) -- same pattern as project_loader.js above: reads
          shared `var`-declared state (lastProjectId, currentPipelineId) from
@@ -3307,6 +3369,10 @@
                 if (freesurferBidsLongitudinalEl && freesurferBidsLongitudinalEl.checked) {
                     activeApp.execution_adapter = 'freesurfer-bids';
                 }
+            }
+            if (typeof collectSubregionSegmentationConfig === 'function') {
+                const subregionCfg = collectSubregionSegmentationConfig();
+                if (subregionCfg) activeApp.subregion_segmentation = subregionCfg;
             }
 
             if (lastProjectId) {

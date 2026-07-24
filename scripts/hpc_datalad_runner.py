@@ -749,6 +749,307 @@ echo "========================================"
 """
 
 
+_SUBREGION_STRUCTURES = ("thalamus", "hippo-amygdala", "brainstem")
+_SUBREGION_MODES = ("cross", "longitudinal")
+
+
+class SubregionSegmentationScriptGenerator:
+    """Generate a plain SLURM array job script that runs FreeSurfer's
+    `segment_subregions` (thalamus / hippo-amygdala / brainstem subfields,
+    https://surfer.nmr.mgh.harvard.edu/fswiki/SubregionSegmentation) against
+    an already-completed recon-all output tree.
+
+    This is post-processing, not a fresh BIDS run: it reads no BIDS input,
+    only the freesurfer-bids pipeline's own output dataset (paths.output_dir
+    doubles as FreeSurfer's SUBJECTS_DIR here), and writes new derivative
+    files into subject/timepoint directories that already exist. It reuses
+    the exact same container as the freesurfer-bids adapter -- FreeSurfer's
+    own bin/segment_subregions ships inside it already (confirmed against
+    freesurfer_bids_8.2.0.sif), no separate image needed.
+
+    Mirrors BidsAppComputeScriptGenerator's structure/conventions, but each
+    array task resolves a "timepoint" (a cross-sectional sub-XXX_ses-YYY
+    session directory, or a longitudinal sub-XXX base directory) from a
+    pre-built list file rather than a BIDS subject ID -- see
+    submit_bids_cohort.sh's submit_subregion_segmentation(), which builds
+    that list by scanning the output dataset's existing directory names.
+    """
+
+    def __init__(
+        self,
+        config: Dict,
+        dataset_id: str,
+        timepoint_list_path: str,
+        n_timepoints: int,
+        structures: list,
+        mode: str,
+        dependency: Optional[str] = None,
+    ) -> None:
+        self.config = config
+        self.dataset_id = _validate_shell_name(dataset_id, "dataset_id")
+        self.timepoint_list_path = timepoint_list_path
+        self.n_timepoints = n_timepoints
+        self.structures = list(structures)
+        self.mode = mode
+        self.dependency = dependency
+
+        self.hpc = config.get("hpc", {})
+        self.paths = config.get("paths", {})
+        self.bids_app = config.get("bids_app", {})
+        self._app_name = self.bids_app.get("app_name") or "bids_app"
+
+    def generate_script(self) -> str:
+        parts = [
+            self._header(),
+            self._resolve_timepoint(),
+            self._info_block(),
+            self._workdirs(),
+            self._run_segmentation(),
+            self._cleanup(),
+            self._footer(),
+        ]
+        return "\n".join(parts)
+
+    def _header(self) -> str:
+        partition = _validate_sbatch_value(
+            self.hpc.get("partition", "compute"), "partition"
+        )
+        time_limit = _validate_sbatch_value(self.hpc.get("time", "24:00:00"), "time")
+        mem = _validate_sbatch_value(self.hpc.get("mem", "32G"), "mem")
+        cpus = int(self.hpc.get("cpus", 8))
+        max_concurrent = int(self.hpc.get("max_concurrent", 50))
+        array_spec = f"0-{self.n_timepoints - 1}%{max_concurrent}"
+
+        output_dir = self.paths.get("output_dir", "")
+        log_dir = (
+            f"{output_dir}/.slurm_logs"
+            if output_dir
+            else self.paths.get("log_dir", "$HOME/logs/bids_app")
+        )
+        out_log = f"{log_dir}/{self.dataset_id}/subregions-%A_%a.out"
+        err_log = f"{log_dir}/{self.dataset_id}/subregions-%A_%a.err"
+
+        header = f"""#!/bin/bash
+#SBATCH --job-name={self._app_name}_subregions_{self.dataset_id}
+#SBATCH --array={array_spec}
+#SBATCH --partition={partition}
+#SBATCH --time={time_limit}
+#SBATCH --mem={mem}
+#SBATCH --cpus-per-task={cpus}
+#SBATCH --output={out_log}
+#SBATCH --error={err_log}
+"""
+        if self.dependency:
+            dependency = _validate_sbatch_value(self.dependency, "dependency")
+            header += f"#SBATCH --dependency={dependency}\n"
+        return header
+
+    def _resolve_timepoint(self) -> str:
+        quoted_list = _shell_quote(self.timepoint_list_path)
+        return f"""
+# Resolve timepoint (cross-sectional sub-XXX_ses-YYY dir, or longitudinal
+# sub-XXX base dir) from list file
+TIMEPOINT_LIST={quoted_list}
+TIMEPOINT=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$TIMEPOINT_LIST" | tr -d '[:space:]')
+if [[ -z "$TIMEPOINT" ]]; then
+    echo "ERROR: no timepoint for array task $SLURM_ARRAY_TASK_ID in $TIMEPOINT_LIST" >&2
+    exit 1
+fi
+"""
+
+    def _info_block(self) -> str:
+        return """
+echo "========================================"
+echo "Array job:  ${SLURM_ARRAY_JOB_ID}[${SLURM_ARRAY_TASK_ID}]"
+echo "Timepoint:  ${TIMEPOINT}"
+echo "Node:       ${SLURM_JOB_NODELIST}"
+echo "Started:    $(date)"
+echo "========================================"
+
+set -e
+set -u
+trap 'echo "FAILED at line $LINENO (task $SLURM_ARRAY_TASK_ID, ${TIMEPOINT})" >&2' ERR
+
+# Pre-flight: verify user is resolvable (apptainer requires getpwuid to succeed)
+if ! getent passwd "$(id -u)" > /dev/null 2>&1; then
+    echo "FATAL: Cannot resolve user UID $(id -u) on $(hostname)" >&2
+    echo "       Apptainer will fail with: Couldn't determine user account information" >&2
+    exit 1
+fi
+
+if command -v apptainer &> /dev/null; then
+    APPTAINER_BIN=apptainer
+elif command -v singularity &> /dev/null; then
+    APPTAINER_BIN=singularity
+else
+    echo "ERROR: neither apptainer nor singularity found on this node" >&2
+    exit 1
+fi
+"""
+
+    def _workdirs(self) -> str:
+        scratch = _shell_quote(self.paths.get("scratch_dir", "/scratch/$USER/bids_app"))
+        ds_id = _shell_quote(self.dataset_id)
+        output_dir = self.paths.get("output_dir")
+        out_dir = _shell_quote(
+            output_dir
+            if output_dir
+            else f"{self.paths.get('shared_output_base', '/shared/derivatives')}"
+            f"/{self.dataset_id}"
+        )
+
+        return f"""
+# Working directories -- OUT_DIR IS the FreeSurfer SUBJECTS_DIR (the
+# already-completed recon-all output from the freesurfer-bids pipeline;
+# this step post-processes it, it reads no BIDS input)
+OUT_DIR={out_dir}
+WORK_DIR={scratch}/{ds_id}/${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}
+TMP_DIR="${{WORK_DIR}}/tmp"
+
+mkdir -p "${{TMP_DIR}}"
+echo "SUBJECTS_DIR: ${{OUT_DIR}}"
+echo "Scratch:      ${{WORK_DIR}}"
+"""
+
+    def _run_segmentation(self) -> str:
+        container = _shell_quote(self.paths.get("container", "TODO_CONTAINER_PATH"))
+        fs = (self.paths.get("fs_license") or "").strip()
+        extra_binds = (
+            f"    -B {_shell_quote(fs)}:/fs/license.txt:ro \\\n" if fs else ""
+        )
+        env_pairs = ["SUBJECTS_DIR=/subjects"]
+        if fs:
+            env_pairs.append("FS_LICENSE=/fs/license.txt")
+        env_flag = f"    --env {_shell_quote(','.join(env_pairs))} \\\n"
+
+        # --cross vs --long-base: segment_subregions' own two mutually
+        # exclusive run modes (see its --help). In longitudinal mode
+        # TIMEPOINT is a base directory name; --long-base reads that base's
+        # `base-tps` file and processes every timepoint referenced in it in
+        # one call, so there's no per-session equivalent there.
+        mode_flag = "--cross" if self.mode == "cross" else "--long-base"
+
+        calls = []
+        for structure in self.structures:
+            calls.append(
+                f'echo "--- segment_subregions {structure} {mode_flag} ${{TIMEPOINT}} ---"\n'
+                f'"$APPTAINER_BIN" exec \\\n'
+                f"{env_flag}"
+                f'    -B "${{OUT_DIR}}":/subjects \\\n'
+                f"{extra_binds}"
+                f'    -B "${{TMP_DIR}}":/tmp \\\n'
+                f'    -B "${{TMP_DIR}}":/scratch \\\n'
+                f'    -B "${{TMP_DIR}}":/local-scratch \\\n'
+                f"    {container} \\\n"
+                f"    segment_subregions {_shell_quote(structure)} {mode_flag} \"${{TIMEPOINT}}\" \\\n"
+                f"    --temp-dir /tmp"
+            )
+        seg_calls = "\n\n".join(calls)
+
+        return f"""
+# Run FreeSurfer subregion segmentation: {", ".join(self.structures)} ({self.mode})
+{seg_calls}
+
+echo "segment_subregions finished for ${{TIMEPOINT}}"
+"""
+
+    def _cleanup(self) -> str:
+        return """
+# Remove per-task scratch
+echo "--- Cleanup ---"
+rm -rf "${WORK_DIR}"
+"""
+
+    def _footer(self) -> str:
+        return """
+echo "========================================"
+echo "Completed ${TIMEPOINT}"
+echo "End: $(date) | Duration: ${SECONDS}s"
+echo "========================================"
+"""
+
+
+def generate_subregion_script(
+    config_path: str,
+    dataset_id: str,
+    timepoint_list_path: str,
+    structures: list,
+    mode: str,
+    dependency: Optional[str] = None,
+    output_path: Optional[str] = None,
+) -> str:
+    """Generate a SLURM array job script running segment_subregions for
+    every timepoint in timepoint_list_path.
+
+    Args:
+        config_path: Path to JSON config (cohort_hpc_example.json format)
+        dataset_id: Dataset identifier used as directory name and job label
+        timepoint_list_path: Path to plain-text file, one timepoint dir name
+            per line (see SubregionSegmentationScriptGenerator's docstring)
+        structures: subset of ("thalamus", "hippo-amygdala", "brainstem")
+        mode: "cross" or "longitudinal"
+        dependency: optional SBATCH --dependency value, e.g. "afterany:123"
+        output_path: Optional path to save the script
+
+    Returns:
+        Generated script content
+    """
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to load config: {e}")
+        sys.exit(1)
+
+    if not validate_compute_config(config):
+        sys.exit(1)
+
+    bad_structures = [s for s in structures if s not in _SUBREGION_STRUCTURES]
+    if bad_structures:
+        logging.error(
+            f"Invalid structure(s): {bad_structures} (valid: {_SUBREGION_STRUCTURES})"
+        )
+        sys.exit(1)
+    if mode not in _SUBREGION_MODES:
+        logging.error(f"Invalid mode: {mode} (valid: {_SUBREGION_MODES})")
+        sys.exit(1)
+
+    try:
+        with open(timepoint_list_path, "r") as f:
+            timepoints = [line.strip() for line in f if line.strip()]
+    except Exception as e:
+        logging.error(f"Failed to read timepoint list: {e}")
+        sys.exit(1)
+
+    if not timepoints:
+        logging.error(f"Timepoint list is empty: {timepoint_list_path}")
+        sys.exit(1)
+
+    generator = SubregionSegmentationScriptGenerator(
+        config=config,
+        dataset_id=dataset_id,
+        timepoint_list_path=timepoint_list_path,
+        n_timepoints=len(timepoints),
+        structures=structures,
+        mode=mode,
+        dependency=dependency,
+    )
+    script = generator.generate_script()
+
+    if output_path:
+        try:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w") as f:
+                f.write(script)
+            os.chmod(output_path, 0o755)
+            logging.info(f"Subregion segmentation script saved to: {output_path}")
+        except Exception as e:
+            logging.error(f"Failed to save script: {e}")
+            sys.exit(1)
+
+    return script
+
+
 def generate_array_script(
     config_path: str,
     dataset_id: str,
@@ -955,10 +1256,35 @@ def main():
         action="store_true",
         help="Generate a SLURM array job script (requires --dataset-id and --subject-list)",
     )
+    mode.add_argument(
+        "--subregion-mode",
+        action="store_true",
+        help="Generate a subregion segmentation array job script (requires "
+        "--dataset-id, --timepoint-list, --structures, --seg-mode)",
+    )
 
     parser.add_argument("--dataset-id", help="Dataset accession ID (array mode)")
     parser.add_argument(
         "--subject-list", help="Path to subject list file, one per line (array mode)"
+    )
+    parser.add_argument(
+        "--timepoint-list",
+        help="Path to timepoint list file, one dir name per line (subregion mode)",
+    )
+    parser.add_argument(
+        "--structures",
+        nargs="+",
+        choices=list(_SUBREGION_STRUCTURES),
+        help="Structures to segment (subregion mode)",
+    )
+    parser.add_argument(
+        "--seg-mode",
+        choices=list(_SUBREGION_MODES),
+        help="cross or longitudinal (subregion mode)",
+    )
+    parser.add_argument(
+        "--dependency",
+        help="Optional SBATCH --dependency value, e.g. afterany:12345 (subregion mode)",
     )
 
     args = parser.parse_args()
@@ -969,6 +1295,21 @@ def main():
             parser.error("--array-mode requires --dataset-id and --subject-list")
         script = generate_array_script(
             args.config, args.dataset_id, args.subject_list, args.output
+        )
+    elif args.subregion_mode:
+        if not args.dataset_id or not args.timepoint_list or not args.structures or not args.seg_mode:
+            parser.error(
+                "--subregion-mode requires --dataset-id, --timepoint-list, "
+                "--structures, and --seg-mode"
+            )
+        script = generate_subregion_script(
+            args.config,
+            args.dataset_id,
+            args.timepoint_list,
+            args.structures,
+            args.seg_mode,
+            args.dependency,
+            args.output,
         )
     else:
         script = generate_script(args.config, args.subject, args.output)

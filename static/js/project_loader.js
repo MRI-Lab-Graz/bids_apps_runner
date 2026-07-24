@@ -282,6 +282,7 @@ async function applyPipelineEntryToRunnerForm(entry, options = {}) {
             freesurferBidsLongitudinalChk.checked =
                 app.execution_adapter === 'freesurfer-bids' || !!presetSaysFreesurferBids;
         }
+        if (typeof restoreSubregionSegmentationUI === 'function') restoreSubregionSegmentationUI(app);
 
         const engine = common.container_engine || 'apptainer';
         document.getElementById('container_engine').value = engine;
@@ -1242,6 +1243,7 @@ async function applyProjectData(project, projectIdOverride) {
             freesurferBidsLongitudinalEl.checked =
                 app.execution_adapter === 'freesurfer-bids' || !!presetSaysFreesurferBids;
         }
+        if (typeof restoreSubregionSegmentationUI === 'function') restoreSubregionSegmentationUI(app);
         document.getElementById('container_engine').value = common.container_engine || 'apptainer';
 
         // Load saved Check Output settings when present

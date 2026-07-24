@@ -26,9 +26,17 @@
 #
 # Usage
 # ─────
-#   ./scripts/submit_bids_cohort.sh setup   [OPTIONS]
-#   ./scripts/submit_bids_cohort.sh submit  [OPTIONS]
+#   ./scripts/submit_bids_cohort.sh setup              [OPTIONS]
+#   ./scripts/submit_bids_cohort.sh submit              [OPTIONS]
+#   ./scripts/submit_bids_cohort.sh submit-subregions   [OPTIONS]
 #   ./scripts/submit_bids_cohort.sh status
+#
+#   submit-subregions runs FreeSurfer's segment_subregions (thalamus /
+#   hippo-amygdala / brainstem, requires .subregion_segmentation.enabled in
+#   the config) directly against an ALREADY-FINISHED output dataset -- no
+#   fresh recon-all array, no dependency to wait on. Use this instead of
+#   `submit` to add subregion segmentation to a cohort that already
+#   completed; `submit` always schedules a full recon-all array too.
 #
 # Options
 #   -c CONFIG      Path to config JSON  (default: configs/cohort_hpc_example.json)
@@ -152,6 +160,13 @@ resolve_config() {
     APP_NAME="$(jq -r '.bids_app.app_name // "bids_app"' "$CONFIG")"
     LOG_DIR_BASE="$(cfg '.paths.log_dir')"
     mapfile -t HPC_MODULES < <(jq -r '.hpc.modules[]? // empty' "$CONFIG")
+
+    # Optional FreeSurfer subregion segmentation follow-up (thalamus /
+    # hippo-amygdala / brainstem, see submit_subregion_segmentation below).
+    SUBREGION_ENABLED="$(jq -r '.subregion_segmentation.enabled // false' "$CONFIG")"
+    mapfile -t SUBREGION_STRUCTURES < <(jq -r '.subregion_segmentation.structures[]? // empty' "$CONFIG")
+    SUBREGION_MODE="$(jq -r '.subregion_segmentation.mode // "cross"' "$CONFIG")"
+    mapfile -t SUBREGION_SESSIONS < <(jq -r '.subregion_segmentation.sessions[]? // empty' "$CONFIG")
 }
 
 # Sets INPUT_CLONE for dataset $1 (depends on resolve_config)
@@ -213,6 +228,202 @@ check_output_clone_fresh() {
          "-- refusing to submit (would reprocess subjects already pushed upstream and" \
          "fail to push its own results). Reconcile manually first: cd ${output_clone}"
     return 1
+}
+
+# Submit a follow-up array+finish job pair that runs FreeSurfer's
+# segment_subregions (thalamus / hippo-amygdala / brainstem subfields,
+# https://surfer.nmr.mgh.harvard.edu/fswiki/SubregionSegmentation) against
+# an already-completed recon-all output tree, once the main finish job for
+# this dataset has safely committed+pushed. Purely post-processing: reads
+# no BIDS input, writes new derivative files into subject/timepoint
+# directories the main run already produced in output_clone. Only called
+# when config .subregion_segmentation.enabled is true (see resolve_config).
+submit_subregion_segmentation() {
+    local ds="$1" output_clone="$2" main_finish_job_id="$3" commit_prefix="$4"
+
+    [[ ${#SUBREGION_STRUCTURES[@]} -gt 0 ]] || { warn "[$ds] Subregion segmentation enabled but no structures selected -- skipping"; return 0; }
+
+    local scripts_dir="$(dirname "$(realpath "$CONFIG")")/generated"
+    local timepoint_list="${SUBJ_LISTS_DIR}/${ds}_subregion_timepoints_${SUBREGION_MODE}.txt"
+
+    log "[$ds] Building subregion segmentation timepoint list (${SUBREGION_MODE})..."
+    if [[ "$SUBREGION_MODE" == "cross" ]]; then
+        # Cross-sectional timepoint dirs: sub-XXX_ses-YYY, excluding
+        # longitudinal (.long.) output dirs.
+        run bash -c "ls -d '${output_clone}'/sub-*_ses-*/ 2>/dev/null \
+            | xargs -n1 basename \
+            | grep -v '\.long\.' \
+            | sort > '${timepoint_list}'"
+        if [[ ${#SUBREGION_SESSIONS[@]} -gt 0 ]]; then
+            local session_pattern
+            session_pattern=$(printf '_ses-%s$|' "${SUBREGION_SESSIONS[@]}")
+            session_pattern="${session_pattern%|}"
+            run bash -c "grep -E '${session_pattern}' '${timepoint_list}' > '${timepoint_list}.filtered' && mv '${timepoint_list}.filtered' '${timepoint_list}'"
+        fi
+    else
+        # Longitudinal base dirs: sub-XXX (no _ses- suffix, not a .long.
+        # dir) that actually have a base-tps file -- confirms it's a real
+        # FreeSurfer -base template, not e.g. a lone single-session
+        # subject processed without the longitudinal steps. segment_subregions
+        # --long-base processes every timepoint listed in base-tps in one
+        # call, so there's no per-session filtering here (SUBREGION_SESSIONS
+        # is ignored in this mode).
+        run bash -c "for d in '${output_clone}'/sub-*/; do \
+                b=\$(basename \"\$d\"); \
+                case \"\$b\" in *_ses-*|*.long.*) continue ;; esac; \
+                [[ -f \"\${d}base-tps\" ]] && echo \"\$b\"; \
+            done | sort > '${timepoint_list}'"
+    fi
+
+    local n_timepoints
+    n_timepoints=$(wc -l < "$timepoint_list" | tr -d ' ')
+    if [[ "$n_timepoints" -eq 0 ]]; then
+        warn "[$ds] No ${SUBREGION_MODE} timepoints found for subregion segmentation -- skipping"
+        return 0
+    fi
+    log "[$ds] ${n_timepoints} ${SUBREGION_MODE} timepoint(s) for subregion segmentation: ${SUBREGION_STRUCTURES[*]}"
+
+    local subregion_array_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}.sh"
+
+    # main_finish_job_id is empty when called from cmd_submit_subregions
+    # (running against an already-finished cohort, no fresh main array to
+    # wait on) -- in that case the subregion array can start right away.
+    local dependency_desc="no dependency (runs immediately)"
+    [[ -n "$main_finish_job_id" ]] && dependency_desc="depending on finish job ${main_finish_job_id}"
+
+    if $DRY_RUN; then
+        echo "[DRY-RUN] Generate+schedule subregion array (${SUBREGION_STRUCTURES[*]}, ${SUBREGION_MODE}) for ${n_timepoints} timepoint(s), ${dependency_desc}"
+        echo "[DRY-RUN]   then sbatch a dependent finish job: datalad slurm-finish && datalad push --to origin"
+        return 0
+    fi
+
+    local -a dependency_args=()
+    [[ -n "$main_finish_job_id" ]] && dependency_args=(--dependency "afterany:${main_finish_job_id}")
+
+    run python3 "${SCRIPT_DIR}/hpc_datalad_runner.py" \
+        --config "$CONFIG" \
+        --subregion-mode \
+        --dataset-id "$ds" \
+        --timepoint-list "$timepoint_list" \
+        --structures "${SUBREGION_STRUCTURES[@]}" \
+        --seg-mode "$SUBREGION_MODE" \
+        "${dependency_args[@]}" \
+        --output "$subregion_array_script" \
+        || { warn "[$ds] Subregion segmentation script generation failed"; return 1; }
+
+    mkdir -p "${LOG_DIR_BASE}/${ds}" "${output_clone}/.slurm_logs/${ds}"
+
+    local subregion_stdout subregion_exit subregion_job_id subregion_stderr_file
+    subregion_stderr_file=$(mktemp)
+    subregion_exit=0
+    subregion_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
+        -o . \
+        -m "${commit_prefix}Subregion segmentation (${SUBREGION_STRUCTURES[*]}, ${SUBREGION_MODE}) for ${ds}" \
+        sbatch "$subregion_array_script" 2>"$subregion_stderr_file") || subregion_exit=$?
+    local subregion_stderr
+    subregion_stderr=$(cat "$subregion_stderr_file"); rm -f "$subregion_stderr_file"
+    if [[ $subregion_exit -ne 0 ]]; then
+        local subregion_reason
+        subregion_reason=$(printf '%s\n%s\n' "$subregion_stdout" "$subregion_stderr" \
+            | jq -r 'select(.message) | .message' 2>/dev/null | tail -1)
+        warn "[$ds] datalad slurm-schedule (subregions) failed${subregion_reason:+: $subregion_reason}"
+        return 1
+    fi
+
+    subregion_job_id=$(printf '%s\n' "$subregion_stdout" \
+        | jq -r 'select(.action=="slurm-schedule") | .slurm_run_info.slurm_job_id // empty' \
+        | tail -1)
+    if [[ -z "$subregion_job_id" ]]; then
+        warn "[$ds] Could not determine SLURM job id from subregion slurm-schedule output"
+        return 1
+    fi
+    log "[$ds] Scheduled subregion segmentation array job ${subregion_job_id} (${n_timepoints} timepoints, ${dependency_desc})"
+
+    # Concatenate per-timepoint volume outputs into cohort-wide CSVs
+    # (https://surfer.nmr.mgh.harvard.edu/fswiki/ConcatenateSubregionsResults)
+    # once the array finishes -- reimplemented in concat_subregion_results.py
+    # rather than calling FreeSurfer's own ConcatenateSubregionsResults.sh,
+    # which expects <subject>/stats/<file>.stats with a header line;
+    # segment_subregions (the tool this pipeline actually runs) writes plain
+    # "label value" files with no header straight into <subject>/mri/, so
+    # that script finds nothing against this tool's real output (confirmed
+    # against the FS 8.2 image's own source). A plain (non-array) sbatch job,
+    # not routed through its own `datalad slurm-schedule` -- the array job's
+    # own "-o ." already covers the whole output_clone tree, so slurm-finish
+    # below picks up these new results/ files the same way it already picks
+    # up files array TASKS wrote (slurm-schedule declares scope, not who
+    # writes within it). Writes into output_clone/subregion_results/, kept
+    # in the dataset next to the raw per-subject output.
+    local results_dir="${output_clone}/subregion_results"
+    local concat_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}_concat.sh"
+    cat > "$concat_script" <<EOF
+#!/bin/bash
+#SBATCH --job-name=concat_${ds}_subregions
+#SBATCH --dependency=afterany:${subregion_job_id}
+#SBATCH --partition=$(cfg '.hpc.partition')
+#SBATCH --time=00:30:00
+#SBATCH --mem=2G
+#SBATCH --cpus-per-task=1
+#SBATCH --output=${LOG_DIR_BASE}/${ds}/concat-subregions-%j.out
+#SBATCH --error=${LOG_DIR_BASE}/${ds}/concat-subregions-%j.err
+set -euo pipefail
+python3 "${SCRIPT_DIR}/concat_subregion_results.py" \\
+    --subjects-dir "${output_clone}" \\
+    --mode "${SUBREGION_MODE}" \\
+    --structures ${SUBREGION_STRUCTURES[*]} \\
+    --timepoint-list "${timepoint_list}" \\
+    --results-dir "${results_dir}"
+EOF
+    chmod +x "$concat_script"
+
+    local concat_job_id
+    concat_job_id=$(sbatch "$concat_script" 2>&1 | grep -oP '\d+$') \
+        || { warn "[$ds] Failed to submit dependent concat job"; return 1; }
+    log "[$ds] Submitted subregion concat job ${concat_job_id} (runs after ${subregion_job_id} completes, writes to ${results_dir})"
+
+    # Chain a finish job for the subregion output -- same pattern as the
+    # main finish job in cmd_submit (one commit + push covering the whole
+    # subregion array AND the concatenated results, once both complete).
+    local module_load_line=""
+    if [[ ${#HPC_MODULES[@]} -gt 0 ]]; then
+        module_load_line="module load ${HPC_MODULES[*]}"
+    fi
+    local notify_email mail_lines=""
+    notify_email="$(cfg '.hpc.notify_email // ""')"
+    if [[ -n "$notify_email" ]]; then
+        mail_lines="#SBATCH --mail-user=${notify_email}
+#SBATCH --mail-type=END,FAIL"
+    fi
+
+    local subregion_finish_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}_finish.sh"
+    cat > "$subregion_finish_script" <<EOF
+#!/bin/bash
+#SBATCH --job-name=finish_${ds}_subregions
+#SBATCH --dependency=afterany:${concat_job_id}
+#SBATCH --partition=$(cfg '.hpc.partition')
+#SBATCH --time=03:00:00
+#SBATCH --mem=2G
+#SBATCH --cpus-per-task=1
+#SBATCH --output=${LOG_DIR_BASE}/${ds}/finish-subregions-%j.out
+#SBATCH --error=${LOG_DIR_BASE}/${ds}/finish-subregions-%j.err
+${mail_lines}
+set -euo pipefail
+${module_load_line}
+export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
+DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
+cd "${output_clone}"
+"\$DATALAD_BIN" slurm-finish -m "${commit_prefix}Finish subregion segmentation job ${subregion_job_id} for ${ds}"
+"\$DATALAD_BIN" push --to origin
+EOF
+    chmod +x "$subregion_finish_script"
+
+    local subregion_finish_job_id
+    subregion_finish_job_id=$(sbatch "$subregion_finish_script" 2>&1 | grep -oP '\d+$') \
+        || { warn "[$ds] Failed to submit dependent subregion finish job"; return 1; }
+
+    mkdir -p "$(dirname "$SUBREGION_SUBMISSION_LOG")"
+    echo "${ds} ${subregion_job_id} ${n_timepoints} ${subregion_finish_job_id}" >> "$SUBREGION_SUBMISSION_LOG"
+    log "[$ds] Submitted subregion finish job ${subregion_finish_job_id} (runs after ${concat_job_id} completes)"
 }
 
 # ── Phase 1: setup ────────────────────────────────────────────────────────────
@@ -362,6 +573,12 @@ cmd_submit() {
     $PILOT && submission_log_prefix="pilot_submission"
     local submission_log="${REPO_DIR}/logs/${submission_log_prefix}_$(date '+%Y%m%d_%H%M%S').log"
     mkdir -p "$scripts_dir" "$(dirname "$submission_log")"
+    # Deliberately NOT prefixed "submission_*" -- cmd_status's log_glob
+    # picks the most-recently-modified submission_*.log, and this file is
+    # always written a few seconds after the main one in the same
+    # cmd_submit run, so sharing that prefix would make it shadow the real
+    # cohort's submission log there.
+    SUBREGION_SUBMISSION_LOG="${REPO_DIR}/logs/subregions_${submission_log_prefix}_$(date '+%Y%m%d_%H%M%S').log"
 
     log "Submitting ${#DATASETS[@]} dataset(s)..."
     log "Submission log: ${submission_log}"
@@ -549,7 +766,7 @@ cmd_submit() {
 #SBATCH --job-name=finish_${DS}${subj_list_suffix}
 #SBATCH --dependency=afterany:${job_id}
 #SBATCH --partition=$(cfg '.hpc.partition')
-#SBATCH --time=00:30:00
+#SBATCH --time=03:00:00
 #SBATCH --mem=2G
 #SBATCH --cpus-per-task=1
 #SBATCH --output=${LOG_DIR_BASE}/${DS}/finish-%j.out
@@ -581,11 +798,66 @@ EOF
         echo "${DS} ${job_id} ${n_subjects} ${finish_job_id}" >> "$submission_log"
         log "[$DS] Submitted finish job ${finish_job_id} (runs after ${job_id} completes)"
         submitted=$((submitted + 1))
+
+        if [[ "$SUBREGION_ENABLED" == "true" ]] && ! $PILOT; then
+            submit_subregion_segmentation "$DS" "$output_clone" "$finish_job_id" "$commit_prefix" \
+                || warn "[$DS] Subregion segmentation submission failed (main run was still submitted successfully)"
+        fi
     done
 
     log ""
     log "Submitted: ${submitted}  Skipped: ${skipped}  Failed: ${failed}"
     $DRY_RUN || log "Job IDs written to: ${submission_log}"
+}
+
+# ── Phase 2b: submit-subregions ──────────────────────────────────────────────
+# Runs subregion segmentation directly against an ALREADY-FINISHED output
+# dataset -- no fresh recon-all array, no dependency to wait on. Use this
+# (rather than re-running `submit`) to add subregion segmentation to a
+# cohort that already completed: re-running `submit` would schedule a brand
+# new full recon-all array for every subject again, which is both wasteful
+# and unnecessary when the output is already there.
+cmd_submit_subregions() {
+    check_todos
+    resolve_config
+
+    [[ "$SUBREGION_ENABLED" == "true" ]] \
+        || die "Config .subregion_segmentation.enabled is not true in ${CONFIG} -- nothing to submit."
+    [[ ${#SUBREGION_STRUCTURES[@]} -gt 0 ]] \
+        || die "Config .subregion_segmentation.structures is empty in ${CONFIG} -- nothing to submit."
+
+    local scripts_dir="$(dirname "$(realpath "$CONFIG")")/generated"
+    mkdir -p "$scripts_dir"
+    local submission_log_prefix="submission"
+    $PILOT && submission_log_prefix="pilot_submission"
+    SUBREGION_SUBMISSION_LOG="${REPO_DIR}/logs/subregions_${submission_log_prefix}_$(date '+%Y%m%d_%H%M%S').log"
+
+    log "Submitting subregion segmentation (${SUBREGION_STRUCTURES[*]}, ${SUBREGION_MODE}) for ${#DATASETS[@]} dataset(s)..."
+    log "Runs directly against each dataset's already-cloned output -- no recon-all re-run."
+
+    local submitted=0 failed=0
+    for DS in "${DATASETS[@]}"; do
+        resolve_output_clone "$DS"
+        local output_clone="$OUTPUT_CLONE"
+        log "[$DS] --- submit-subregions ---"
+
+        if [[ ! -d "${output_clone}/.datalad" ]]; then
+            warn "[$DS] Output not cloned at ${output_clone} -- run setup first"
+            failed=$((failed + 1)); continue
+        fi
+        check_output_clone_fresh "$DS" "$output_clone" \
+            || { failed=$((failed + 1)); continue; }
+
+        if submit_subregion_segmentation "$DS" "$output_clone" "" ""; then
+            submitted=$((submitted + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done
+
+    log ""
+    log "Submitted: ${submitted}  Failed: ${failed}"
+    $DRY_RUN || log "Job IDs written to: ${SUBREGION_SUBMISSION_LOG}"
 }
 
 # ── Phase 3: status ───────────────────────────────────────────────────────────
@@ -635,6 +907,41 @@ cmd_status() {
 
         printf "%-20s %-12s %-10s %-10s %-40s %s\n" "$ds" "$job_id" "$n_subjects" "$progress" "$status" "$finish_status"
     done < "$log_file"
+
+    # Subregion segmentation follow-up jobs (see submit_subregion_segmentation),
+    # if any were submitted -- same log format, different file/prefix.
+    local subregion_log_glob="subregions_submission_"
+    $PILOT && subregion_log_glob="subregions_pilot_submission_"
+    local subregion_log_file
+    subregion_log_file=$(ls -t "${REPO_DIR}/logs/${subregion_log_glob}"*.log 2>/dev/null | head -1)
+    if [[ -n "$subregion_log_file" ]]; then
+        echo ""
+        log "Reading: ${subregion_log_file}"
+        echo ""
+        printf "%-20s %-12s %-10s %-10s %-40s %s\n" "DATASET" "SUBREGION_JOB" "TIMEPTS" "PROGRESS" "ARRAY_STATUS" "FINISH_STATUS"
+        printf "%-20s %-12s %-10s %-10s %-40s %s\n" "-------" "-------------" "-------" "--------" "------------" "-------------"
+        while read -r ds job_id n_timepoints finish_job_id; do
+            local status progress finish_status terminal_count
+            status=$(sacct -j "$job_id" --noheader --format=JobID,State --parsable2 2>/dev/null \
+                | awk -F'|' -v jid="$job_id" '$1 ~ ("^" jid "_[0-9]+$") {print $2}' \
+                | sort | uniq -c | awk '{printf "%s:%s ", $2, $1}' | sed 's/ $//')
+            [[ -z "$status" ]] && status="UNKNOWN"
+
+            terminal_count=$(sacct -j "$job_id" --noheader --format=JobID,State --parsable2 2>/dev/null \
+                | awk -F'|' -v jid="$job_id" '$1 ~ ("^" jid "_[0-9]+$") && $2 !~ /PENDING|RUNNING/' \
+                | wc -l)
+            progress="${terminal_count}/${n_timepoints}"
+
+            finish_status="-"
+            if [[ -n "$finish_job_id" ]]; then
+                finish_status=$(sacct -j "$finish_job_id" --noheader --format=JobID,State --parsable2 2>/dev/null \
+                    | awk -F'|' -v jid="$finish_job_id" '$1 == jid {print $2}')
+                [[ -z "$finish_status" ]] && finish_status="UNKNOWN"
+            fi
+
+            printf "%-20s %-12s %-10s %-10s %-40s %s\n" "$ds" "$job_id" "$n_timepoints" "$progress" "$status" "$finish_status"
+        done < "$subregion_log_file"
+    fi
 }
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -644,9 +951,10 @@ cmd_help() {
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 case "$COMMAND" in
-    setup)  cmd_setup  ;;
-    submit) cmd_submit ;;
-    status) cmd_status ;;
-    help|-h|--help) cmd_help ;;
-    *) die "Unknown command: $COMMAND  (use setup | submit | status)" ;;
+    setup)             cmd_setup             ;;
+    submit)            cmd_submit            ;;
+    submit-subregions) cmd_submit_subregions ;;
+    status)            cmd_status            ;;
+    help|-h|--help)    cmd_help              ;;
+    *) die "Unknown command: $COMMAND  (use setup | submit | submit-subregions | status)" ;;
 esac
