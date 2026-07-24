@@ -19,3 +19,26 @@ its own module rather than adding more code to the monolith:
 This is opportunistic, scoped to whatever you're already touching for the
 issue at hand -- not a mandate to refactor unrelated code nearby just
 because it's in the same file.
+
+## Testing
+
+- **Backend**: `pytest` (`tests/*.py`). Run with `python3 -m pytest tests/`.
+  A coverage gate (`pytest.ini`, currently 80%) fails the run if new
+  untested code drags the total below it -- add tests alongside new
+  `scripts/*.py`/`gui/*.py` code, not just the happy path.
+- **Frontend**: `static/js/*.js` modules extracted per the rule above get
+  tests under `tests_js/*.test.js` (Vitest + jsdom). These are plain
+  classic `<script src>` files, not ES modules, so tests load them via
+  `tests_js/helpers/loadScript.js` (`window.eval()`, same effective
+  semantics as the browser). See `tests_js/README.md` for one-time setup
+  (this machine has no system Node.js/sudo, so a portable build is
+  downloaded into gitignored `.node-runtime/`) and the pattern for stubbing
+  the handful of helpers that still live inline in `templates/index.html`
+  vs. loading real `static/js/*.js` dependencies. Run with:
+  ```
+  export PATH="$(pwd)/.node-runtime/bin:$PATH"
+  npm test
+  ```
+  When extracting a function out of the inline `<script>` per the rule
+  above, add a `tests_js/*.test.js` case for it in the same change --
+  that's the point of extracting it.

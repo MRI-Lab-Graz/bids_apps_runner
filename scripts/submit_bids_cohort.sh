@@ -230,6 +230,32 @@ check_output_clone_fresh() {
     return 1
 }
 
+# Picks the currently least-loaded node in the given partition (by
+# allocated/total CPU ratio), for finish jobs specifically -- these do
+# latency-sensitive git-annex add/commit work (I/O-bound, not CPU-bound),
+# and this cluster's default scheduler prefers packing small (1-cpu) jobs
+# onto already-partially-allocated big nodes rather than spreading them to
+# idle ones. Confirmed real incident: a finish job landed on a node with
+# 209-210/288 CPUs allocated to unrelated large jobs (a 128-core
+# simulation, a 64-core NetLogo run, etc.) and went from a healthy
+# ~90-235s/subject to indefinite (300s+) timeouts on every subsequent
+# subject, purely from losing shared filesystem I/O bandwidth to its
+# neighbors -- moving the identical work to a genuinely idle node fixed it
+# immediately. Echoes nothing and always exits 0: prints the chosen
+# hostname on success, empty string if sinfo is unavailable/returns
+# nothing usable, so a caller can safely do
+# `#SBATCH --nodelist=${node}` only when non-empty and fall through to
+# normal scheduling otherwise -- this must never block a finish job
+# submission on sinfo being flaky.
+pick_idle_node() {
+    local partition="$1"
+    sinfo -p "$partition" -N --noheader --format="%N %C" 2>/dev/null \
+        | awk '{split($2,c,"/"); alloc=c[1]; total=c[4]; if (total+0>0) print alloc/total, $1}' \
+        | sort -n \
+        | head -1 \
+        | awk '{print $2}'
+}
+
 # Submit a follow-up array+finish job pair that runs FreeSurfer's
 # segment_subregions (thalamus / hippo-amygdala / brainstem subfields,
 # https://surfer.nmr.mgh.harvard.edu/fswiki/SubregionSegmentation) against
@@ -395,12 +421,17 @@ EOF
 #SBATCH --mail-type=END,FAIL"
     fi
 
+    local finish_node finish_node_line=""
+    finish_node="$(pick_idle_node "$(cfg '.hpc.partition')")"
+    [[ -n "$finish_node" ]] && finish_node_line="#SBATCH --nodelist=${finish_node}"
+
     local subregion_finish_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}_finish.sh"
     cat > "$subregion_finish_script" <<EOF
 #!/bin/bash
 #SBATCH --job-name=finish_${ds}_subregions
 #SBATCH --dependency=afterany:${concat_job_id}
 #SBATCH --partition=$(cfg '.hpc.partition')
+${finish_node_line}
 #SBATCH --time=03:00:00
 #SBATCH --mem=2G
 #SBATCH --cpus-per-task=1
@@ -414,6 +445,16 @@ DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
 "\$DATALAD_BIN" slurm-finish -m "${commit_prefix}Finish subregion segmentation job ${subregion_job_id} for ${ds}"
 "\$DATALAD_BIN" push --to origin
+
+# Verify a real commit actually happened -- see the matching comment on the
+# main finish job template in cmd_submit for the datalad-slurm bug this
+# guards against (premature open-job DB removal on an interrupted finish).
+uncommitted=\$(git status --porcelain | wc -l)
+if [[ "\$uncommitted" -gt 0 ]]; then
+    echo "ERROR: \${uncommitted} uncommitted change(s) remain after slurm-finish -- the real commit likely never happened (see datalad-slurm's known premature-DB-removal issue). Uncommitted paths:" >&2
+    git status --short | head -30 >&2
+    exit 1
+fi
 EOF
     chmod +x "$subregion_finish_script"
 
@@ -512,6 +553,22 @@ REMOTE_SCRIPT
             run datalad clone "$output_url" "$output_clone" \
                 || { warn "[$DS] Output clone failed – skipping"; failed=$((failed + 1)); continue; }
         fi
+
+        # 3a. Disable git's automatic gc on this clone. A cohort's finish
+        # job adds thousands of new small files in one batch (e.g. a
+        # 150-subject run easily produces tens of thousands of new
+        # git-annex objects) -- past git's default 6700-loose-object
+        # threshold, `git gc --auto` fires on nearly every add/commit
+        # during that batch, and each attempt repacks the *whole*,
+        # ever-growing history. Confirmed real incident: a subregion-
+        # segmentation finish job for a 150-subject FreeSurfer cohort was
+        # on pace to take ~30 hours (vs. its 3-hour SBATCH limit) at
+        # ~7 min/timepoint, 96% sustained CPU, entirely from this --
+        # unrelated to data volume (only ~283MB of actual new content).
+        # Idempotent and safe to re-run against an already-set clone; run
+        # unconditionally (not just on first clone) so it also retroactively
+        # covers datasets set up before this fix existed.
+        run git -C "$output_clone" config gc.auto 0
 
         # 3b. Work on a local "derivatives" branch, not the remote's checked-out
         #    master. Every BIDS app run through this script pushes here so we
@@ -761,11 +818,15 @@ cmd_submit() {
             mail_lines="#SBATCH --mail-user=${notify_email}
 #SBATCH --mail-type=END,FAIL"
         fi
+        local finish_node finish_node_line=""
+        finish_node="$(pick_idle_node "$(cfg '.hpc.partition')")"
+        [[ -n "$finish_node" ]] && finish_node_line="#SBATCH --nodelist=${finish_node}"
         cat > "$finish_script" <<EOF
 #!/bin/bash
 #SBATCH --job-name=finish_${DS}${subj_list_suffix}
 #SBATCH --dependency=afterany:${job_id}
 #SBATCH --partition=$(cfg '.hpc.partition')
+${finish_node_line}
 #SBATCH --time=03:00:00
 #SBATCH --mem=2G
 #SBATCH --cpus-per-task=1
@@ -788,6 +849,24 @@ DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
 "\$DATALAD_BIN" slurm-finish -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${DS}"
 "\$DATALAD_BIN" push --to origin
+
+# Verify a real commit actually happened. datalad-slurm's finish_cmd()
+# removes the open-job bookkeeping entry BEFORE performing the actual
+# save/commit (see .datalad-slurm-venv's datalad_slurm/finish.py) -- if
+# THIS finish job gets interrupted (wallclock timeout, manual scancel)
+# between those two steps, a later resubmit finds nothing left in its job
+# database and silently no-ops straight to an empty-looking "successful"
+# push, having never actually committed the array's output. Confirmed real
+# incident: two separate "COMPLETED" finish jobs for a 150-subject
+# FreeSurfer cohort never committed anything at all. Fail loudly here
+# instead of reporting false success, so normal job-failure monitoring
+# (email, cmd_status) catches it rather than it going unnoticed.
+uncommitted=\$(git status --porcelain | wc -l)
+if [[ "\$uncommitted" -gt 0 ]]; then
+    echo "ERROR: \${uncommitted} uncommitted change(s) remain after slurm-finish -- the real commit likely never happened (see datalad-slurm's known premature-DB-removal issue). Uncommitted paths:" >&2
+    git status --short | head -30 >&2
+    exit 1
+fi
 EOF
         chmod +x "$finish_script"
 
