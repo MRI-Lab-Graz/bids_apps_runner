@@ -97,6 +97,34 @@ def _sanitize_apptainer_args(apptainer_args):
     return sanitized
 
 
+_NV_GLIBC_ERROR_RE = re.compile(r"GLIBC_[\d.]+['\"]? not found")
+
+
+def _maybe_log_nv_glibc_hint(cmd, output):
+    """Flag the known Apptainer/Singularity '--nv' GLIBC mismatch.
+
+    '--nv' bind-mounts the host's NVIDIA driver libraries (via a static
+    nvliblist.conf) into the container; on some hosts that list also pulls
+    in a host libc.so.6 that shadows the container's own and is older than
+    what the container's binaries need, so they fail with a "GLIBC_x.xx not
+    found" ImportError. This is a host/driver-library issue, not something
+    fixable by editing the BIDS app command -- the actionable workaround is
+    switching from '--nv' to '--nvccli' (nvidia-container-cli), which
+    queries the driver directly instead of using the static library list.
+    Requires nvidia-container-toolkit on the host.
+    """
+    if not output or "--nv" not in cmd or not _NV_GLIBC_ERROR_RE.search(output):
+        return
+    logging.error(
+        "Detected an Apptainer '--nv' GLIBC mismatch (a host library shadowed "
+        "one the container expects). This is a known issue with '--nv' on some "
+        "hosts -- try adding \"--nvccli\" to this app's apptainer_args instead "
+        "(requires nvidia-container-toolkit / nvidia-container-cli on the "
+        "host). An OS upgrade is not required. See "
+        "https://apptainer.org/docs/user/main/gpu.html#nvidia-gpus-cuda-nvccli"
+    )
+
+
 def _needs_tmpfs_for_docker(tmp_dir: str) -> bool:
     """Return True when the host tmp_dir is on a volume that doesn't support
     Unix domain sockets (e.g. exFAT external drives at /Volumes on macOS).
@@ -556,6 +584,7 @@ def _run_container(
             logging.error(f"stdout: {e.stdout[:500]}")
         if e.stderr:
             logging.error(f"stderr: {e.stderr[:500]}")
+        _maybe_log_nv_glibc_hint(cmd, f"{e.stdout or ''}\n{e.stderr or ''}")
         raise
     except Exception as e:
         logging.error(f"Unexpected error during execution: {e}")

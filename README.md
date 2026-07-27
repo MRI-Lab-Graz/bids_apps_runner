@@ -376,7 +376,21 @@ New projects inherit resolved defaults for the current host. Existing projects r
    - Check bind mounts and directory access
    - Review container logs with `--debug`
 
-3. **Validation reports empty results**
+3. **GPU run fails with `GLIBC_x.xx' not found` (Apptainer `--nv`)**
+   - Apptainer's `--nv` bind-mounts the host's NVIDIA driver libraries into
+     the container using a static library list; on some hosts that list
+     also pulls in a host `libc.so.6` that shadows the container's own and
+     is older than what the container's binaries need, causing an
+     `ImportError: ... GLIBC_x.xx' not found`. This is a host/driver-library
+     mismatch, not something an OS upgrade is required to fix.
+   - Workaround: add `"--nvccli"` to the app's `apptainer_args` in your
+     config (e.g. `"apptainer_args": ["--nvccli"]`) to switch Apptainer to
+     using `nvidia-container-cli` for GPU setup instead of the static list.
+     This requires the `nvidia-container-toolkit` (which provides
+     `nvidia-container-cli`) to be installed on the host. The runner logs a
+     matching hint automatically when it detects this error.
+
+4. **Validation reports empty results**
    - Ensure correct BIDS directory structure
    - Verify pipeline-specific output formats
    - Use `--verbose` for detailed validation output
