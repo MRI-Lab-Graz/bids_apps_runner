@@ -858,7 +858,8 @@ cd "${output_clone}"
 # database and silently no-ops straight to an empty-looking "successful"
 # push, having never actually committed the array's output. Confirmed real
 # incident: two separate "COMPLETED" finish jobs for a 150-subject
-# FreeSurfer cohort never committed anything at all. Fail loudly here
+# FreeSurfer cohort never committed anything at all. Reported upstream:
+# https://github.com/knuedd/datalad-slurm/issues/97. Fail loudly here
 # instead of reporting false success, so normal job-failure monitoring
 # (email, cmd_status) catches it rather than it going unnoticed.
 uncommitted=\$(git status --porcelain | wc -l)

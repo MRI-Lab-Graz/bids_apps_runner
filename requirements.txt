@@ -61,3 +61,6 @@ sphinx-rtd-theme>=1.0.0
 # - SLURM tools (sbatch, squeue, etc.) for HPC functionality
 # - git and git-annex (for DataLad functionality)
 # - DataLad system installation (may require conda or system package manager)
+# - GitHub CLI (gh), for PR/issue workflows only -- not required at runtime.
+#   Install repo-locally (no sudo) via: scripts/install_gh.sh
+#   See .gitignore's .gh-runtime/ entry; same pattern as .node-runtime/.

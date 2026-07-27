@@ -39,6 +39,8 @@ import sys
 from pathlib import Path
 
 RUN_RE = re.compile(r"_run-(\d+)")
+NIFTI_EXT_RE = re.compile(r"_dwi\.nii(\.gz)?$")
+ZOOM_TOLERANCE_MM = 1e-3
 
 
 def parse_args(argv=None):
@@ -110,6 +112,10 @@ def find_dwi_run_groups(bids_dir, subjects=None):
             if not dwi_dir.is_dir():
                 continue
             for nii in sorted(dwi_dir.glob("*_dwi.nii*")):
+                if not NIFTI_EXT_RE.search(nii.name):
+                    # Skip non-NIfTI lookalikes, e.g. backup files this
+                    # tool itself creates (*_dwi.nii.gz.orig).
+                    continue
                 m = RUN_RE.search(nii.name)
                 if not m:
                     continue
@@ -143,7 +149,10 @@ def check_group(group_key, runs, tolerance_mm):
     results = []
     for run_number, path in runs[1:]:
         img, shape, zooms = _load_affine_info(path)
-        if shape != ref_shape or zooms != ref_zooms:
+        zooms_match = shape == ref_shape and np.allclose(
+            zooms, ref_zooms, atol=ZOOM_TOLERANCE_MM
+        )
+        if not zooms_match:
             results.append(
                 {
                     "path": path,

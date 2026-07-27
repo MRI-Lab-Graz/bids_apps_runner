@@ -28,6 +28,9 @@ scripts/generated/
 # no root/sudo needed to set up, same spirit as .datalad-slurm-venv above.
 # Re-download with: see tests_js/README.md
 .node-runtime/
+# Portable GitHub CLI (gh) binary -- self-contained, no root/sudo needed,
+# same spirit as .node-runtime above. Re-download with: scripts/install_gh.sh
+.gh-runtime/
 
 # macOS
 .DS_Store

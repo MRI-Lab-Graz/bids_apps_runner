@@ -63,6 +63,27 @@ def test_find_dwi_run_groups_no_session_level(tmp_path):
     assert len(groups) == 1
 
 
+def test_find_dwi_run_groups_ignores_backup_files(tmp_path):
+    # A prior --apply run leaves "<name>.orig" backups next to the fixed
+    # files. Those must never be treated as DWI runs themselves -- their
+    # run-number-stripped names collide with each other (not with the
+    # real group), which previously crashed nib.load() on the ".orig"
+    # extension.
+    base = tmp_path / "sub-006" / "ses-1" / "dwi"
+    _touch(base / "sub-006_ses-1_acq-multi_run-1_dwi.nii.gz")
+    _touch(base / "sub-006_ses-1_acq-multi_run-2_dwi.nii.gz")
+    _touch(base / "sub-006_ses-1_acq-multi_run-2_dwi.nii.gz.orig")
+    _touch(base / "sub-006_ses-1_acq-multi_run-3_dwi.nii.gz")
+    _touch(base / "sub-006_ses-1_acq-multi_run-3_dwi.nii.gz.orig")
+
+    groups = fdh.find_dwi_run_groups(tmp_path)
+
+    assert len(groups) == 1
+    (runs,) = groups.values()
+    assert [r for r, _ in runs] == [1, 2, 3]
+    assert all(not str(p).endswith(".orig") for _, p in runs)
+
+
 def test_find_dwi_run_groups_subject_filter(tmp_path):
     for subj in ("sub-006", "sub-053"):
         base = tmp_path / subj / "ses-1" / "dwi"
