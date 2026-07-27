@@ -8,6 +8,7 @@ omit =
     scripts/prism_hpc.py
     scripts/prism_local.py
     scripts/run_bids_apps.py
+    scripts/fix_dwi_fov_headers.py
     scripts/archive/*
     scripts/tests/*
 
