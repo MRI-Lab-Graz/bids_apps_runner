@@ -432,7 +432,10 @@ EOF
 #SBATCH --dependency=afterany:${concat_job_id}
 #SBATCH --partition=$(cfg '.hpc.partition')
 ${finish_node_line}
-#SBATCH --time=03:00:00
+# 3h was not enough: job 5505212 (a 3-subject retry finish) exceeded it
+# mid-\`datalad save\` with no output at all, leaving the array's outputs
+# staged but uncommitted (see the datalad-slurm known-bug comment below).
+#SBATCH --time=12:00:00
 #SBATCH --mem=2G
 #SBATCH --cpus-per-task=1
 #SBATCH --output=${LOG_DIR_BASE}/${ds}/finish-subregions-%j.out
@@ -444,7 +447,10 @@ export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
 DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
 "\$DATALAD_BIN" slurm-finish -m "${commit_prefix}Finish subregion segmentation job ${subregion_job_id} for ${ds}"
-"\$DATALAD_BIN" push --to origin
+# See the matching comment on the main finish job template in cmd_submit for
+# why this push forces DATALAD_SSH_MULTIPLEX__CONNECTIONS=false (stale
+# cross-node SSH control socket under the NFS-shared ~/.cache/datalad/sockets/).
+DATALAD_SSH_MULTIPLEX__CONNECTIONS=false "\$DATALAD_BIN" push --to origin
 
 # Verify a real commit actually happened -- see the matching comment on the
 # main finish job template in cmd_submit for the datalad-slurm bug this
@@ -827,7 +833,10 @@ cmd_submit() {
 #SBATCH --dependency=afterany:${job_id}
 #SBATCH --partition=$(cfg '.hpc.partition')
 ${finish_node_line}
-#SBATCH --time=03:00:00
+# 3h was not enough: job 5505212 (a 3-subject retry finish) exceeded it
+# mid-\`datalad save\` with no output at all, leaving the array's outputs
+# staged but uncommitted (see the datalad-slurm known-bug comment below).
+#SBATCH --time=12:00:00
 #SBATCH --mem=2G
 #SBATCH --cpus-per-task=1
 #SBATCH --output=${LOG_DIR_BASE}/${DS}/finish-%j.out
@@ -848,7 +857,17 @@ export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
 DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
 "\$DATALAD_BIN" slurm-finish -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${DS}"
-"\$DATALAD_BIN" push --to origin
+# Disable datalad's SSH connection multiplexing for this push. Finish jobs
+# land on whichever compute node the scheduler/pick_idle_node picks, but
+# \$HOME (and its datalad control-socket cache under ~/.cache/datalad/sockets/)
+# is NFS-shared across all of them -- a control socket a previous finish job
+# created on a *different* node is a dead reference on this one, and
+# connecting to it can hang indefinitely instead of failing fast (confirmed
+# real incident: two separate pushes for the 129/freesurfer output dataset
+# hung for hours at an identical near-zero byte count before this was found).
+# DATALAD_SSH_MULTIPLEX__CONNECTIONS=false forces a plain, direct-per-call
+# SSH connection instead, sidestepping the shared/stale-socket risk entirely.
+DATALAD_SSH_MULTIPLEX__CONNECTIONS=false "\$DATALAD_BIN" push --to origin
 
 # Verify a real commit actually happened. datalad-slurm's finish_cmd()
 # removes the open-job bookkeeping entry BEFORE performing the actual
