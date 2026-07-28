@@ -10,12 +10,15 @@
 # script, sequentially, before and after submission.
 # ──────────────────
 # Phase 1 – setup (run once, needs DataLad + network access)
-#   • Pre-clones every dataset to shared HPC storage (fast subsequent clones)
+#   • Pre-clones every dataset to shared HPC storage (fast subsequent clones;
+#     metadata-only -- no file content yet)
 #   • Creates the per-dataset output DataLad repos on the DataLad SSH server
-#   • Prefetches all subject data (`datalad get`) so array tasks never call it
 #
 # Phase 2 – submit (run after setup, submits SLURM array jobs)
 #   • Builds subject lists from pre-cloned datasets
+#   • Prefetches (`datalad get`) only this cohort's own subject list -- not
+#     the whole dataset -- so array tasks never call it themselves; still
+#     runs once, sequentially, before scheduling
 #   • Generates a plain SLURM array job script per dataset (via
 #     hpc_datalad_runner.py) -- the script itself contains no datalad/git calls
 #   • `datalad slurm-schedule`s the array job (declares one -o per subject,
@@ -588,32 +591,6 @@ REMOTE_SCRIPT
             run git -C "$output_clone" checkout -b derivatives
         fi
 
-        # 4. Prefetch all subject data now, since array tasks no longer call
-        #    `datalad get` themselves (datalad-slurm keeps all git/annex
-        #    operations outside the job). git-annex's own parallel transfer
-        #    workers can transiently race on the same lock ("transfer
-        #    already in progress, or unable to take transfer lock") under
-        #    heavy concurrency across many subjects -- confirmed against a
-        #    real 150-subject dataset: a second `datalad get` cleared 27
-        #    such errors with zero new failures. Retrying is safe/idempotent
-        #    (already-fetched content just reports "notneeded"), so retry a
-        #    few times before actually giving up -- a real, unrecoverable
-        #    problem (bad URL, missing permissions, etc) will still fail all
-        #    3 attempts and surface the same way as before.
-        log "[$DS] Prefetching subject data..."
-        local prefetch_ok=false
-        for attempt in 1 2 3; do
-            if run bash -c "cd '${input_clone}' && datalad get sub-*/ 2>/dev/null"; then
-                prefetch_ok=true
-                break
-            fi
-            if [[ $attempt -lt 3 ]]; then
-                warn "[$DS] Prefetch attempt ${attempt}/3 had failures, retrying..."
-                sleep 5
-            fi
-        done
-        $prefetch_ok || warn "[$DS] Prefetch failed after 3 attempts (or found no sub-* dirs)"
-
         log "[$DS] Setup complete"
     done
 
@@ -622,6 +599,54 @@ REMOTE_SCRIPT
 }
 
 # ── Phase 2: submit ───────────────────────────────────────────────────────────
+
+# Prefetches (`datalad get`) only the subjects in $subj_list -- not the
+# whole dataset -- since array tasks no longer call `datalad get`
+# themselves (datalad-slurm keeps all git/annex operations outside the
+# job). git-annex's own parallel transfer workers can transiently race on
+# the same lock ("transfer already in progress, or unable to take transfer
+# lock") under heavy concurrency across many subjects -- confirmed against
+# a real 150-subject dataset: a second `datalad get` cleared 27 such
+# errors with zero new failures. Retrying is safe/idempotent
+# (already-fetched content just reports "notneeded"), so retry a few times
+# before actually giving up -- a real, unrecoverable problem (bad URL,
+# missing permissions, etc) will still fail all 3 attempts and surface the
+# same way as before. Scoped to subject directories only, not filtered
+# further by BIDS datatype/modality.
+prefetch_cohort_subjects() {
+    local ds="$1" input_clone="$2" subj_list="$3"
+    local -a subj_ids
+    mapfile -t subj_ids < "$subj_list"
+    if [[ ${#subj_ids[@]} -eq 0 ]]; then
+        warn "[$ds] Subject list is empty -- nothing to prefetch"
+        return 1
+    fi
+
+    local targets=""
+    local s
+    for s in "${subj_ids[@]}"; do
+        targets+="'${s}/' "
+    done
+
+    log "[$ds] Prefetching ${#subj_ids[@]} subject(s)..."
+    local prefetch_ok=false
+    for attempt in 1 2 3; do
+        if run bash -c "cd '${input_clone}' && datalad get ${targets} 2>/dev/null"; then
+            prefetch_ok=true
+            break
+        fi
+        if [[ $attempt -lt 3 ]]; then
+            warn "[$ds] Prefetch attempt ${attempt}/3 had failures, retrying..."
+            sleep 5
+        fi
+    done
+    if ! $prefetch_ok; then
+        warn "[$ds] Prefetch failed after 3 attempts"
+        return 1
+    fi
+    return 0
+}
+
 cmd_submit() {
     check_todos
     resolve_config
@@ -699,6 +724,9 @@ cmd_submit() {
             failed=$((failed + 1)); continue
         fi
         log "[$DS] ${n_subjects} subjects$($PILOT && echo ' (PILOT)')"
+
+        prefetch_cohort_subjects "$DS" "$input_clone" "$subj_list" \
+            || { failed=$((failed + 1)); continue; }
 
         local commit_prefix=""
         $PILOT && commit_prefix="[PILOT] "
