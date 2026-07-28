@@ -1,0 +1,29 @@
+--- a/datalad_slurm/finish.py
++++ b/datalad_slurm/finish.py
+@@ -411,9 +411,6 @@
+         '"{}"'.format(record) if record_path else record,
+     )
+ 
+-    # remove the job
+-    remove_from_database(ds, slurm_run_info)
+-
+     start_branch=""
+     if branch:
+         start_branch= ds.repo.get_active_branch()
+@@ -436,6 +433,16 @@
+             ):
+                 yield r
+ 
++    # remove the job -- moved to run *after* the save completes (was
++    # originally before it). If this process gets killed mid-save
++    # (SLURM wallclock, scancel, OOM, node failure), the job's DB entry
++    # now survives, so a resubmitted `datalad slurm-finish <job_id>` can
++    # still find and retry it instead of silently orphaning whatever was
++    # staged but never committed. See bids_apps_runner's
++    # scripts/patches/datalad_slurm_finish_db_removal_order.patch for the
++    # incident history this fixes (upstream: knuedd/datalad-slurm#97).
++    remove_from_database(ds, slurm_run_info)
++
+     if branch:
+         ds.repo.checkout(f"{start_branch}")
+ 
