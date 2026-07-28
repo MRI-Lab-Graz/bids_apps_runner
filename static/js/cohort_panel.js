@@ -22,7 +22,10 @@ function toggleCohortPanel() {
     const open = body.style.display !== 'none';
     body.style.display = open ? 'none' : 'block';
     icon.style.transform = open ? '' : 'rotate(180deg)';
-    if (!open) checkCohortOpenJobs();
+    if (!open) {
+        checkCohortOpenJobs();
+        checkCohortStorageSync();
+    }
 }
 
 let _cohortOpenJobsCheck = { checking: false, error: null, openJobs: [] };
@@ -116,6 +119,104 @@ async function closeCohortOpenJobs() {
     } finally {
         closeBtn.disabled = false;
         checkCohortOpenJobs();
+    }
+}
+
+let _cohortStorageSyncCheck = { checking: false, error: null, canReclaim: false };
+
+async function checkCohortStorageSync() {
+    const panel = document.getElementById('cohortStoragePanel');
+    const badge = document.getElementById('cohortStorageBadge');
+    const detail = document.getElementById('cohortStorageDetail');
+    const cleanupBtn = document.getElementById('cohortCleanupStorageBtn');
+    if (!panel || !lastProjectId) { if (panel) panel.style.display = 'none'; return; }
+
+    panel.style.display = 'block';
+    panel.className = 'alert alert-secondary py-2 px-3 small mb-3';
+    _cohortStorageSyncCheck.checking = true;
+    badge.className = 'badge bg-secondary';
+    badge.textContent = 'Checking...';
+    detail.textContent = '';
+    cleanupBtn.style.display = 'none';
+
+    const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
+    const params = new URLSearchParams({
+        project_id: lastProjectId,
+        pipeline_id: currentPipelineId || '',
+        max_concurrent: maxConcurrent,
+    });
+
+    let data;
+    try {
+        const resp = await fetch(`/cohort/check_storage_sync?${params}`);
+        data = await resp.json();
+    } catch (err) {
+        _cohortStorageSyncCheck = { checking: false, error: 'Request failed: ' + err, canReclaim: false };
+        badge.className = 'badge bg-danger';
+        badge.textContent = 'Error';
+        detail.textContent = _cohortStorageSyncCheck.error;
+        return;
+    }
+
+    _cohortStorageSyncCheck.checking = false;
+    _cohortStorageSyncCheck.canReclaim = !!data.can_reclaim;
+
+    if (!data.output_cloned) {
+        panel.className = 'alert alert-secondary py-2 px-3 small mb-3';
+        badge.className = 'badge bg-secondary';
+        badge.textContent = 'Not cloned';
+        detail.textContent = 'Output dataset not cloned yet -- nothing to reclaim.';
+        return;
+    }
+
+    if (data.can_reclaim) {
+        panel.className = 'alert alert-success py-2 px-3 small mb-3';
+        badge.className = 'badge bg-success';
+        badge.textContent = 'Fully synced';
+        detail.textContent = 'Input/output clones can be safely reclaimed.';
+        cleanupBtn.style.display = 'inline-flex';
+        return;
+    }
+
+    const sync = data.output_sync || {};
+    panel.className = 'alert alert-warning py-2 px-3 small mb-3';
+    badge.className = 'badge bg-warning text-dark';
+    badge.textContent = 'Not synced';
+    detail.textContent = `Output clone has ${sync.uncommitted || 0} uncommitted path(s), `
+        + `${sync.unpushed || 0} unpushed commit(s)`
+        + (sync.error ? ` -- ${sync.error}` : '')
+        + '. Cannot reclaim until fully synced.';
+}
+
+async function cleanupCohortLocalStorage() {
+    if (!confirm(
+        'Reclaim local HPC disk for this dataset?\n\n'
+        + 'This runs `datalad drop` on BOTH the input clone and output clone '
+        + '(git-annex refuses if it cannot confirm content is safe elsewhere -- '
+        + 'this is not a raw delete, and repo metadata stays intact for a fast '
+        + 're-fetch later).\n\nContinue?'
+    )) return;
+
+    const cleanupBtn = document.getElementById('cohortCleanupStorageBtn');
+    cleanupBtn.disabled = true;
+    const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
+    try {
+        const resp = await fetch('/cohort/cleanup_local_storage', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                project_id: lastProjectId,
+                pipeline_id: currentPipelineId || '',
+                max_concurrent: maxConcurrent,
+            }),
+        });
+        const data = await resp.json();
+        logHPC(data.ok ? 'Reclaimed local input/output clone storage.' : (data.error || 'Failed to reclaim local storage.'), !data.ok);
+    } catch (err) {
+        logHPC('Request failed: ' + err, true);
+    } finally {
+        cleanupBtn.disabled = false;
+        checkCohortStorageSync();
     }
 }
 

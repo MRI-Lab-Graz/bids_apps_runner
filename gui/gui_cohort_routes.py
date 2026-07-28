@@ -24,6 +24,77 @@ def _datalad_subprocess_env() -> dict:
     return env
 
 
+def _git_sync_status(path: str) -> dict[str, Any]:
+    """Whether a git-annex/datalad clone at `path` is fully synced to its
+    origin remote: clean working tree, nothing committed locally that
+    hasn't made it to `refs/remotes/origin/<branch>`. Deliberately does no
+    network I/O (no `git fetch`) -- it only compares against the
+    remote-tracking ref left behind by the last successful push, the same
+    no-network property scripts/check_output_sync.sh already relies on
+    (see that script's own rationale comment) so this check can never hang
+    the way a live push/fetch can. Returns
+    {ok, branch, uncommitted, unpushed, error}.
+    """
+    result: dict[str, Any] = {
+        "ok": False,
+        "branch": None,
+        "uncommitted": 0,
+        "unpushed": 0,
+        "error": None,
+    }
+    if not (Path(path) / ".git").is_dir():
+        result["error"] = "Not a git repository."
+        return result
+
+    try:
+        status = subprocess.run(
+            ["git", "-C", path, "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if status.returncode != 0:
+            error_text = (status.stderr or status.stdout).strip().splitlines()
+            result["error"] = (
+                f"broken or unreadable git repository: {error_text[0] if error_text else ''}"
+            )
+            return result
+        result["uncommitted"] = len([line for line in status.stdout.splitlines() if line])
+
+        branch_proc = subprocess.run(
+            ["git", "-C", path, "symbolic-ref", "--short", "-q", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        branch = branch_proc.stdout.strip() or None
+        result["branch"] = branch
+
+        if branch:
+            ref_check = subprocess.run(
+                ["git", "-C", path, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{branch}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if ref_check.returncode == 0:
+                count_proc = subprocess.run(
+                    ["git", "-C", path, "rev-list", "--count", f"origin/{branch}..HEAD"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                result["unpushed"] = int((count_proc.stdout or "0").strip() or 0)
+    except subprocess.TimeoutExpired:
+        result["error"] = "Timed out checking git status."
+        return result
+
+    result["ok"] = (
+        result["error"] is None and result["uncommitted"] == 0 and result["unpushed"] == 0
+    )
+    return result
+
+
 def _parse_open_slurm_jobs(stdout: str) -> list[dict[str, str]]:
     """Parse the plain-text table `datalad slurm-finish --list-open-jobs`
     prints, e.g.:
@@ -366,6 +437,104 @@ def register_cohort_routes(
                 "output": (proc.stdout or "") + (proc.stderr or ""),
             }
         )
+
+    @app.route("/cohort/check_storage_sync", methods=["GET"])
+    def cohort_check_storage_sync():
+        """Read-only: reports whether this project's output clone is fully
+        synced to the datalad server -- the precondition for reclaiming
+        local HPC disk via /cohort/cleanup_local_storage. The input clone
+        is a read-only mirror of the datalad server (nothing local-only can
+        ever be lost there), so only the output clone's sync state gates
+        reclaiming.
+        """
+        project_id = (request.args.get("project_id") or "").strip()
+        pipeline_id = (request.args.get("pipeline_id") or "").strip()
+        max_concurrent = request.args.get("max_concurrent")
+
+        cohort_cfg, error_response = _build_cohort_config(
+            project_id, pipeline_id, max_concurrent
+        )
+        if error_response:
+            return error_response
+
+        input_dir = cohort_cfg["paths"]["input_dir"]
+        output_dir = cohort_cfg["paths"]["output_dir"]
+        output_sync = _git_sync_status(output_dir)
+
+        return jsonify(
+            {
+                "dataset": cohort_cfg["datasets"][0],
+                "input_dir": input_dir,
+                "output_dir": output_dir,
+                "input_cloned": (Path(input_dir) / ".git").is_dir(),
+                "output_cloned": (Path(output_dir) / ".git").is_dir(),
+                "output_sync": output_sync,
+                "can_reclaim": output_sync["ok"],
+            }
+        )
+
+    @app.route("/cohort/cleanup_local_storage", methods=["POST"])
+    def cohort_cleanup_local_storage():
+        """Manually-triggered only: reclaims local HPC disk for both the
+        input and output clones via `datalad drop` -- git-annex's own safe
+        drop, which refuses to remove content it can't confirm still
+        exists elsewhere (never a raw delete). The dataset's .git/.datalad
+        structure stays intact, so a later run can `datalad get` again
+        without a full re-clone. Gated on the output clone being fully
+        synced, re-verified here server-side rather than trusting an
+        earlier GET check -- unlike close_open_jobs (which only closes
+        already-dead jobs), this is destructive if wrong.
+        """
+        data = request.get_json(silent=True) or {}
+        project_id = (data.get("project_id") or "").strip()
+        pipeline_id = (data.get("pipeline_id") or "").strip()
+        max_concurrent = data.get("max_concurrent")
+
+        cohort_cfg, error_response = _build_cohort_config(
+            project_id, pipeline_id, max_concurrent
+        )
+        if error_response:
+            return error_response
+
+        input_dir = cohort_cfg["paths"]["input_dir"]
+        output_dir = cohort_cfg["paths"]["output_dir"]
+
+        if (Path(output_dir) / ".git").is_dir():
+            sync = _git_sync_status(output_dir)
+            if not sync["ok"]:
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error": "Output clone is not fully synced -- refusing to drop local content.",
+                            "output_sync": sync,
+                        }
+                    ),
+                    409,
+                )
+
+        results: dict[str, Any] = {}
+        for label, path in (("input", input_dir), ("output", output_dir)):
+            if not (Path(path) / ".git").is_dir():
+                results[label] = {"ok": True, "skipped": "not cloned"}
+                continue
+            try:
+                proc = subprocess.run(
+                    ["datalad", "drop", "-d", path, "-r", "."],
+                    cwd=path,
+                    capture_output=True,
+                    text=True,
+                    timeout=1800,
+                    env=_datalad_subprocess_env(),
+                )
+                results[label] = {
+                    "ok": proc.returncode == 0,
+                    "output": (proc.stdout or "") + (proc.stderr or ""),
+                }
+            except subprocess.TimeoutExpired:
+                results[label] = {"ok": False, "error": "Timed out running datalad drop."}
+
+        return jsonify({"ok": all(r["ok"] for r in results.values()), "results": results})
 
     @app.route("/cohort/run", methods=["POST"])
     def cohort_run():
