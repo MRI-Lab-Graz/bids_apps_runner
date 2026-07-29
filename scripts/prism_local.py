@@ -39,6 +39,28 @@ from app_profiles import resolve_app_name, resolve_app_profile, CATALOG
 # ============================================================================
 
 
+class LoginNodeExecutionError(RuntimeError):
+    """Raised when local/cluster mode would run real compute on a bare SLURM
+    login node -- see the loud policy block in execute_local() below."""
+
+
+def _on_bare_slurm_login_node() -> bool:
+    """True when `sbatch` exists on PATH (this host belongs to a SLURM
+    cluster) but the process has no active SLURM allocation of its own
+    (SLURM_JOB_ID/SLURM_JOBID unset) -- i.e. this is a bare login/edge node,
+    not a compute node reached via `sbatch`/`salloc`/`srun`.
+
+    Deliberately does NOT shell out to `sinfo`/`scontrol`: those can hang or
+    be slow under scheduler load, and the env-var check alone is the same
+    signal every other SLURM-aware tool relies on to know it's inside an
+    allocation. A plain local workstation with no SLURM at all (no `sbatch`)
+    correctly returns False here and is unaffected.
+    """
+    if shutil.which("sbatch") is None:
+        return False
+    return not (os.environ.get("SLURM_JOB_ID") or os.environ.get("SLURM_JOBID"))
+
+
 def _gpu_available():
     """Return True when an NVIDIA GPU is present on this host."""
     return shutil.which("nvidia-smi") is not None
@@ -1512,6 +1534,38 @@ def execute_local(config: Dict[str, Any], args: Namespace) -> bool:
     logging.info("=" * 60)
     logging.info("LOCAL/CLUSTER EXECUTION MODE")
     logging.info("=" * 60)
+
+    # ------------------------------------------------------------------
+    # POLICY: never run real compute (container execution, `datalad get`
+    # of actual subject data, result commits) on a bare SLURM login node.
+    # Real incident (2026-07-29): a `datalad push` was run interactively
+    # on IT010128, the shared login node -- confirmed via `sinfo -N` not
+    # listing it as a cluster member, while every actual compute node
+    # (IT010130+) was in the pool. The admin's explicit instruction was
+    # "do not use the login node"; doing it again risks losing cluster
+    # access entirely. `--dry-run` is exempt: it never touches the
+    # container/network, so it stays safe (and useful) to run here for
+    # config validation. See CLAUDE.md's "HPC login node policy" section.
+    # ------------------------------------------------------------------
+    if not getattr(args, "dry_run", False) and _on_bare_slurm_login_node():
+        raise LoginNodeExecutionError(
+            "\n"
+            + "=" * 72 + "\n"
+            "REFUSING TO RUN: this host is a SLURM login/edge node (sbatch\n"
+            "is on PATH but no SLURM_JOB_ID/SLURM_JOBID allocation is active).\n"
+            "Local/cluster execution mode runs real compute (containers,\n"
+            "`datalad get`/`push`) directly in this process -- never do that\n"
+            "on a login node.\n"
+            "\n"
+            "Use the sbatch-backed path instead:\n"
+            "  scripts/submit_bids_cohort.sh submit -c <config>\n"
+            "or, for a single ad-hoc subject:\n"
+            "  scripts/hpc_datalad_runner.py -c <config> -s <subject> \\\n"
+            "      -o <script.sh> --submit\n"
+            "or run this same --local command inside a real allocation\n"
+            "(salloc/srun), which sets SLURM_JOB_ID automatically.\n"
+            + "=" * 72
+        )
 
     common = config.get("common", {})
     app = config.get("app", {})
