@@ -204,11 +204,23 @@ function syncActivePipelineFromForm() {
         jobs: parseInt(document.getElementById('jobs').value) || 1
     };
 
+    // Comma-separated, e.g. "1,2" or "ses-1,ses-2" -- normalized to full
+    // "ses-X" labels here so scripts/check_app_output.py's --sessions flag
+    // (and get_sessions() filtering) always receives canonical session
+    // dirnames to match against, regardless of how the user typed it.
+    const expectedSessionsEl = document.getElementById('expected_sessions');
+    const expectedSessions = (expectedSessionsEl ? expectedSessionsEl.value : '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(s => (s.startsWith('ses-') ? s : `ses-${s}`));
+
     const gpuEnabledEl = document.getElementById('gpu_enabled');
     const activeApp = {
         analysis_level: document.getElementById('analysis_level').value,
         options: opts,
         mounts: mounts,
+        expected_sessions: expectedSessions,
         ...(gpuEnabledEl && !gpuEnabledEl.disabled && !gpuEnabledEl.checked ? { disable_gpu: true } : {})
     };
 

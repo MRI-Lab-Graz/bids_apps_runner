@@ -54,6 +54,7 @@ function normalizePipelineEntry(rawEntry, fallbackName = 'Pipeline') {
 
     if (!Array.isArray(app.options)) app.options = [];
     if (!Array.isArray(app.mounts)) app.mounts = [];
+    if (!Array.isArray(app.expected_sessions)) app.expected_sessions = [];
     if (!app.analysis_level) app.analysis_level = 'participant';
 
     const common =
@@ -251,6 +252,7 @@ async function applyPipelineEntryToRunnerForm(entry, options = {}) {
         document.getElementById('notify_email').value = common.notify_email || '';
         document.getElementById('jobs').value = common.jobs || 1;
         document.getElementById('analysis_level').value = app.analysis_level || 'participant';
+        document.getElementById('expected_sessions').value = (app.expected_sessions || []).join(',');
         syncRunnerSubjectFilterWithAnalysisLevel();
         const gpuChk = document.getElementById('gpu_enabled');
         if (gpuChk && !gpuChk.disabled) gpuChk.checked = !app.disable_gpu;
@@ -1224,6 +1226,7 @@ async function applyProjectData(project, projectIdOverride) {
         document.getElementById('notify_email').value = common.notify_email || '';
         document.getElementById('jobs').value = common.jobs || 1;
         document.getElementById('analysis_level').value = app.analysis_level || 'participant';
+        document.getElementById('expected_sessions').value = (app.expected_sessions || []).join(',');
         syncRunnerSubjectFilterWithAnalysisLevel();
         const fastsurferLongitudinalEl = document.getElementById('fastsurfer_longitudinal');
         if (fastsurferLongitudinalEl) {

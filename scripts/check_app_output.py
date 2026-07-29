@@ -24,9 +24,19 @@ import re
 class BIDSChecker:
     """Base class for BIDS pipeline output validation."""
 
-    def __init__(self, bids_dir: Path, derivatives_dir: Path):
+    def __init__(
+        self,
+        bids_dir: Path,
+        derivatives_dir: Path,
+        expected_sessions: Optional[Set[str]] = None,
+    ):
         self.bids_dir = bids_dir
         self.derivatives_dir = derivatives_dir
+        # Restricts which BIDS sessions this pipeline is expected to have
+        # output for (e.g. a study that only ran FreeSurfer on ses-1/ses-2
+        # of a 3-session dataset). None/empty means "expect every session
+        # found in the BIDS source" (the old, unscoped behavior).
+        self.expected_sessions = set(expected_sessions) if expected_sessions else None
         self.missing_items = []
         self.logger = logging.getLogger(__name__)
         self.stats = {
@@ -35,7 +45,8 @@ class BIDSChecker:
                 "version": "Unknown",
                 "bids_version": "Unknown",
                 "description": "",
-            }
+            },
+            "expected_sessions": sorted(self.expected_sessions) if self.expected_sessions else None,
         }  # For pipeline-specific statistics
 
     def _extract_metadata(self, pipeline_dir: Path):
@@ -211,9 +222,19 @@ class BIDSChecker:
         return sorted([d for d in directory.glob("sub-*") if d.is_dir()])
 
     def get_sessions(self, subject_dir: Path) -> List[Path]:
-        """Get sessions for a subject, or return subject dir if no sessions."""
+        """Get sessions for a subject, or return subject dir if no sessions.
+        When `expected_sessions` is set, sessions outside that set are
+        excluded -- e.g. a subject with ses-1/2/3 in BIDS but
+        expected_sessions={"ses-1", "ses-2"} only yields ses-1/ses-2, so a
+        pipeline deliberately scoped to a subset of sessions isn't flagged
+        as missing output for sessions it was never meant to process.
+        """
         session_dirs = list(subject_dir.glob("ses-*"))
-        return sorted(session_dirs) if session_dirs else [subject_dir]
+        if not session_dirs:
+            return [subject_dir]
+        if self.expected_sessions:
+            session_dirs = [d for d in session_dirs if d.name in self.expected_sessions]
+        return sorted(session_dirs)
 
     def add_missing_item(self, item: str, severity: str = "ERROR"):
         """Add a missing item to the list with severity level."""
@@ -457,19 +478,27 @@ class FreeSurferChecker(BIDSChecker):
             has_longitudinal = any(".long" in fs_dir.name for fs_dir in fs_dirs)
             subject_tracking[subj]["has_longitudinal_processing"] = has_longitudinal
 
-            # Determine expected folder count based on actual processing type
-            if anat_sessions == 1:
+            # Determine expected folder count based on actual processing type.
+            # `has_longitudinal` is checked first (not just anat_sessions > 1)
+            # because some pipelines run the -base/-long stream even for a
+            # single-timepoint subject, producing base+cross+long (3 folders)
+            # for what is otherwise a "single-session" subject -- a bare
+            # anat_sessions==1 check would misclassify that as
+            # cross-sectional-only and flag the extra base/long folders as a
+            # false "count mismatch".
+            if has_longitudinal:
+                # Longitudinal processing: N cross + 1 base + N long
+                expected_count = 2 * anat_sessions + 1
+                processing_type = (
+                    "longitudinal" if anat_sessions > 1 else "longitudinal (single timepoint)"
+                )
+            elif anat_sessions == 1:
                 expected_count = 1
                 processing_type = "single-session"
             else:
-                if has_longitudinal:
-                    # Longitudinal processing: N cross + 1 base + N long
-                    expected_count = 2 * anat_sessions + 1
-                    processing_type = "longitudinal"
-                else:
-                    # Cross-sectional processing: N cross-sectional folders
-                    expected_count = anat_sessions
-                    processing_type = "cross-sectional"
+                # Cross-sectional processing: N cross-sectional folders
+                expected_count = anat_sessions
+                processing_type = "cross-sectional"
 
             if len(fs_dirs) != expected_count:
                 actual_dirs = [d.name for d in fs_dirs]
@@ -1287,11 +1316,13 @@ class BIDSOutputValidator:
         verbose: bool = False,
         quiet: bool = False,
         log_file: Optional[Path] = None,
+        expected_sessions: Optional[Set[str]] = None,
     ):
         self.bids_dir = bids_dir
         self.derivatives_dir = derivatives_dir
         self.verbose = verbose
         self.quiet = quiet
+        self.expected_sessions = set(expected_sessions) if expected_sessions else None
         self.setup_logging(verbose, quiet, log_file)
         self.results = {}
 
@@ -1452,7 +1483,9 @@ class BIDSOutputValidator:
 
         # Run the checker
         checker_class = self.PIPELINE_CHECKERS[checker_name]
-        checker = checker_class(self.bids_dir, checker_root)
+        checker = checker_class(
+            self.bids_dir, checker_root, expected_sessions=self.expected_sessions
+        )
 
         success = checker.check_pipeline(pipeline_dir)
 
@@ -1891,6 +1924,16 @@ Examples:
         type=Path,
         help="Save detailed missing subjects/sessions report to JSON file",
     )
+    parser.add_argument(
+        "--sessions",
+        help=(
+            "Comma-separated list of BIDS sessions this pipeline is expected "
+            "to have output for (e.g. ses-1,ses-2). Sessions outside this set "
+            "are not flagged as missing -- use this when a pipeline was "
+            "deliberately only run on a subset of a dataset's sessions. "
+            "Omit to expect every session found in the BIDS source."
+        ),
+    )
 
     # Show help if no arguments provided
     if len(sys.argv) == 1:
@@ -1923,10 +1966,19 @@ Examples:
         )
         sys.exit(1)
 
+    expected_sessions = None
+    if args.sessions:
+        expected_sessions = {s.strip() for s in args.sessions.split(",") if s.strip()}
+
     # Run validation
     try:
         validator = BIDSOutputValidator(
-            args.bids_dir, args.derivatives_dir, args.verbose, args.quiet, args.log
+            args.bids_dir,
+            args.derivatives_dir,
+            args.verbose,
+            args.quiet,
+            args.log,
+            expected_sessions=expected_sessions,
         )
         results = validator.validate_all(args.pipeline)
 

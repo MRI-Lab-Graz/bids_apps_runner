@@ -825,6 +825,14 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50):
             # generic apptainer run /bids /output participant convention,
             # which FastSurfer's container entrypoint doesn't understand.
             "execution_adapter": app.get("execution_adapter") or "",
+            # Which BIDS sessions this pipeline is expected to have output
+            # for -- e.g. FreeSurfer deliberately only run on ses-1/ses-2 of
+            # a 3-session dataset. Consumed by
+            # gui_cohort_routes.py::_pipeline_completeness_status (via
+            # check_app_output.py --sessions) so the HPC housekeeping
+            # completeness gate doesn't flag out-of-scope sessions as
+            # missing. Empty means "expect every session in the dataset".
+            "expected_sessions": app.get("expected_sessions") or [],
         },
         # Cohort/SLURM-array-only follow-up: runs FreeSurfer's
         # segment_subregions (thalamus/hippo-amygdala/brainstem) against

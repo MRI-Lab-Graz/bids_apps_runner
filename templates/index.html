@@ -903,6 +903,12 @@
                         </div>
                     </div>
                     <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <label class="form-label" title="Restricts scripts/check_app_output.py's completeness check to these sessions for this pipeline -- use when a pipeline is deliberately only run on a subset of the dataset's sessions (e.g. FreeSurfer on ses-1/ses-2 of a 3-session dataset). Leave blank to expect output for every session found in the BIDS source.">Expected Sessions (optional)</label>
+                            <input type="text" class="form-control" id="expected_sessions" placeholder="e.g. ses-1,ses-2 -- leave blank for all sessions">
+                        </div>
+                    </div>
+                    <div class="row">
                         <div class="col-md-12 mb-3">
                             <div class="form-check" id="gpu_toggle_wrap" title="When an NVIDIA GPU is detected the container engine receives --nv (Apptainer) or --gpus all (Docker). Uncheck to disable GPU passthrough for this pipeline.">
                                 <input class="form-check-input" type="checkbox" id="gpu_enabled" checked>
@@ -1631,6 +1637,12 @@
                                 <input class="form-check-input validation-setting" type="checkbox" id="validation_missing_only">
                                 <label class="form-check-label" for="validation_missing_only">List Missing Only</label>
                             </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label" title="Restricts the completeness check to these sessions -- use when this pipeline was deliberately only run on a subset of the dataset's sessions. Auto-filled from the pipeline's 'Expected Sessions' setting in Execution Parameters when empty. Leave blank to expect every session found in the BIDS source.">Expected Sessions (optional)</label>
+                            <input type="text" class="form-control validation-setting" id="validation_sessions" placeholder="e.g. ses-1,ses-2 -- leave blank for all sessions">
                         </div>
                     </div>
                     <div class="d-flex flex-wrap gap-2 mb-3">
@@ -3116,6 +3128,7 @@
                     bids_folder: document.getElementById('validation_bids_folder').value.trim(),
                     derivatives_folder: document.getElementById('validation_derivatives_folder').value.trim(),
                     pipeline: document.getElementById('validation_pipeline').value,
+                    sessions: document.getElementById('validation_sessions').value.trim(),
                     verbose: document.getElementById('validation_verbose').checked,
                     quiet: document.getElementById('validation_quiet').checked,
                     list_missing: document.getElementById('validation_missing_only').checked
@@ -3483,6 +3496,7 @@
                 document.getElementById('validation_bids_folder').value = validation.bids_folder || activeCommon.bids_folder || '';
                 document.getElementById('validation_derivatives_folder').value = validation.derivatives_folder || activeCommon.output_folder || '';
                 document.getElementById('validation_pipeline').value = validation.pipeline || '';
+                document.getElementById('validation_sessions').value = validation.sessions || '';
                 document.getElementById('validation_verbose').checked = !!validation.verbose;
                 document.getElementById('validation_quiet').checked = !!validation.quiet;
                 document.getElementById('validation_missing_only').checked = !!validation.list_missing;
@@ -3594,6 +3608,9 @@
                     } else if (!document.getElementById('validation_derivatives_folder').value && document.getElementById('output_folder').value) {
                         document.getElementById('validation_derivatives_folder').value = document.getElementById('output_folder').value;
                     }
+                    if (!document.getElementById('validation_sessions').value && document.getElementById('expected_sessions').value) {
+                        document.getElementById('validation_sessions').value = document.getElementById('expected_sessions').value;
+                    }
                     scheduleCheckPreflightRefresh();
                 } else if (tabId === 'buildTab') {
                     initTfDownloadPanel();
@@ -3664,6 +3681,7 @@
                 bids_folder: bids,
                 derivatives_folder: derivatives,
                 pipeline: (document.getElementById('validation_pipeline').value || '').trim(),
+                sessions: (document.getElementById('validation_sessions').value || '').trim(),
                 verbose: verbose,
                 quiet: quiet,
                 list_missing: document.getElementById('validation_missing_only').checked,
@@ -3829,6 +3847,7 @@
                         bids_dir: settings.bids_folder,
                         derivatives_dir: settings.derivatives_folder,
                         pipeline: settings.pipeline,
+                        sessions: settings.sessions,
                         verbose: settings.verbose,
                         quiet: settings.quiet,
                         list_missing: settings.list_missing

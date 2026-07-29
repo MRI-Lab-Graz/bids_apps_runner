@@ -168,6 +168,18 @@ describe('syncActivePipelineFromForm', () => {
         expect(syncActivePipelineFromForm().app.execution_adapter).toBeUndefined();
     });
 
+    it('normalizes expected_sessions to full ses-X labels, comma-separated or bare numbers alike', () => {
+        document.getElementById('expected_sessions').value = ' ses-1, 2 ,ses-baseline ';
+
+        const result = syncActivePipelineFromForm();
+
+        expect(result.app.expected_sessions).toEqual(['ses-1', 'ses-2', 'ses-baseline']);
+    });
+
+    it('defaults expected_sessions to an empty array when left blank', () => {
+        expect(syncActivePipelineFromForm().app.expected_sessions).toEqual([]);
+    });
+
     it('carries subregion_segmentation config through from the real subregion_segmentation.js module', () => {
         stubInlineGlobals({ pipelineAppName: 'freesurfer' });
         document.getElementById('subregion_segmentation_enabled')?.remove();

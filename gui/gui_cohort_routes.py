@@ -112,6 +112,7 @@ def _pipeline_completeness_status(cohort_cfg: dict[str, Any], base_dir: Path) ->
     bids_dir = cohort_cfg["paths"]["input_dir"]
     derivatives_dir = cohort_cfg["paths"]["output_dir"]
     app_name = cohort_cfg["bids_app"]["app_name"]
+    expected_sessions = cohort_cfg["bids_app"].get("expected_sessions") or []
 
     script_path = base_dir / "scripts" / "check_app_output.py"
     cmd = [
@@ -120,6 +121,8 @@ def _pipeline_completeness_status(cohort_cfg: dict[str, Any], base_dir: Path) ->
         "-p", app_name,
         "--json", "--quiet",
     ]
+    if expected_sessions:
+        cmd.extend(["--sessions", ",".join(expected_sessions)])
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=600, cwd=str(base_dir)

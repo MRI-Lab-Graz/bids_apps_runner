@@ -15,6 +15,7 @@ export function executionParamsFixtureHtml() {
         <input id="notify_email" value="">
         <input id="jobs" value="1">
         <select id="analysis_level"><option value="participant" selected>participant</option></select>
+        <input id="expected_sessions" value="">
 
         <input type="checkbox" id="gpu_enabled">
 

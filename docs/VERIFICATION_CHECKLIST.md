@@ -19,6 +19,12 @@
 - [ ] Run scripts/check_app_output.py from CLI
 - [ ] Detailed Failures list distinguishes entries with different
       subjects/sessions (not just the first line of the message)
+- [ ] Setting "Expected Sessions" (e.g. `ses-1,ses-2`) on a pipeline in
+      Execution Parameters, saving, then running Verify Output for that
+      pipeline no longer flags the excluded session(s) as missing
+- [ ] "Expected Sessions" in Verify Output auto-fills from the active
+      pipeline's setting when switching to the Check tab, and round-trips
+      through save/load
 
 ## HPC Storage Housekeeping
 
@@ -38,6 +44,9 @@
       and the confirm() dialog repeats it before any `datalad drop` runs
 - [ ] `/cohort/cleanup_local_storage` re-verifies both checks server-side
       (409s) rather than trusting the earlier GET
+- [ ] A pipeline with "Expected Sessions" set does not show "Incomplete
+      output" for sessions outside that scope -- the completeness check
+      forwards `app.expected_sessions` to `--sessions` automatically
 - [ ] Sending both `force_unverified: true` and `force_incomplete_output:
       true` still 409s when the output clone itself isn't synced -- no
       force flag bypasses the git-sync precondition

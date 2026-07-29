@@ -221,6 +221,54 @@ class TestCheckStorageSync:
         assert data["completeness"]["ok"] is True
         assert data["completeness"]["supported"] is True
 
+    def test_forwards_expected_sessions_to_checker(self, client, disposable_project, tmp_path, monkeypatch):
+        """A project whose pipeline is scoped to a subset of sessions (e.g.
+        FreeSurfer only run on ses-1/ses-2) should have that scope forwarded
+        to check_app_output.py's --sessions flag, so the completeness gate
+        doesn't flag out-of-scope sessions as missing."""
+        output_dir = _make_synced_repo(tmp_path)
+        bids_dir = tmp_path / "bids"
+        bids_dir.mkdir(exist_ok=True)
+        container = tmp_path / "container.sif"
+        container.write_text("fake")
+        _save(
+            disposable_project,
+            {
+                "bids_folder": str(bids_dir),
+                "output_folder": str(output_dir),
+                "container": str(container),
+                "container_engine": "apptainer",
+                "pipeline_app_name": "freesurfer",
+            },
+            {
+                "analysis_level": "participant",
+                "options": [],
+                "mounts": [],
+                "expected_sessions": ["ses-1", "ses-2"],
+            },
+            hpc={"partition": "hpc", "time": "06:00:00", "mem": "8G", "cpus": 2},
+        )
+
+        calls = []
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            if cmd and len(cmd) > 1 and "check_app_output.py" in str(cmd[1]):
+                calls.append(cmd)
+                return _FakeCompletedProcess(
+                    returncode=0, stdout=_completeness_stdout("freesurfer", [])
+                )
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr(gui_cohort_routes.subprocess, "run", fake_run)
+
+        resp = client.get(f"/cohort/check_storage_sync?project_id={disposable_project}")
+        data = resp.get_json()
+        assert data["completeness"]["ok"] is True
+        assert len(calls) == 1
+        assert "--sessions" in calls[0]
+        assert calls[0][calls[0].index("--sessions") + 1] == "ses-1,ses-2"
+
     def test_reports_dirty(self, client, disposable_project, tmp_path):
         output_dir = _make_synced_repo(tmp_path)
         _dirty(output_dir)

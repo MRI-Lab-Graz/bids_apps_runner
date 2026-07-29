@@ -124,6 +124,9 @@ def register_misc_routes(
         pipeline = (data.get("pipeline") or "").strip()
         if pipeline:
             cmd.extend(["-p", pipeline])
+        sessions = (data.get("sessions") or "").strip()
+        if sessions:
+            cmd.extend(["--sessions", sessions])
         if verbose:
             cmd.append("--verbose")
         if quiet:

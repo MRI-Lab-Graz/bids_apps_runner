@@ -137,6 +137,26 @@ CLI example:
 python scripts/check_app_output.py /path/to/bids /path/to/derivatives --output-json missing.json
 ```
 
+### Scoping a pipeline to a subset of sessions
+
+Some studies deliberately only run a given BIDS App on a subset of a
+dataset's sessions (e.g. FreeSurfer on ses-1/ses-2 of a 3-session dataset,
+with ses-3 out of scope for that pipeline). Without telling the checker
+about that scope, every out-of-scope session shows up as a false "missing"
+item, which can make an otherwise-complete pipeline look wildly incomplete.
+
+- CLI: pass `--sessions ses-1,ses-2` to `check_app_output.py` to restrict
+  which sessions that run expects output for.
+- GUI: set "Expected Sessions" (optional) in a pipeline's Execution
+  Parameters -- persisted per-pipeline in `project.json`'s
+  `app.expected_sessions`, so it's remembered rather than re-typed. It's
+  respected everywhere the checker runs for that pipeline: the "Verify
+  Output" panel (auto-filled from it, editable per-run) and the HPC
+  housekeeping completeness gate below (always forwarded automatically,
+  no manual step).
+- Leaving it blank (the default) expects output for every session found in
+  the BIDS source -- the original, unscoped behavior.
+
 ### Reclaiming HPC storage
 
 The Cohort panel's "HPC Local Storage" box (`/cohort/check_storage_sync`,
