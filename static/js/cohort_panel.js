@@ -124,11 +124,22 @@ async function closeCohortOpenJobs() {
 
 let _cohortStorageSyncCheck = { checking: false, error: null, canReclaim: false };
 
+function _renderMissingItemsList(missingItems, max) {
+    const shown = missingItems.slice(0, max);
+    let html = shown.map(m => `<div>- ${escapeHtml(summarizeMissingItem(m))}</div>`).join('');
+    if (missingItems.length > max) {
+        html += `<div>... and ${missingItems.length - max} more</div>`;
+    }
+    return html;
+}
+
 async function checkCohortStorageSync() {
     const panel = document.getElementById('cohortStoragePanel');
     const badge = document.getElementById('cohortStorageBadge');
     const detail = document.getElementById('cohortStorageDetail');
     const cleanupBtn = document.getElementById('cohortCleanupStorageBtn');
+    const forceWrap = document.getElementById('cohortStorageForceUnverifiedWrap');
+    const forceCheckbox = document.getElementById('cohortStorageForceUnverified');
     if (!panel || !lastProjectId) { if (panel) panel.style.display = 'none'; return; }
 
     panel.style.display = 'block';
@@ -136,8 +147,10 @@ async function checkCohortStorageSync() {
     _cohortStorageSyncCheck.checking = true;
     badge.className = 'badge bg-secondary';
     badge.textContent = 'Checking...';
-    detail.textContent = '';
+    detail.innerHTML = '';
     cleanupBtn.style.display = 'none';
+    forceWrap.style.display = 'none';
+    forceCheckbox.checked = false;
 
     const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
     const params = new URLSearchParams({
@@ -170,32 +183,67 @@ async function checkCohortStorageSync() {
     }
 
     if (data.can_reclaim) {
+        const pipelineName = data.completeness && data.completeness.pipeline;
         panel.className = 'alert alert-success py-2 px-3 small mb-3';
         badge.className = 'badge bg-success';
-        badge.textContent = 'Fully synced';
-        detail.textContent = 'Input/output clones can be safely reclaimed.';
+        badge.textContent = 'Fully synced & complete';
+        detail.textContent = pipelineName
+            ? `Input/output clones are synced and pipeline '${pipelineName}' output is complete -- safe to reclaim.`
+            : 'Input/output clones can be safely reclaimed.';
         cleanupBtn.style.display = 'inline-flex';
         return;
     }
 
     const sync = data.output_sync || {};
+    if (!sync.ok) {
+        panel.className = 'alert alert-warning py-2 px-3 small mb-3';
+        badge.className = 'badge bg-warning text-dark';
+        badge.textContent = 'Not synced';
+        detail.textContent = `Output clone has ${sync.uncommitted || 0} uncommitted path(s), `
+            + `${sync.unpushed || 0} unpushed commit(s)`
+            + (sync.error ? ` -- ${sync.error}` : '')
+            + '. Cannot reclaim until fully synced.';
+        return;
+    }
+
+    // Synced, but the pipeline-specific completeness check (run only once
+    // sync passes) didn't come back clean.
+    const completeness = data.completeness || {};
     panel.className = 'alert alert-warning py-2 px-3 small mb-3';
-    badge.className = 'badge bg-warning text-dark';
-    badge.textContent = 'Not synced';
-    detail.textContent = `Output clone has ${sync.uncommitted || 0} uncommitted path(s), `
-        + `${sync.unpushed || 0} unpushed commit(s)`
-        + (sync.error ? ` -- ${sync.error}` : '')
-        + '. Cannot reclaim until fully synced.';
+    if (completeness.supported) {
+        badge.className = 'badge bg-warning text-dark';
+        badge.textContent = 'Incomplete output';
+        const missing = completeness.missing_items || [];
+        detail.innerHTML = `Output clone is synced, but '${completeness.pipeline}' is missing `
+            + `${missing.length} item(s) -- cannot reclaim until the run is complete:`
+            + _renderMissingItemsList(missing, 5);
+    } else {
+        badge.className = 'badge bg-warning text-dark';
+        badge.textContent = 'Unverified';
+        detail.textContent = completeness.error
+            || `No automated completeness checker is available for pipeline '${completeness.pipeline}'.`;
+        forceWrap.style.display = 'block';
+        forceCheckbox.onchange = () => {
+            cleanupBtn.style.display = forceCheckbox.checked ? 'inline-flex' : 'none';
+        };
+    }
 }
 
 async function cleanupCohortLocalStorage() {
-    if (!confirm(
-        'Reclaim local HPC disk for this dataset?\n\n'
+    const forceCheckbox = document.getElementById('cohortStorageForceUnverified');
+    const forceUnverified = !!(forceCheckbox && forceCheckbox.checked);
+
+    let confirmMsg = 'Reclaim local HPC disk for this dataset?\n\n'
         + 'This runs `datalad drop` on BOTH the input clone and output clone '
         + '(git-annex refuses if it cannot confirm content is safe elsewhere -- '
         + 'this is not a raw delete, and repo metadata stays intact for a fast '
-        + 're-fetch later).\n\nContinue?'
-    )) return;
+        + 're-fetch later).';
+    if (forceUnverified) {
+        confirmMsg += '\n\nWARNING: output completeness for this pipeline could NOT be '
+            + 'automatically verified -- you are proceeding on your own manual check.';
+    }
+    confirmMsg += '\n\nContinue?';
+    if (!confirm(confirmMsg)) return;
 
     const cleanupBtn = document.getElementById('cohortCleanupStorageBtn');
     cleanupBtn.disabled = true;
@@ -208,6 +256,7 @@ async function cleanupCohortLocalStorage() {
                 project_id: lastProjectId,
                 pipeline_id: currentPipelineId || '',
                 max_concurrent: maxConcurrent,
+                force_unverified: forceUnverified,
             }),
         });
         const data = await resp.json();

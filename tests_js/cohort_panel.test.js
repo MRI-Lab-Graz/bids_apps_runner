@@ -6,6 +6,9 @@ const FIXTURE_HTML = `
     <div id="cohortStoragePanel" style="display:none;">
         <span id="cohortStorageBadge"></span>
         <div id="cohortStorageDetail"></div>
+        <div id="cohortStorageForceUnverifiedWrap" style="display:none;">
+            <input type="checkbox" id="cohortStorageForceUnverified">
+        </div>
         <button id="cohortCleanupStorageBtn" style="display:none;"></button>
     </div>
 `;
@@ -16,22 +19,77 @@ beforeEach(() => {
     window.currentPipelineId = 'default';
     window.logHPC = vi.fn();
     window.escapeHtml = (s) => s;
+    loadScript('missing_items.js');
     loadScript('cohort_panel.js');
 });
 
 describe('checkCohortStorageSync', () => {
-    it('shows "Fully synced" and the cleanup button when can_reclaim is true', async () => {
+    it('shows "Fully synced & complete" and the cleanup button when can_reclaim is true', async () => {
         window.fetch = vi.fn().mockResolvedValue({
             json: () => Promise.resolve({
                 output_cloned: true,
                 can_reclaim: true,
                 output_sync: { ok: true, uncommitted: 0, unpushed: 0 },
+                completeness: { ok: true, supported: true, pipeline: 'qsiprep', missing_items: [] },
             }),
         });
 
         await checkCohortStorageSync();
 
-        expect(document.getElementById('cohortStorageBadge').textContent).toBe('Fully synced');
+        expect(document.getElementById('cohortStorageBadge').textContent).toBe('Fully synced & complete');
+        expect(document.getElementById('cohortCleanupStorageBtn').style.display).toBe('inline-flex');
+        expect(document.getElementById('cohortStorageForceUnverifiedWrap').style.display).toBe('none');
+    });
+
+    it('shows missing items and hides the cleanup button when the pipeline output is incomplete', async () => {
+        window.fetch = vi.fn().mockResolvedValue({
+            json: () => Promise.resolve({
+                output_cloned: true,
+                can_reclaim: false,
+                output_sync: { ok: true, uncommitted: 0, unpushed: 0 },
+                completeness: {
+                    ok: false,
+                    supported: true,
+                    pipeline: 'qsiprep',
+                    missing_items: ['[ERROR] DWI directory missing for session with DWI data in other sessions:\n    Subject:  sub-01\n    Session:  ses-2'],
+                },
+            }),
+        });
+
+        await checkCohortStorageSync();
+
+        expect(document.getElementById('cohortStorageBadge').textContent).toBe('Incomplete output');
+        expect(document.getElementById('cohortCleanupStorageBtn').style.display).toBe('none');
+        expect(document.getElementById('cohortStorageForceUnverifiedWrap').style.display).toBe('none');
+        expect(document.getElementById('cohortStorageDetail').innerHTML).toContain('sub-01');
+    });
+
+    it('shows the force-unverified checkbox for pipelines with no automated checker, and reveals cleanup when checked', async () => {
+        window.fetch = vi.fn().mockResolvedValue({
+            json: () => Promise.resolve({
+                output_cloned: true,
+                can_reclaim: false,
+                output_sync: { ok: true, uncommitted: 0, unpushed: 0 },
+                completeness: {
+                    ok: false,
+                    supported: false,
+                    pipeline: 'custom_app',
+                    missing_items: [],
+                    error: "No automated output-completeness checker is available for pipeline 'custom_app'.",
+                },
+            }),
+        });
+
+        await checkCohortStorageSync();
+
+        expect(document.getElementById('cohortStorageBadge').textContent).toBe('Unverified');
+        expect(document.getElementById('cohortCleanupStorageBtn').style.display).toBe('none');
+        const forceWrap = document.getElementById('cohortStorageForceUnverifiedWrap');
+        expect(forceWrap.style.display).toBe('block');
+
+        const forceCheckbox = document.getElementById('cohortStorageForceUnverified');
+        forceCheckbox.checked = true;
+        forceCheckbox.onchange();
         expect(document.getElementById('cohortCleanupStorageBtn').style.display).toBe('inline-flex');
     });
 

@@ -14,7 +14,7 @@ SLURM array jobs and DataLad on a shared-filesystem HPC.
 | `jq` | HPC login node | JSON parsing in the orchestration script |
 | `sbatch` / `squeue` | HPC login node | SLURM scheduler |
 | SSH access | DataLad server | For creating output repos |
-| fMRIPrep `.sif` | HPC shared storage | Build via `scripts/build_apptainer.sh` |
+| fMRIPrep `.sif` | HPC shared storage | Built on a dedicated build server, delivered via `rsync`/`scp` |
 | TemplateFlow cache | HPC shared storage | Pre-populate once, bind-mount at runtime |
 | FreeSurfer `license.txt` | HPC shared storage | Bind-mount at runtime |
 
@@ -68,14 +68,12 @@ get('MNI152NLin2009cAsym', resolution=2)
 
 ## Step 2 — Build fMRIPrep container (once)
 
-```bash
-# On the HPC login node (or build node):
-./scripts/build_apptainer.sh \
-    --docker nipreps/fmriprep:24.1.0 \
-    --output /hpc/containers/fmriprep-24.1.0.sif
-```
-
-Or via the GUI → **Build** tab.
+Containers are no longer built on the HPC login node (compute there is
+against IT policy) or via the GUI. Build the `.sif` on the dedicated
+container-build server/repo, then deliver it via `rsync`/`scp` to the shared
+HPC path referenced by `paths.container` above -- the remote destination on
+the DataLad server is configured once in `configs/global_settings.json`
+(`default.remote_container_path`), not hardcoded here.
 
 ---
 

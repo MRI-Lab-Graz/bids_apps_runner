@@ -98,7 +98,6 @@ def register_run_routes(
     read_log_tail: Callable[[str | Path], str],
     get_active_tracked_run_jobs: Callable[[], list[dict[str, Any]]],
     terminate_tracked_run: Callable[[dict[str, Any]], bool],
-    terminate_tracked_build: Callable[[dict[str, Any]], bool],
     terminate_pid_group: Callable[[int], bool],
     terminate_pid_groups: Callable[[list[int] | set[int]], int],
     find_app_related_pids: Callable[[bool], list[int] | set[int]],
@@ -114,8 +113,6 @@ def register_run_routes(
     run_jobs_lock,
     pilot_jobs: dict[str, dict[str, Any]],
     pilot_jobs_lock,
-    apptainer_builds: dict[str, dict[str, Any]],
-    apptainer_builds_lock,
     mark_gui_session_started: Callable[[], None],
 ):
     def _local_run_checks(project_id, pipeline_id):
@@ -919,15 +916,6 @@ def register_run_routes(
                 if terminate_tracked_run(state):
                     killed += 1
 
-            build_pids = []
-            with apptainer_builds_lock:
-                for state in apptainer_builds.values():
-                    process = state.get("process")
-                    if process is not None and process.poll() is None:
-                        build_pids.append(process.pid)
-                        terminate_tracked_build(state)
-
-            killed += terminate_pid_groups(build_pids)
             killed += terminate_pid_groups(find_app_related_pids(include_marked=True))
 
             if killed == 0:

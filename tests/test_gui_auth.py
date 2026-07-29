@@ -125,18 +125,6 @@ def test_make_dir_rejects_path_traversal_name(client, tmp_path):
     )
 
 
-def test_build_apptainer_status_requires_build_id(client):
-    csrf_token = _login_client(client)
-
-    response = client.get(
-        "/build_apptainer_status",
-        headers={"X-CSRF-Token": csrf_token},
-    )
-
-    assert response.status_code == 400
-    assert response.get_json()["error"] == "build_id is required"
-
-
 def test_pilot_estimator_status_requires_identifiers(client):
     csrf_token = _login_client(client)
 

@@ -17,10 +17,29 @@
 
 - [ ] Run Check Output from GUI
 - [ ] Run scripts/check_app_output.py from CLI
+- [ ] Detailed Failures list distinguishes entries with different
+      subjects/sessions (not just the first line of the message)
+
+## HPC Storage Housekeeping
+
+- [ ] Cohort panel's storage-sync check shows "Not synced" when the output
+      clone has uncommitted/unpushed changes, and the cleanup button stays
+      hidden
+- [ ] Once synced, the panel also runs the pipeline-specific completeness
+      check (`scripts/check_app_output.py`) and shows "Incomplete output"
+      -- cleanup button hidden -- when that pipeline's checker reports
+      missing items
+- [ ] For a project whose `pipeline_app_name` has no registered checker,
+      the panel shows "Unverified" and only reveals the cleanup button
+      after the "manually verified" checkbox is checked
+- [ ] `/cohort/cleanup_local_storage` re-verifies both checks server-side
+      (409s) rather than trusting the earlier GET
 
 ## Containers
 
-- [ ] Build a container using scripts/build_apptainer.sh
+- [ ] Confirm the `.sif` is present at the shared path (rsync/scp'd from the
+      dedicated container-build server; see `remote_container_path` in
+      `configs/global_settings.json`)
 - [ ] Load options from container help
 
 ## CLI

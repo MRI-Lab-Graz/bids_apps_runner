@@ -137,19 +137,37 @@ CLI example:
 python scripts/check_app_output.py /path/to/bids /path/to/derivatives --output-json missing.json
 ```
 
+### Reclaiming HPC storage
+
+The Cohort panel's "HPC Local Storage" box (`/cohort/check_storage_sync`,
+`/cohort/cleanup_local_storage` in `gui/gui_cohort_routes.py`) gates
+deleting a project's local input/output datalad clones (`datalad drop`) on
+two checks, both re-verified server-side at cleanup time:
+
+1. **Git sync**: the output clone must be clean and fully pushed to the
+   datalad server (`_git_sync_status`) -- otherwise there's local-only
+   content that hasn't reached the remote yet.
+2. **Pipeline completeness**: once synced, `scripts/check_app_output.py`'s
+   per-pipeline checker runs against the project's actual BIDS App
+   (`_pipeline_completeness_status`) -- a clean/pushed git state alone
+   doesn't prove the run itself finished, and different BIDS Apps expect
+   different output files, so this is checked per pipeline. If the
+   project's `pipeline_app_name` isn't one of the known checkers (custom or
+   unlisted app), completeness can't be automatically verified at all; the
+   GUI surfaces that explicitly and requires an operator to check a
+   "manually verified" box (`force_unverified: true`) before cleanup will
+   proceed.
+
 ---
 
 ## 7) Container Build (Apptainer)
 
-Build from Docker Hub (interactive):
-```bash
-./scripts/build_apptainer.sh -o /path/to/containers/fmriprep.sif -t /tmp/apptainer_build
-```
-
-Build from Docker Hub (non-interactive):
-```bash
-./scripts/build_apptainer.sh --docker-repo nipreps/fmriprep --docker-tag 25.2.3 -o /data/containers/fmriprep_25.2.3.sif -t /tmp/apptainer_build
-```
+Containers are built on a dedicated build server/repo, not on this app's
+host or the HPC login node (compute there is against IT policy). The
+resulting `.sif` is delivered via `rsync`/`scp` to the shared path used by
+`common["container"]` in run configs. The remote destination on the DataLad
+server is configured once in `configs/global_settings.json`
+(`default.remote_container_path`) rather than hardcoded anywhere.
 
 ---
 
@@ -257,7 +275,6 @@ module avail
 bids_apps_runner/
 ├── scripts/
 │   ├── prism_runner.py           # Main entry point
-│   ├── build_apptainer.sh        # Container builder
 │   ├── submit_bids_cohort.sh     # SLURM/datalad-slurm cohort orchestration
 │   ├── hpc_datalad_runner.py     # SLURM compute-script generation
 │   ├── check_app_output.py       # Output validation

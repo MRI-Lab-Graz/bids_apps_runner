@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -93,6 +94,72 @@ def _git_sync_status(path: str) -> dict[str, Any]:
         result["error"] is None and result["uncommitted"] == 0 and result["unpushed"] == 0
     )
     return result
+
+
+def _pipeline_completeness_status(cohort_cfg: dict[str, Any], base_dir: Path) -> dict[str, Any]:
+    """Whether the BIDS App that actually ran for this cohort produced its
+    full expected output set, per scripts/check_app_output.py's per-pipeline
+    checkers (the same ones behind the "Verify Output" panel). A clean/
+    pushed git clone (_git_sync_status) only proves whatever got committed
+    made it to the remote -- it says nothing about whether the run itself
+    was complete, and different BIDS Apps expect entirely different file
+    sets, so that has to be checked per pipeline, not inferred from git
+    state. Returns {ok, supported, pipeline, missing_items, stats, error}.
+    `supported=False` means no checker is registered for this project's
+    pipeline_app_name at all (e.g. a custom/unlisted BIDS App) -- callers
+    must not treat that the same as `ok=True`.
+    """
+    bids_dir = cohort_cfg["paths"]["input_dir"]
+    derivatives_dir = cohort_cfg["paths"]["output_dir"]
+    app_name = cohort_cfg["bids_app"]["app_name"]
+
+    script_path = base_dir / "scripts" / "check_app_output.py"
+    cmd = [
+        sys.executable, str(script_path),
+        bids_dir, derivatives_dir,
+        "-p", app_name,
+        "--json", "--quiet",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600, cwd=str(base_dir)
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False, "supported": True, "pipeline": app_name,
+            "missing_items": [], "stats": None,
+            "error": "Timed out running output completeness check.",
+        }
+
+    try:
+        parsed = json.loads(proc.stdout)
+    except (json.JSONDecodeError, TypeError):
+        parsed = None
+
+    if parsed is None:
+        # Either the checker crashed, or the pipeline isn't one it knows
+        # about -- check_app_output.py's main() prints "Error: Unknown
+        # pipeline: ..." to stderr and exits non-zero without emitting JSON
+        # in that case (BIDSOutputValidator.PIPELINE_CHECKERS lookup).
+        return {
+            "ok": False, "supported": False, "pipeline": app_name,
+            "missing_items": [], "stats": None,
+            "error": (
+                (proc.stderr or "").strip()[-500:]
+                or f"No automated output-completeness checker is available for pipeline '{app_name}'."
+            ),
+        }
+
+    pipeline_result = (parsed.get("pipelines") or {}).get(app_name) or {}
+    missing_items = pipeline_result.get("missing_items") or []
+    return {
+        "ok": not missing_items,
+        "supported": True,
+        "pipeline": app_name,
+        "missing_items": missing_items,
+        "stats": pipeline_result.get("stats"),
+        "error": None,
+    }
 
 
 def _parse_open_slurm_jobs(stdout: str) -> list[dict[str, str]]:
@@ -461,6 +528,15 @@ def register_cohort_routes(
         output_dir = cohort_cfg["paths"]["output_dir"]
         output_sync = _git_sync_status(output_dir)
 
+        # Only run the (potentially slow -- walks every subject/session)
+        # content-completeness check once git sync already passes; no point
+        # deep-scanning a clone that isn't even pushed yet.
+        completeness = None
+        can_reclaim = output_sync["ok"]
+        if output_sync["ok"]:
+            completeness = _pipeline_completeness_status(cohort_cfg, base_dir)
+            can_reclaim = completeness["ok"]
+
         return jsonify(
             {
                 "dataset": cohort_cfg["datasets"][0],
@@ -469,7 +545,8 @@ def register_cohort_routes(
                 "input_cloned": (Path(input_dir) / ".git").is_dir(),
                 "output_cloned": (Path(output_dir) / ".git").is_dir(),
                 "output_sync": output_sync,
-                "can_reclaim": output_sync["ok"],
+                "completeness": completeness,
+                "can_reclaim": can_reclaim,
             }
         )
 
@@ -489,6 +566,7 @@ def register_cohort_routes(
         project_id = (data.get("project_id") or "").strip()
         pipeline_id = (data.get("pipeline_id") or "").strip()
         max_concurrent = data.get("max_concurrent")
+        force_unverified = bool(data.get("force_unverified"))
 
         cohort_cfg, error_response = _build_cohort_config(
             project_id, pipeline_id, max_concurrent
@@ -512,6 +590,32 @@ def register_cohort_routes(
                     ),
                     409,
                 )
+
+            completeness = _pipeline_completeness_status(cohort_cfg, base_dir)
+            if not completeness["ok"]:
+                if completeness["supported"]:
+                    error = (
+                        f"Output is incomplete for pipeline '{completeness['pipeline']}' -- "
+                        f"{len(completeness['missing_items'])} missing item(s). "
+                        "Refusing to drop local content."
+                    )
+                elif not force_unverified:
+                    error = (
+                        completeness["error"]
+                        + " Content completeness cannot be automatically verified for this "
+                        "pipeline -- resend with force_unverified=true after manually "
+                        "confirming the output is complete."
+                    )
+                else:
+                    error = None
+
+                if error:
+                    return (
+                        jsonify(
+                            {"ok": False, "error": error, "completeness": completeness}
+                        ),
+                        409,
+                    )
 
         results: dict[str, Any] = {}
         for label, path in (("input", input_dir), ("output", output_dir)):

@@ -258,7 +258,7 @@
             <button class="btn btn-primary tab-button active" id="tabProjectsBtn" type="button" onclick="switchTab('projectsTab', this)"><i class="fas fa-project-diagram me-1"></i>Projects</button>
             <button class="btn btn-outline-primary tab-button" id="tabRunnerBtn" type="button" onclick="switchTab('runnerTab', this)"><i class="fas fa-play-circle me-1"></i>Run App</button>
             <button class="btn btn-outline-primary tab-button" id="tabCheckBtn" type="button" onclick="switchTab('checkTab', this)"><i class="fas fa-check-circle me-1"></i>Check Output</button>
-            <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)"><i class="fas fa-hammer me-1"></i>Build</button>
+            <button class="btn btn-outline-primary tab-button" id="tabBuildBtn" type="button" onclick="switchTab('buildTab', this)"><i class="fas fa-download me-1"></i>Templates</button>
         </div>
         <div class="navbar-project ms-lg-3" id="navbarProject">
             <span class="navbar-project-label">Project:</span>
@@ -1331,6 +1331,12 @@
                                     <span id="cohortStorageBadge" class="badge bg-secondary">Checking...</span>
                                 </div>
                                 <div id="cohortStorageDetail" class="mt-2"></div>
+                                <div class="form-check mt-2" id="cohortStorageForceUnverifiedWrap" style="display:none;">
+                                    <input class="form-check-input" type="checkbox" id="cohortStorageForceUnverified">
+                                    <label class="form-check-label" for="cohortStorageForceUnverified">
+                                        I've manually verified this pipeline's output is complete
+                                    </label>
+                                </div>
                                 <button type="button" class="btn btn-sm btn-outline-danger mt-2" id="cohortCleanupStorageBtn"
                                         onclick="cleanupCohortLocalStorage()" style="display:none;">
                                     <i class="fas fa-trash-alt me-1"></i>Clean up HPC data
@@ -1643,94 +1649,6 @@
         </div>
 
         <div id="buildTab" class="tab-panel">
-            <div class="card">
-                <div class="card-header">Build Apptainer Image</div>
-                <div class="card-body">
-                    <div id="buildProjectScopeNotice" class="alert alert-warning py-2 px-3 small mb-3">
-                        Build paths can be inherited from the active project, but image builds run independently of project execution.
-                    </div>
-
-                    <div id="buildPreflightPanel" class="alert alert-secondary py-2 px-3 small mb-3">
-                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                            <strong>Build Preflight</strong>
-                            <div class="d-flex align-items-center gap-2">
-                                <span id="buildPreflightBadge" class="badge bg-secondary">Checking...</span>
-                                <button type="button" id="buildPreflightToggleBtn" class="btn btn-sm btn-outline-secondary" onclick="toggleBuildPreflightDetails()">Show Details</button>
-                            </div>
-                        </div>
-                        <div id="buildPreflightSummary" class="small text-muted mt-2">Checking build readiness...</div>
-                        <ul id="buildPreflightList" class="mb-0 mt-2" style="padding-left: 1.1rem; display:none;"></ul>
-                    </div>
-
-                    <p class="text-muted mb-3">Convert Docker images or Dockerfiles into Apptainer containers without leaving the browser.</p>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Top Candidate Preset</label>
-                            <select class="form-select" id="build_top_candidate" onchange="applyBuildTopCandidate()">
-                                <option value="">Custom / no preset</option>
-                                <option value="nipreps/fmriprep">fMRIPrep</option>
-                                <option value="pennlinc/qsiprep">QSIPrep</option>
-                                <option value="pennlinc/qsirecon">QSIRecon</option>
-                                <option value="nipreps/mriqc">MRIQC</option>
-                                <option value="freesurfer/freesurfer">FreeSurfer</option>
-                                <option value="deepmi/fastsurfer">FastSurfer</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Docker Repository</label>
-                            <div class="input-group">
-                                <input type="text" class="form-control build-setting" id="build_docker_repo" placeholder="nipreps/fmriprep">
-                                <button type="button" class="btn btn-outline-primary" id="buildFetchTagsBtn" onclick="fetchDockerTags()">Fetch Tags</button>
-                            </div>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Tag</label>
-                            <select class="form-select build-setting" id="build_docker_tag">
-                                <option value="latest">latest</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Output Directory</label>
-                            <div class="input-group">
-                                <input type="text" class="form-control build-setting" id="build_output_dir" placeholder="/data/local/container">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('build_output_dir')">...</button>
-                            </div>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Temporary Directory</label>
-                            <div class="input-group">
-                                <input type="text" class="form-control build-setting" id="build_tmp_dir" placeholder="/tmp/apptainer_build">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('build_tmp_dir')">...</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="row align-items-end">
-                        <div class="col-md-8 mb-3">
-                            <label class="form-label">Dockerfile (optional)</label>
-                            <div class="input-group">
-                                <input type="text" class="form-control build-setting" id="build_dockerfile" placeholder="/path/to/Dockerfile">
-                                <button type="button" class="btn btn-outline-secondary" onclick="openBrowser('build_dockerfile')">...</button>
-                            </div>
-                        </div>
-                        <div class="col-md-4 mb-3">
-                            <div class="form-check form-switch mb-0">
-                                <input class="form-check-input build-setting" type="checkbox" id="build_keep_temp">
-                                <label class="form-check-label" for="build_keep_temp">Preserve temp dir</label>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="d-flex gap-2 mb-3">
-                        <button class="btn btn-accent" id="buildApptainerBtn" type="button" onclick="startApptainerBuild()">Start Build</button>
-                        <button class="btn btn-outline-secondary" id="clearBuildOutputBtn" type="button" onclick="clearBuildOutput()">Clear Console</button>
-                    </div>
-                    <div id="buildStatusBox" class="utility-status"></div>
-                    <pre id="buildOutput" class="utility-log mt-3"></pre>
-                </div>
-            </div>
         <!-- TemplateFlow Download Panel -->
         <div class="card mt-4" id="templateflowDownloadCard">
             <div class="card-header d-flex justify-content-between align-items-center">
@@ -1897,6 +1815,12 @@
          the inline script beyond the DOM elements it's told to operate on.
          See its own header comment for the bug this generalizes away. -->
     <script src="{{ url_for('static', filename='js/collapsible_sections.js') }}"></script>
+    <!-- Formats a single check_app_output.py missing_items entry into a
+         disambiguated one-line summary (Subject/Session, or sub-XX/ses-YY
+         fallback) -- shared by the Validation Health Report's Detailed
+         Failures list below and the cohort storage panel's completeness
+         detail. Fully self-contained (string in, string out). -->
+    <script src="{{ url_for('static', filename='js/missing_items.js') }}"></script>
     <script>
         let currentTargetId = '';
         let browserCurrentPath = '/data/local/software';
@@ -1931,8 +1855,6 @@
         let checkPreflightUpdateScheduled = false;
         let validationRunInProgress = false;
         let validationScanInProgress = false;
-        let buildPreflightUpdateScheduled = false;
-        let buildTagFetchInProgress = false;
         var globalMachineSettings = null;
         let latestRunStatus = null;
         var currentOptionHelpCache = null;
@@ -3559,8 +3481,7 @@
                 document.getElementById('validation_quiet').checked = !!validation.quiet;
                 document.getElementById('validation_missing_only').checked = !!validation.list_missing;
                 scheduleCheckPreflightRefresh();
-                scheduleBuildPreflightRefresh();
-                
+
                 lastSavedPath = `/data/local/software/bids_apps_runner/configs/${filename}`;
                 document.getElementById('runApp').style.display = 'inline-block';
 
@@ -3669,13 +3590,6 @@
                     }
                     scheduleCheckPreflightRefresh();
                 } else if (tabId === 'buildTab') {
-                    if (!document.getElementById('build_output_dir').value && document.getElementById('container_folder').value) {
-                        document.getElementById('build_output_dir').value = document.getElementById('container_folder').value;
-                    }
-                    if (!document.getElementById('build_tmp_dir').value && document.getElementById('tmp_folder').value) {
-                        document.getElementById('build_tmp_dir').value = document.getElementById('tmp_folder').value;
-                    }
-                    scheduleBuildPreflightRefresh();
                     initTfDownloadPanel();
                 }
             }
@@ -4115,11 +4029,9 @@
                                     const match = m.match(/sub-\w+/);
                                     if (match) missingSubjects.add(match[0]);
                                 });
-                                // User requested clustered IDs in text, but here we can show grouped summaries if possible
-                                // For now, just keep a cleaner version of the items
                                 res.missing_items.slice(0, 8).forEach(m => {
-                                    const firstLine = m.split('\n')[0].trim();
-                                    html += `<div class="mb-1 pb-1 border-bottom-dotted border-secondary" style="border-bottom: 1px dotted #ccc;">- ${firstLine}</div>`;
+                                    const summary = summarizeMissingItem(m);
+                                    html += `<div class="mb-1 pb-1 border-bottom-dotted border-secondary" style="border-bottom: 1px dotted #ccc;">- ${summary}</div>`;
                                 });
                                 if (res.missing_items.length > 8) html += `<div class="text-center">... and ${res.missing_items.length - 8} more issues</div>`;
                                 html += `</small></div>`;
@@ -4503,576 +4415,6 @@
             }
         }
 
-        function updateBuildProjectScopeNotice() {
-            const notice = document.getElementById('buildProjectScopeNotice');
-            if (!notice) return;
-
-            if (!lastProjectId || !loadedProjectMeta) {
-                notice.className = 'alert alert-warning py-2 px-3 small mb-3';
-                notice.innerHTML = 'Build paths can be inherited from project defaults, but image builds run independently of project execution.';
-                return;
-            }
-
-            const projectName = loadedProjectMeta.name || loadedProjectMeta.id || lastProjectId;
-            notice.className = 'alert alert-info py-2 px-3 small mb-3';
-            notice.innerHTML = `Active build context: <strong>${escapeHtml(projectName)}</strong> (${escapeHtml(lastProjectId)}).`;
-        }
-
-        function _isValidDockerRepo(repo) {
-            const value = String(repo || '').trim();
-            if (!value) return false;
-            if (value.includes(' ')) return false;
-            return /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(value);
-        }
-
-        function _isValidDockerTag(tag) {
-            const value = String(tag || '').trim();
-            if (!value) return false;
-            if (value.includes(' ')) return false;
-            return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
-        }
-
-        function getBuildSettingsFromForm(options = {}) {
-            const silent = !!options.silent;
-            const outputDir = (document.getElementById('build_output_dir').value || '').trim();
-            const tmpDir = (document.getElementById('build_tmp_dir').value || '').trim();
-            const dockerRepo = (document.getElementById('build_docker_repo').value || '').trim();
-            const dockerTag = (document.getElementById('build_docker_tag').value || '').trim();
-            const dockerfile = (document.getElementById('build_dockerfile').value || '').trim();
-            const keepTemp = document.getElementById('build_keep_temp').checked;
-
-            if (!outputDir || !tmpDir) {
-                if (!silent) _setUtilityStatus(document.getElementById('buildStatusBox'), 'Output and temporary directories are required.', true);
-                return null;
-            }
-
-            if (outputDir === tmpDir) {
-                if (!silent) _setUtilityStatus(document.getElementById('buildStatusBox'), 'Output and temporary directories must be different.', true);
-                return null;
-            }
-
-            if (!dockerfile) {
-                if (!dockerRepo || !dockerTag) {
-                    if (!silent) _setUtilityStatus(document.getElementById('buildStatusBox'), 'Provide Docker repo and tag, or a Dockerfile path.', true);
-                    return null;
-                }
-                if (!_isValidDockerRepo(dockerRepo)) {
-                    if (!silent) _setUtilityStatus(document.getElementById('buildStatusBox'), 'Docker repository format looks invalid.', true);
-                    return null;
-                }
-                if (!_isValidDockerTag(dockerTag)) {
-                    if (!silent) _setUtilityStatus(document.getElementById('buildStatusBox'), 'Docker tag format looks invalid.', true);
-                    return null;
-                }
-            }
-
-            return {
-                output_dir: outputDir,
-                tmp_dir: tmpDir,
-                docker_repo: dockerRepo,
-                docker_tag: dockerTag,
-                dockerfile: dockerfile,
-                keep_temp: keepTemp,
-                async: true,
-            };
-        }
-
-        function evaluateBuildPreflight() {
-            const outputDir = (document.getElementById('build_output_dir').value || '').trim();
-            const tmpDir = (document.getElementById('build_tmp_dir').value || '').trim();
-            const dockerRepo = (document.getElementById('build_docker_repo').value || '').trim();
-            const dockerTag = (document.getElementById('build_docker_tag').value || '').trim();
-            const dockerfile = (document.getElementById('build_dockerfile').value || '').trim();
-            const hasSource = !!dockerfile || (!!dockerRepo && !!dockerTag);
-            const settings = getBuildSettingsFromForm({ silent: true });
-
-            const checks = [
-                { label: 'Project loaded (optional context)', ok: !!lastProjectId, blocking: false },
-                { label: 'Output directory set', ok: !!outputDir, blocking: true },
-                { label: 'Temporary directory set', ok: !!tmpDir, blocking: true },
-                { label: 'Output and temporary directories differ', ok: !outputDir || !tmpDir || outputDir !== tmpDir, blocking: true },
-                { label: 'Build source selected (Dockerfile or repo/tag)', ok: hasSource, blocking: true },
-                { label: 'Docker repository format valid', ok: dockerfile || !dockerRepo || _isValidDockerRepo(dockerRepo), blocking: true },
-                { label: 'Docker tag format valid', ok: dockerfile || !dockerTag || _isValidDockerTag(dockerTag), blocking: true },
-                { label: 'Build idle', ok: !apptainerBuildRunning, blocking: false, failNote: apptainerBuildRunning ? 'build is running; button cancels active build' : '' },
-                { label: 'Form serialization ready', ok: !!settings, blocking: true },
-            ];
-
-            const blockingFailures = checks.filter((c) => c.blocking && !c.ok);
-            return {
-                checks,
-                ready: blockingFailures.length === 0,
-                blockingFailures,
-                canFetchTags: !!dockerRepo && _isValidDockerRepo(dockerRepo),
-            };
-        }
-
-        function toggleBuildPreflightDetails(forceState = null) {
-            const list = document.getElementById('buildPreflightList');
-            const btn = document.getElementById('buildPreflightToggleBtn');
-            if (!list || !btn) return;
-
-            const shouldShow = typeof forceState === 'boolean'
-                ? forceState
-                : list.style.display === 'none';
-
-            list.style.display = shouldShow ? 'block' : 'none';
-            btn.textContent = shouldShow ? 'Hide Details' : 'Show Details';
-        }
-
-        function _buildOutputCandidateNames() {
-            const presetEl = document.getElementById('build_top_candidate');
-            if (!presetEl) return [];
-            return Array.from(presetEl.options)
-                .map((opt) => (opt.value || '').split('/').pop())
-                .filter(Boolean);
-        }
-
-        function _resolveBuildOutputBase(currentValue) {
-            const trimmed = (currentValue || '').trim().replace(/\/+$/, '');
-            if (!trimmed) return '';
-            const segments = trimmed.split('/');
-            const last = segments[segments.length - 1];
-            if (_buildOutputCandidateNames().includes(last)) {
-                segments.pop();
-                return segments.join('/');
-            }
-            return trimmed;
-        }
-
-        function _applyBuildOutputDirForCandidate(repo) {
-            const outputEl = document.getElementById('build_output_dir');
-            if (!outputEl) return;
-
-            const candidateName = (repo || '').split('/').pop();
-            if (!candidateName) return;
-
-            const effective = globalMachineSettings && globalMachineSettings.effective;
-            const machineDefaultBase = ((effective && effective.default_apptainer_folder) || '').trim();
-            const base = _resolveBuildOutputBase(outputEl.value) || machineDefaultBase;
-            if (!base) return;
-
-            outputEl.value = `${base.replace(/\/+$/, '')}/${candidateName}`;
-        }
-
-        async function applyBuildTopCandidate() {
-            const presetEl = document.getElementById('build_top_candidate');
-            const repoEl = document.getElementById('build_docker_repo');
-            const tagEl = document.getElementById('build_docker_tag');
-            const statusEl = document.getElementById('buildStatusBox');
-            if (!presetEl || !repoEl || !tagEl) return;
-
-            const repo = (presetEl.value || '').trim();
-            if (!repo) {
-                _setUtilityStatus(statusEl, 'Preset cleared. You can enter a custom repository.', false);
-                scheduleBuildPreflightRefresh();
-                return;
-            }
-
-            repoEl.value = repo;
-            _applyBuildOutputDirForCandidate(repo);
-            const hasLatest = Array.from(tagEl.options).some((opt) => opt.value === 'latest');
-            if (!hasLatest) {
-                tagEl.add(new Option('latest', 'latest'));
-            }
-            tagEl.value = 'latest';
-            _setUtilityStatus(statusEl, `Preset selected: ${repo}. Fetching tags...`, false);
-            scheduleBuildPreflightRefresh();
-
-            if (!apptainerBuildRunning && _isValidDockerRepo(repo)) {
-                await fetchDockerTags();
-            }
-        }
-
-        function updateBuildPreflightPanel() {
-            const panel = document.getElementById('buildPreflightPanel');
-            const badge = document.getElementById('buildPreflightBadge');
-            const list = document.getElementById('buildPreflightList');
-            const summary = document.getElementById('buildPreflightSummary');
-            if (!panel || !badge || !list || !summary) return;
-
-            const state = evaluateBuildPreflight();
-            list.innerHTML = '';
-
-            state.checks.forEach((check) => {
-                const li = document.createElement('li');
-                const icon = check.ok ? 'fa-check-circle text-success' : 'fa-exclamation-circle text-danger';
-                const note = check.ok ? '' : check.failNote;
-                li.innerHTML = `<i class="fas ${icon} me-1"></i>${escapeHtml(check.label)}${note ? ` <span class="text-muted">(${escapeHtml(note)})</span>` : ''}`;
-                list.appendChild(li);
-            });
-
-            if (state.ready) {
-                panel.className = 'alert alert-success py-2 px-3 small mb-3';
-                badge.className = 'badge bg-success';
-                badge.textContent = apptainerBuildRunning ? 'Running' : 'Ready';
-                summary.textContent = apptainerBuildRunning
-                    ? 'Build is running. You can monitor logs below.'
-                    : 'All required checks passed. You can start the build.';
-            } else {
-                panel.className = 'alert alert-warning py-2 px-3 small mb-3';
-                badge.className = 'badge bg-warning text-dark';
-                badge.textContent = 'Needs Attention';
-                const blockingCount = state.blockingFailures.length;
-                summary.textContent = `${blockingCount} required check${blockingCount === 1 ? '' : 's'} need attention.`;
-            }
-
-            const buildBtn = document.getElementById('buildApptainerBtn');
-            if (buildBtn) {
-                if (apptainerBuildRunning) {
-                    buildBtn.disabled = false;
-                    buildBtn.title = 'Cancel the active build.';
-                } else {
-                    buildBtn.disabled = !state.ready;
-                    buildBtn.title = state.ready
-                        ? 'Start Apptainer build with current settings.'
-                        : 'Fix build preflight checks before starting.';
-                }
-            }
-
-            const fetchBtn = document.getElementById('buildFetchTagsBtn');
-            if (fetchBtn) {
-                fetchBtn.disabled = buildTagFetchInProgress || !state.canFetchTags || apptainerBuildRunning;
-                fetchBtn.title = apptainerBuildRunning
-                    ? 'Stop/cancel current build before fetching tags.'
-                    : (state.canFetchTags
-                        ? 'Fetch tags from Docker Hub.'
-                        : 'Enter a valid Docker repository first.');
-            }
-
-            const clearBtn = document.getElementById('clearBuildOutputBtn');
-            if (clearBtn) {
-                clearBtn.disabled = apptainerBuildRunning;
-                clearBtn.title = apptainerBuildRunning
-                    ? 'Cannot clear logs while a build is running.'
-                    : 'Clear build status and console output.';
-            }
-        }
-
-        function scheduleBuildPreflightRefresh() {
-            if (buildPreflightUpdateScheduled) return;
-            buildPreflightUpdateScheduled = true;
-            requestAnimationFrame(() => {
-                buildPreflightUpdateScheduled = false;
-                updateBuildProjectScopeNotice();
-                updateBuildPreflightPanel();
-            });
-        }
-
-        function initializeBuildPreflightTracking() {
-            document.querySelectorAll('.build-setting').forEach((el) => {
-                el.addEventListener('input', scheduleBuildPreflightRefresh);
-                el.addEventListener('change', scheduleBuildPreflightRefresh);
-            });
-            scheduleBuildPreflightRefresh();
-        }
-
-        function syncBuildTopCandidateFromRepo() {
-            const presetEl = document.getElementById('build_top_candidate');
-            const repoEl = document.getElementById('build_docker_repo');
-            if (!presetEl || !repoEl) return;
-
-            const repo = (repoEl.value || '').trim();
-            const hasPreset = Array.from(presetEl.options).some((opt) => opt.value === repo);
-            presetEl.value = hasPreset ? repo : '';
-        }
-
-        function clearBuildOutput() {
-            if (apptainerBuildRunning) {
-                _setUtilityStatus(document.getElementById('buildStatusBox'), 'Cannot clear console while build is running.', true);
-                return;
-            }
-            _setUtilityStatus(document.getElementById('buildStatusBox'), '');
-            const logEl = document.getElementById('buildOutput');
-            if (logEl) logEl.innerText = '';
-            scheduleBuildPreflightRefresh();
-        }
-
-        function setBuildFetchTagsButtonBusy(isBusy) {
-            buildTagFetchInProgress = !!isBusy;
-            const btn = document.getElementById('buildFetchTagsBtn');
-            if (!btn) return;
-            if (isBusy) {
-                btn.dataset.originalText = btn.innerHTML;
-                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Fetching...';
-            } else if (btn.dataset.originalText) {
-                btn.innerHTML = btn.dataset.originalText;
-            }
-            scheduleBuildPreflightRefresh();
-        }
-
-        async function _markLocallyAvailableBuildTags(repo) {
-            const tagSelect = document.getElementById('build_docker_tag');
-            const outputDir = (document.getElementById('build_output_dir').value || '').trim();
-            if (!tagSelect || !outputDir || !repo) return;
-
-            try {
-                const resp = await fetch('/list_containers', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ folder: outputDir })
-                });
-                const data = await resp.json();
-                if (!resp.ok || data.error || !Array.isArray(data.containers)) return;
-
-                const available = new Set(data.containers);
-                const repoName = repo.split('/').pop();
-                Array.from(tagSelect.options).forEach((opt) => {
-                    const isAvailable = available.has(`${repoName}_${opt.value}.sif`)
-                        || available.has(`${repoName}_${opt.value}.simg`);
-                    opt.innerText = isAvailable ? `${opt.value} (already locally available)` : opt.value;
-                });
-            } catch (e) {
-                // Best-effort marking only; ignore failures.
-            }
-        }
-
-        async function fetchDockerTags() {
-            if (buildTagFetchInProgress) return;
-
-            const repo = document.getElementById('build_docker_repo').value.trim();
-            const tagSelect = document.getElementById('build_docker_tag');
-            const statusEl = document.getElementById('buildStatusBox');
-            const preflight = evaluateBuildPreflight();
-
-            if (apptainerBuildRunning) {
-                _setUtilityStatus(statusEl, 'Cannot fetch tags while build is running.', true);
-                scheduleBuildPreflightRefresh();
-                return;
-            }
-            
-            if (!repo) {
-                _setUtilityStatus(statusEl, 'Please enter a Docker repository first.', true);
-                scheduleBuildPreflightRefresh();
-                return;
-            }
-
-            if (!preflight.canFetchTags) {
-                _setUtilityStatus(statusEl, 'Docker repository format looks invalid.', true);
-                scheduleBuildPreflightRefresh();
-                return;
-            }
-
-            _setUtilityStatus(statusEl, `Fetching tags for ${repo}...`, false);
-            tagSelect.disabled = true;
-            tagSelect.innerHTML = '<option>Loading...</option>';
-            setBuildFetchTagsButtonBusy(true);
-
-            try {
-                const resp = await fetch('/get_docker_tags', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ repo: repo })
-                });
-                
-                if (!resp.ok) {
-                    const errorText = await resp.text();
-                    let errMsg = `Server returned ${resp.status}`;
-                    try {
-                        const errJson = JSON.parse(errorText);
-                        if (errJson.error) errMsg = errJson.error;
-                    } catch(e) {}
-                    _setUtilityStatus(statusEl, `Error: ${errMsg}`, true);
-                    tagSelect.innerHTML = '<option value="latest">latest</option>';
-                    return;
-                }
-
-                const data = await resp.json();
-                
-                if (data.tags && data.tags.length > 0) {
-                    tagSelect.innerHTML = '';
-                    data.tags.forEach(tag => {
-                        const opt = document.createElement('option');
-                        opt.value = tag;
-                        opt.innerText = tag;
-                        tagSelect.appendChild(opt);
-                    });
-                    await _markLocallyAvailableBuildTags(repo);
-                    _setUtilityStatus(statusEl, `Fetched ${data.tags.length} tags.`, false);
-                } else if (data.error) {
-                    _setUtilityStatus(statusEl, `Error: ${data.error}`, true);
-                    tagSelect.innerHTML = '<option value="latest">latest</option>';
-                } else {
-                    _setUtilityStatus(statusEl, 'No tags found for this repository.', true);
-                    tagSelect.innerHTML = '<option value="latest">latest</option>';
-                }
-            } catch (err) {
-                console.error("Fetch tags error:", err);
-                _setUtilityStatus(statusEl, `Failed to fetch tags: ${err.message || err}`, true);
-                tagSelect.innerHTML = '<option value="latest">latest</option>';
-            } finally {
-                tagSelect.disabled = false;
-                setBuildFetchTagsButtonBusy(false);
-                scheduleBuildPreflightRefresh();
-            }
-        }
-
-        let apptainerBuildPollTimer = null;
-        let apptainerCurrentBuildId = null;
-        let apptainerBuildRunning = false;
-
-        function _setApptainerBuildButtonState(btn, isRunning) {
-            if (!btn) return;
-            btn.classList.remove('btn-accent', 'btn-outline-danger');
-            if (isRunning) {
-                btn.classList.add('btn-outline-danger');
-                btn.innerText = 'Cancel Build';
-            } else {
-                btn.classList.add('btn-accent');
-                btn.innerText = 'Start Build';
-            }
-            scheduleBuildPreflightRefresh();
-        }
-
-        function _stopApptainerBuildPolling() {
-            if (apptainerBuildPollTimer) {
-                clearInterval(apptainerBuildPollTimer);
-                apptainerBuildPollTimer = null;
-            }
-        }
-
-        async function _pollApptainerBuildStatus() {
-            if (!apptainerCurrentBuildId) return;
-            const statusEl = document.getElementById('buildStatusBox');
-            const logEl = document.getElementById('buildOutput');
-            const btn = document.getElementById('buildApptainerBtn');
-
-            try {
-                const resp = await fetch(`/build_apptainer_status?build_id=${encodeURIComponent(apptainerCurrentBuildId)}`);
-                const data = await resp.json();
-                if (!resp.ok || data.error) {
-                    _setUtilityStatus(statusEl, data.error || 'Failed to fetch build status.', true);
-                    _stopApptainerBuildPolling();
-                    apptainerBuildRunning = false;
-                    apptainerCurrentBuildId = null;
-                    _setApptainerBuildButtonState(btn, false);
-                    scheduleBuildPreflightRefresh();
-                    return;
-                }
-
-                let logText = data.log_tail || '';
-                if (data.log_file) {
-                    logText += (logText ? '\n\n' : '') + `Log saved at: ${data.log_file}`;
-                }
-                logEl.innerText = logText;
-                logEl.scrollTop = logEl.scrollHeight;
-
-                if (data.status === 'running') {
-                    _setUtilityStatus(statusEl, 'Build running... you can cancel any time.', false);
-                    scheduleBuildPreflightRefresh();
-                    return;
-                }
-
-                _stopApptainerBuildPolling();
-                apptainerBuildRunning = false;
-                apptainerCurrentBuildId = null;
-                _setApptainerBuildButtonState(btn, false);
-
-                if (data.status === 'completed') {
-                    const message = data.output_image ? `Built ${data.output_image}` : 'Build completed';
-                    _setUtilityStatus(statusEl, message, false);
-                } else if (data.status === 'cancelled') {
-                    _setUtilityStatus(statusEl, 'Build cancelled by user.', true);
-                } else {
-                    _setUtilityStatus(statusEl, data.error || 'Build failed.', true);
-                }
-                scheduleBuildPreflightRefresh();
-            } catch (err) {
-                _setUtilityStatus(statusEl, 'Build status polling failed: ' + err.message, true);
-                _stopApptainerBuildPolling();
-                apptainerBuildRunning = false;
-                apptainerCurrentBuildId = null;
-                _setApptainerBuildButtonState(btn, false);
-                scheduleBuildPreflightRefresh();
-            }
-        }
-
-        async function cancelApptainerBuild() {
-            const statusEl = document.getElementById('buildStatusBox');
-            const btn = document.getElementById('buildApptainerBtn');
-            if (!apptainerCurrentBuildId) {
-                _setUtilityStatus(statusEl, 'No active build to cancel.', true);
-                _setApptainerBuildButtonState(btn, false);
-                apptainerBuildRunning = false;
-                scheduleBuildPreflightRefresh();
-                return;
-            }
-            try {
-                _setUtilityStatus(statusEl, 'Cancelling build...', false);
-                const resp = await fetch('/build_apptainer_cancel', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ build_id: apptainerCurrentBuildId })
-                });
-                const data = await resp.json();
-                if (!resp.ok || data.error) {
-                    _setUtilityStatus(statusEl, data.error || 'Cancel request failed.', true);
-                }
-            } catch (err) {
-                _setUtilityStatus(statusEl, 'Cancel request failed: ' + err.message, true);
-            } finally {
-                scheduleBuildPreflightRefresh();
-            }
-        }
-
-        async function startApptainerBuild() {
-            const statusEl = document.getElementById('buildStatusBox');
-            const logEl = document.getElementById('buildOutput');
-            const btn = document.getElementById('buildApptainerBtn');
-
-            if (apptainerBuildRunning) {
-                await cancelApptainerBuild();
-                return;
-            }
-
-            const payload = getBuildSettingsFromForm();
-            if (!payload) {
-                scheduleBuildPreflightRefresh();
-                return;
-            }
-
-            const preflight = evaluateBuildPreflight();
-            if (!preflight.ready) {
-                const missing = preflight.blockingFailures.map((item) => item.label).join(', ');
-                _setUtilityStatus(statusEl, `Cannot start build. Fix preflight: ${missing}.`, true);
-                scheduleBuildPreflightRefresh();
-                return;
-            }
-
-            apptainerBuildRunning = true;
-            _setApptainerBuildButtonState(btn, true);
-            _setUtilityStatus(statusEl, 'Starting Apptainer build...', false);
-            logEl.innerText = '';
-            scheduleBuildPreflightRefresh();
-
-            try {
-                const resp = await fetch('/build_apptainer', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
-                });
-                const data = await resp.json();
-                if (!resp.ok || data.error || !data.build_id) {
-                    apptainerBuildRunning = false;
-                    _setApptainerBuildButtonState(btn, false);
-                    _setUtilityStatus(statusEl, data.error || 'Build failed.', true);
-                    scheduleBuildPreflightRefresh();
-                    return;
-                }
-                apptainerCurrentBuildId = data.build_id;
-                _setUtilityStatus(statusEl, 'Build started. Streaming logs...', false);
-                await _pollApptainerBuildStatus();
-                _stopApptainerBuildPolling();
-                apptainerBuildPollTimer = setInterval(_pollApptainerBuildStatus, 1500);
-                scheduleBuildPreflightRefresh();
-            } catch (err) {
-                apptainerBuildRunning = false;
-                _setApptainerBuildButtonState(btn, false);
-                _setUtilityStatus(statusEl, 'Build request failed: ' + err.message, true);
-                scheduleBuildPreflightRefresh();
-            }
-        }
-
         async function checkSystemStatus() {
             const container = document.getElementById('system-status-pills');
             if (!container) return;
@@ -5334,21 +4676,6 @@
                 el.addEventListener('change', recheck);
             });
 
-            // Clear tags if repo changes
-            const buildRepoInput = document.getElementById('build_docker_repo');
-            if (buildRepoInput) {
-                buildRepoInput.addEventListener('input', () => {
-                    syncBuildTopCandidateFromRepo();
-                    const tagSelect = document.getElementById('build_docker_tag');
-                    if (tagSelect.options.length > 1 || (tagSelect.options.length === 1 && tagSelect.options[0].value !== 'latest')) {
-                        tagSelect.innerHTML = '<option value="latest">latest</option>';
-                    }
-                    scheduleBuildPreflightRefresh();
-                });
-            }
-
-            syncBuildTopCandidateFromRepo();
-
             // Five independent scopes, each with its own top-level
             // .section-header(s) that previously had no working fold
             // mechanism at all (Container & Tools / Execution / Runner
@@ -5363,7 +4690,6 @@
             buildSectionAccordion(document.getElementById('hpcConfigEditorBody'));
             initializeRunnerPreflightTracking();
             initializeCheckPreflightTracking();
-            initializeBuildPreflightTracking();
             initializeHpcPreflightTracking();
             initializeHpcPresetDivergenceTracking();
             loadHpcAppProfiles();

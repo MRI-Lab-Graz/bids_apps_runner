@@ -29,7 +29,6 @@ except ImportError as e:
     sys.exit(1)
 
 import shutil
-import tempfile
 import webbrowser
 import threading
 import socket
@@ -182,6 +181,10 @@ def _default_machine_settings():
         "default_docker_repo": "nipreps/fmriprep",
         "default_docker_tag": "latest",
         "default_jobs": 1,
+        # rsync/scp destination (user@host:/path) on the DataLad server where
+        # the dedicated container-build repo pushes finished .sif files --
+        # not a local path like the other apptainer_* settings above.
+        "remote_container_path": "",
     }
 
 
@@ -215,6 +218,7 @@ def _sanitize_machine_settings(raw):
         "default_templateflow_dir",
         "default_docker_repo",
         "default_docker_tag",
+        "remote_container_path",
     ):
         if key in raw:
             cleaned[key] = str(raw.get(key) or "").strip()
@@ -598,7 +602,6 @@ def check_system_dependencies():
 
 
 SILENT_ENDPOINTS = {
-    "/build_apptainer_status",
     "/get_log",
     "/pilot_estimator_status",
 }
@@ -629,17 +632,6 @@ APP_REPO_MAPPING = {
 def _ensure_logs_dir():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-
-def _record_build_log(path, command, stdout, stderr):
-    try:
-        with open(path, "w", encoding="utf-8") as logf:
-            logf.write(f"Command: {' '.join(command)}\n\n")
-            logf.write("STDOUT:\n")
-            logf.write((stdout or "<no output>") + "\n\n")
-            logf.write("STDERR:\n")
-            logf.write((stderr or "<no errors>") + "\n")
-    except OSError:
-        pass
 
 
 def resolve_config_path(config_path):
@@ -1226,10 +1218,6 @@ RUN_JOBS_LOCK = threading.Lock()
 _log_cache: dict[str, Any] = {}
 _log_cache_ttl = 1.0  # Cache for 1 second
 
-# Track background Apptainer builds started from GUI utility tab
-APPTAINER_BUILDS: dict[str, dict[str, Any]] = {}
-APPTAINER_BUILDS_LOCK = threading.Lock()
-
 # Track pilot resource estimator jobs
 PILOT_JOBS: dict[str, dict[str, Any]] = {}
 PILOT_JOBS_LOCK = threading.Lock()
@@ -1378,13 +1366,6 @@ def _terminate_tracked_run(state):
     state["stop_requested"] = True
     return _terminate_pid_group(process.pid)
 
-
-def _terminate_tracked_build(state):
-    process = state.get("process")
-    if process is None:
-        return False
-    state["cancel_requested"] = True
-    return _terminate_pid_group(process.pid)
 
 
 def _normalize_runner_args(runner_args):
@@ -1772,347 +1753,10 @@ def _read_log_tail(log_path, max_bytes=65536):
         return ""
 
 
-def _resolve_apptainer_binary():
-    """Return the available container build binary ("apptainer" preferred,
-    falling back to "singularity"), or None if neither is on PATH."""
-    if shutil.which("apptainer") is not None:
-        return "apptainer"
-    if shutil.which("singularity") is not None:
-        return "singularity"
-    return None
-
-
-def _prepare_apptainer_build(data):
-    output_dir = (data.get("output_dir") or "").strip()
-    tmp_dir = (data.get("tmp_dir") or "").strip()
-    if not output_dir or not tmp_dir:
-        return None, (
-            jsonify(
-                {"error": "Output directory and temporary directory are required."}
-            ),
-            400,
-        )
-
-    if os.path.expanduser(output_dir) == os.path.expanduser(tmp_dir):
-        return None, (
-            jsonify(
-                {"error": "Output directory and temporary directory must be different."}
-            ),
-            400,
-        )
-
-    output_path = Path(os.path.expanduser(output_dir))
-    tmp_path = Path(os.path.expanduser(tmp_dir))
-    output_path.mkdir(parents=True, exist_ok=True)
-    tmp_path.mkdir(parents=True, exist_ok=True)
-
-    _ensure_logs_dir()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = LOG_DIR / f"build_apptainer_{timestamp}.log"
-
-    dockerfile = (data.get("dockerfile") or "").strip()
-    docker_repo = (data.get("docker_repo") or "").strip()
-    docker_tag = (data.get("docker_tag") or "").strip()
-    keep_temp = bool(data.get("keep_temp"))
-    try:
-        timeout_seconds = int(data.get("timeout", 7200))
-    except (TypeError, ValueError):
-        timeout_seconds = 7200
-    timeout_seconds = max(60, min(timeout_seconds, 21600))
-
-    repo_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\/-]*$")
-    tag_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-    if docker_repo and not repo_pattern.match(docker_repo):
-        return None, (jsonify({"error": "Docker repository format is invalid."}), 400)
-    if docker_tag and not tag_pattern.match(docker_tag):
-        return None, (jsonify({"error": "Docker tag format is invalid."}), 400)
-
-    cmd = []
-    built_image = None
-    per_build_dir = None
-    sandbox_dir = None
-    build_env = os.environ.copy()
-    cache_dir = None
-    apptainer_bin = None
-
-    if dockerfile:
-        dockerfile_path = Path(os.path.expanduser(dockerfile))
-        if not dockerfile_path.exists() or not dockerfile_path.is_file():
-            return None, (
-                jsonify({"error": f"Dockerfile not found: {dockerfile_path}"}),
-                400,
-            )
-
-        script_path = BASE_DIR / "scripts" / "build_apptainer.sh"
-        if not script_path.exists():
-            return None, (jsonify({"error": "Build script missing from project."}), 500)
-        cmd = ["bash", str(script_path), "-o", str(output_path), "-t", str(tmp_path)]
-        if keep_temp:
-            cmd.append("--no-temp-del")
-        cmd.extend(["-d", str(dockerfile_path)])
-        if docker_repo:
-            cmd.extend(["--docker-repo", docker_repo])
-        if docker_tag:
-            cmd.extend(["--docker-tag", docker_tag])
-        cache_dir = tmp_path / "apptainer_cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        if not docker_repo or not docker_tag:
-            return (
-                None,
-                (
-                    jsonify(
-                        {
-                            "error": "Docker repository and tag are required when no Dockerfile is provided."
-                        }
-                    ),
-                    400,
-                ),
-            )
-        apptainer_bin = _resolve_apptainer_binary()
-        if apptainer_bin is None:
-            return None, (
-                jsonify(
-                    {"error": "Neither Apptainer nor Singularity is available on this host."}
-                ),
-                500,
-            )
-        per_build_dir = tempfile.mkdtemp(prefix="apptainer_build_", dir=str(tmp_path))
-        cache_dir = tmp_path / "apptainer_cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        built_image = output_path / f"{Path(docker_repo).name}_{docker_tag}.sif"
-        sandbox_dir = Path(per_build_dir) / "sandbox"
-        cmd = [
-            [
-                apptainer_bin,
-                "build",
-                "--sandbox",
-                str(sandbox_dir),
-                f"docker://{docker_repo}:{docker_tag}",
-            ],
-            [
-                apptainer_bin,
-                "build",
-                "--force",
-                "--tmpdir",
-                per_build_dir,
-                str(built_image),
-                str(sandbox_dir),
-            ],
-        ]
-
-    build_env["APPTAINER_TMPDIR"] = str(tmp_path)
-    build_env["SINGULARITY_TMPDIR"] = str(tmp_path)
-    build_env["TMPDIR"] = str(tmp_path)
-    build_env.setdefault("APPTAINER_MKSQUASHFS_PROCS", "1")
-    build_env[APP_LAUNCH_ENV_KEY] = APP_LAUNCH_ENV_VALUE
-    if cache_dir is not None:
-        build_env["APPTAINER_CACHEDIR"] = str(cache_dir)
-        build_env["SINGULARITY_CACHEDIR"] = str(cache_dir)
-
-    steps = cmd if isinstance(cmd[0], list) else [cmd]
-    return {
-        "steps": steps,
-        "log_file": str(log_file),
-        "output_image": str(built_image) if built_image else None,
-        "per_build_dir": per_build_dir,
-        "sandbox_dir": str(sandbox_dir) if sandbox_dir else None,
-        "binary": apptainer_bin,
-        "keep_temp": keep_temp,
-        "timeout_seconds": timeout_seconds,
-        "cwd": str(BASE_DIR),
-        "env": build_env,
-    }, None
-
-
-def _run_apptainer_build_async(build_id):
-    with APPTAINER_BUILDS_LOCK:
-        state = APPTAINER_BUILDS.get(build_id)
-        if not state:
-            return
-
-    log_file = state["log_file"]
-    steps = state.get("steps") or [state["cmd"]]
-    per_build_dir = state.get("per_build_dir")
-    keep_temp = bool(state.get("keep_temp"))
-    timeout_seconds = state.get("timeout_seconds", 7200)
-    return_code = 0
-
-    try:
-        with open(log_file, "w", encoding="utf-8") as logf:
-            for step_index, cmd in enumerate(steps):
-                with APPTAINER_BUILDS_LOCK:
-                    if APPTAINER_BUILDS.get(build_id, {}).get("cancel_requested"):
-                        return_code = -1
-                        break
-
-                if len(steps) > 1:
-                    logf.write(f"Step {step_index + 1}/{len(steps)}: {' '.join(cmd)}\n")
-                else:
-                    logf.write(f"Command: {' '.join(cmd)}\n")
-                logf.write(f"Started: {datetime.now().isoformat()}\n\n")
-                logf.flush()
-
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=logf,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    cwd=state["cwd"],
-                    env=state["env"],
-                    start_new_session=True,
-                )
-
-                with APPTAINER_BUILDS_LOCK:
-                    if build_id in APPTAINER_BUILDS:
-                        APPTAINER_BUILDS[build_id]["process"] = process
-                        APPTAINER_BUILDS[build_id]["pid"] = process.pid
-
-                return_code = process.wait(timeout=timeout_seconds)
-
-                with APPTAINER_BUILDS_LOCK:
-                    if build_id in APPTAINER_BUILDS:
-                        APPTAINER_BUILDS[build_id]["process"] = None
-
-                if return_code != 0:
-                    # If the sandbox→SIF step failed, try system mksquashfs as fallback.
-                    # apptainer's bundled mksquashfs can crash on large images (heap
-                    # corruption, exit 134/139); the system one is typically more stable.
-                    sandbox_dir = state.get("sandbox_dir")
-                    output_image = state.get("output_image")
-                    is_sif_step = (
-                        step_index == len(steps) - 1 and sandbox_dir and output_image
-                    )
-                    if (
-                        is_sif_step
-                        and Path(sandbox_dir).is_dir()
-                        and shutil.which("mksquashfs")
-                    ):
-                        logf.write(
-                            f"\napptainer build exited {return_code} — retrying with "
-                            f"system mksquashfs fallback...\n\n"
-                        )
-                        logf.flush()
-                        squashfs_path = Path(state["per_build_dir"]) / "rootfs.squashfs"
-                        apptainer_bin = state.get("binary") or "apptainer"
-                        fallback_steps = [
-                            [
-                                "mksquashfs",
-                                sandbox_dir,
-                                str(squashfs_path),
-                                "-noappend",
-                                "-processors",
-                                "1",
-                            ],
-                            [apptainer_bin, "sif", "new", output_image],
-                            [
-                                apptainer_bin,
-                                "sif",
-                                "add",
-                                "--datatype",
-                                "4",
-                                "--parttype",
-                                "2",
-                                "--partfs",
-                                "1",
-                                "--partarch",
-                                "2",
-                                "--groupid",
-                                "1",
-                                output_image,
-                                str(squashfs_path),
-                            ],
-                        ]
-                        fallback_names = ["mksquashfs", "sif new", "sif add"]
-                        for fb_name, fb_cmd in zip(fallback_names, fallback_steps):
-                            logf.write(f"Fallback ({fb_name}): {' '.join(fb_cmd)}\n\n")
-                            logf.flush()
-                            with APPTAINER_BUILDS_LOCK:
-                                if APPTAINER_BUILDS.get(build_id, {}).get(
-                                    "cancel_requested"
-                                ):
-                                    return_code = -1
-                                    break
-                            fb_proc = subprocess.Popen(
-                                fb_cmd,
-                                stdout=logf,
-                                stderr=subprocess.STDOUT,
-                                text=True,
-                                cwd=state["cwd"],
-                                env=state["env"],
-                                start_new_session=True,
-                            )
-                            with APPTAINER_BUILDS_LOCK:
-                                if build_id in APPTAINER_BUILDS:
-                                    APPTAINER_BUILDS[build_id]["process"] = fb_proc
-                                    APPTAINER_BUILDS[build_id]["pid"] = fb_proc.pid
-                            return_code = fb_proc.wait(timeout=timeout_seconds)
-                            with APPTAINER_BUILDS_LOCK:
-                                if build_id in APPTAINER_BUILDS:
-                                    APPTAINER_BUILDS[build_id]["process"] = None
-                            if return_code != 0:
-                                break
-                        try:
-                            squashfs_path.unlink(missing_ok=True)
-                        except OSError:
-                            pass
-                    break
-
-                if len(steps) > 1:
-                    logf.write(
-                        f"\nStep {step_index + 1} finished (exit {return_code})\n\n"
-                    )
-                    logf.flush()
-
-        with APPTAINER_BUILDS_LOCK:
-            if build_id in APPTAINER_BUILDS:
-                cancelled = bool(APPTAINER_BUILDS[build_id].get("cancel_requested"))
-                APPTAINER_BUILDS[build_id]["returncode"] = return_code
-                APPTAINER_BUILDS[build_id]["process"] = None
-                APPTAINER_BUILDS[build_id]["finished_at"] = time.time()
-                if cancelled:
-                    APPTAINER_BUILDS[build_id]["status"] = "cancelled"
-                elif return_code == 0:
-                    APPTAINER_BUILDS[build_id]["status"] = "completed"
-                else:
-                    APPTAINER_BUILDS[build_id]["status"] = "failed"
-    except subprocess.TimeoutExpired:
-        with APPTAINER_BUILDS_LOCK:
-            process = APPTAINER_BUILDS.get(build_id, {}).get("process")
-        if process:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except OSError:
-                pass
-        with APPTAINER_BUILDS_LOCK:
-            if build_id in APPTAINER_BUILDS:
-                APPTAINER_BUILDS[build_id]["status"] = "failed"
-                APPTAINER_BUILDS[build_id]["returncode"] = 124
-                APPTAINER_BUILDS[build_id]["error"] = "Apptainer build timed out"
-                APPTAINER_BUILDS[build_id]["process"] = None
-                APPTAINER_BUILDS[build_id]["finished_at"] = time.time()
-    except Exception as exc:
-        with APPTAINER_BUILDS_LOCK:
-            if build_id in APPTAINER_BUILDS:
-                APPTAINER_BUILDS[build_id]["status"] = "failed"
-                APPTAINER_BUILDS[build_id]["returncode"] = 1
-                APPTAINER_BUILDS[build_id]["error"] = str(exc)
-                APPTAINER_BUILDS[build_id]["process"] = None
-                APPTAINER_BUILDS[build_id]["finished_at"] = time.time()
-    finally:
-        if per_build_dir and not keep_temp:
-            shutil.rmtree(per_build_dir, ignore_errors=True)
-
-
 register_utility_routes(
     app,
     data_dir=DATA_DIR,
     ensure_logs_dir=_ensure_logs_dir,
-    prepare_apptainer_build=_prepare_apptainer_build,
-    run_apptainer_build_async=_run_apptainer_build_async,
-    apptainer_builds=APPTAINER_BUILDS,
-    apptainer_builds_lock=APPTAINER_BUILDS_LOCK,
     read_log_tail=_read_log_tail,
 )
 
@@ -2186,7 +1830,6 @@ register_run_routes(
     read_log_tail=_read_log_tail,
     get_active_tracked_run_jobs=_get_active_tracked_run_jobs,
     terminate_tracked_run=_terminate_tracked_run,
-    terminate_tracked_build=_terminate_tracked_build,
     terminate_pid_group=_terminate_pid_group,
     terminate_pid_groups=_terminate_pid_groups,
     find_app_related_pids=_find_app_related_pids,
@@ -2202,8 +1845,6 @@ register_run_routes(
     run_jobs_lock=RUN_JOBS_LOCK,
     pilot_jobs=PILOT_JOBS,
     pilot_jobs_lock=PILOT_JOBS_LOCK,
-    apptainer_builds=APPTAINER_BUILDS,
-    apptainer_builds_lock=APPTAINER_BUILDS_LOCK,
     mark_gui_session_started=_mark_gui_session_started,
 )
 

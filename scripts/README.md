@@ -46,10 +46,6 @@ This directory contains all scripts and utilities for the BIDS Apps Runner proje
 
 ## Build & Container Scripts (Keep)
 
-- **`build_apptainer.sh`** (13KB) - Apptainer/Singularity container builder
-  - Converts Docker images to Apptainer
-  - Used in documentation
-
 - **`manage_datalad_repos.sh`** (9.0KB) - DataLad repository management
   - Clone, unlock, commit operations
   - Required for HPC DataLad workflows
@@ -140,7 +136,6 @@ scripts/
 ├── check_system_deps.py               # System checks
 ├── install.sh                         # Installation
 ├── activate_appsrunner.sh
-├── build_apptainer.sh                 # Containers
 └── manage_datalad_repos.sh
 
 tests/                                 # NEW
