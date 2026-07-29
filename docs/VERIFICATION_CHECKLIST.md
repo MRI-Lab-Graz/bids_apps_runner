@@ -28,12 +28,19 @@
 - [ ] Once synced, the panel also runs the pipeline-specific completeness
       check (`scripts/check_app_output.py`) and shows "Incomplete output"
       -- cleanup button hidden -- when that pipeline's checker reports
-      missing items
+      missing items, with an "I understand this pipeline's output is
+      incomplete..." checkbox that reveals the cleanup button once checked
 - [ ] For a project whose `pipeline_app_name` has no registered checker,
       the panel shows "Unverified" and only reveals the cleanup button
       after the "manually verified" checkbox is checked
+- [ ] Both checkbox paths show the "only the local HPC copy is removed --
+      data already synced to the datalad server is NOT affected" notice,
+      and the confirm() dialog repeats it before any `datalad drop` runs
 - [ ] `/cohort/cleanup_local_storage` re-verifies both checks server-side
       (409s) rather than trusting the earlier GET
+- [ ] Sending both `force_unverified: true` and `force_incomplete_output:
+      true` still 409s when the output clone itself isn't synced -- no
+      force flag bypasses the git-sync precondition
 
 ## Containers
 

@@ -567,6 +567,7 @@ def register_cohort_routes(
         pipeline_id = (data.get("pipeline_id") or "").strip()
         max_concurrent = data.get("max_concurrent")
         force_unverified = bool(data.get("force_unverified"))
+        force_incomplete_output = bool(data.get("force_incomplete_output"))
 
         cohort_cfg, error_response = _build_cohort_config(
             project_id, pipeline_id, max_concurrent
@@ -578,6 +579,10 @@ def register_cohort_routes(
         output_dir = cohort_cfg["paths"]["output_dir"]
 
         if (Path(output_dir) / ".git").is_dir():
+            # Not overridable, unlike the completeness check below -- there's
+            # no "I know why this is expected" story for local-only content
+            # that never reached the datalad server, so no force flag can
+            # bypass this.
             sync = _git_sync_status(output_dir)
             if not sync["ok"]:
                 return (
@@ -594,11 +599,17 @@ def register_cohort_routes(
             completeness = _pipeline_completeness_status(cohort_cfg, base_dir)
             if not completeness["ok"]:
                 if completeness["supported"]:
-                    error = (
-                        f"Output is incomplete for pipeline '{completeness['pipeline']}' -- "
-                        f"{len(completeness['missing_items'])} missing item(s). "
-                        "Refusing to drop local content."
-                    )
+                    if not force_incomplete_output:
+                        error = (
+                            f"Output is incomplete for pipeline '{completeness['pipeline']}' -- "
+                            f"{len(completeness['missing_items'])} missing item(s). "
+                            "Resend with force_incomplete_output=true after confirming this is "
+                            "expected (e.g. known-bad subjects) -- this only affects the LOCAL "
+                            "HPC copy; the datalad server copy already has everything that was "
+                            "pushed and is not touched by this action."
+                        )
+                    else:
+                        error = None
                 elif not force_unverified:
                     error = (
                         completeness["error"]

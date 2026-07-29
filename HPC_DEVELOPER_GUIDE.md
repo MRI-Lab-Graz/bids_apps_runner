@@ -146,17 +146,30 @@ two checks, both re-verified server-side at cleanup time:
 
 1. **Git sync**: the output clone must be clean and fully pushed to the
    datalad server (`_git_sync_status`) -- otherwise there's local-only
-   content that hasn't reached the remote yet.
+   content that hasn't reached the remote yet. **This check has no
+   override.** No force flag bypasses it -- there's no "this is expected"
+   story for content that never reached the datalad server, so it's an
+   absolute precondition.
 2. **Pipeline completeness**: once synced, `scripts/check_app_output.py`'s
    per-pipeline checker runs against the project's actual BIDS App
    (`_pipeline_completeness_status`) -- a clean/pushed git state alone
    doesn't prove the run itself finished, and different BIDS Apps expect
-   different output files, so this is checked per pipeline. If the
-   project's `pipeline_app_name` isn't one of the known checkers (custom or
-   unlisted app), completeness can't be automatically verified at all; the
-   GUI surfaces that explicitly and requires an operator to check a
-   "manually verified" box (`force_unverified: true`) before cleanup will
-   proceed.
+   different output files, so this is checked per pipeline. Unlike sync,
+   **this check is overridable**, since incompleteness is sometimes
+   expected (known-bad subjects, scan artefacts, deliberate exclusions):
+   - If a checker is registered for the pipeline and it reports missing
+     items, the GUI shows what's missing and requires the operator to
+     check "I understand this pipeline's output is incomplete..." before
+     cleanup proceeds (`force_incomplete_output: true`).
+   - If the project's `pipeline_app_name` isn't one of the known checkers
+     at all (custom/unlisted app), completeness can't be automatically
+     verified; the GUI surfaces that explicitly and requires "I've
+     manually verified..." (`force_unverified: true`).
+
+   Both override paths only ever affect the **local HPC copy** --
+   `datalad drop` never touches the datalad server, and the GUI's warning
+   text and confirmation dialog say so explicitly so an operator can't
+   come away thinking server-side data was removed.
 
 ---
 

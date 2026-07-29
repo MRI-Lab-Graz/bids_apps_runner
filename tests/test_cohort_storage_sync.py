@@ -352,6 +352,51 @@ class TestCleanupLocalStorage:
         assert data["completeness"]["supported"] is True
         assert not any(c[0] == "datalad" for c in datalad_calls if c)
 
+    def test_allows_pipeline_output_incomplete_with_force(self, client, disposable_project, tmp_path, monkeypatch):
+        """An operator who knows *why* the pipeline is incomplete (e.g.
+        known-bad/excluded subjects) can override the completeness gate
+        with force_incomplete_output -- distinct from force_unverified,
+        which is for pipelines with no checker at all."""
+        output_dir = _make_synced_repo(tmp_path, name="output")
+        input_dir = _make_synced_repo(tmp_path, name="input")
+        _save(
+            disposable_project,
+            {
+                "bids_folder": str(input_dir),
+                "output_folder": str(output_dir),
+                "container": str(tmp_path / "container.sif"),
+                "container_engine": "apptainer",
+                "pipeline_app_name": "qsiprep",
+            },
+            {"analysis_level": "participant", "options": [], "mounts": []},
+            hpc={"partition": "hpc", "time": "06:00:00", "mem": "8G", "cpus": 2},
+        )
+        (tmp_path / "container.sif").write_text("fake")
+
+        datalad_calls = []
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "datalad":
+                datalad_calls.append(cmd)
+                return _FakeCompletedProcess(returncode=0, stdout="dropped")
+            if cmd and len(cmd) > 1 and "check_app_output.py" in str(cmd[1]):
+                return _FakeCompletedProcess(
+                    returncode=1,
+                    stdout=_completeness_stdout("qsiprep", ["[ERROR] sub-99 excluded (motion artefact)"]),
+                )
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr(gui_cohort_routes.subprocess, "run", fake_run)
+
+        resp = client.post(
+            "/cohort/cleanup_local_storage",
+            json={"project_id": disposable_project, "force_incomplete_output": True},
+        )
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert len(datalad_calls) == 2
+
     def test_refuses_unsupported_pipeline_without_force(self, client, disposable_project, tmp_path, monkeypatch):
         output_dir = _make_synced_repo(tmp_path)
         _save_runnable_project(disposable_project, tmp_path, output_dir, pipeline_app_name="custom_app")
@@ -404,3 +449,24 @@ class TestCleanupLocalStorage:
         )
         data = resp.get_json()
         assert data["ok"] is True
+
+    def test_force_flags_do_not_bypass_unsynced_output(self, client, disposable_project, tmp_path):
+        """Neither override flag touches the git-sync precondition -- there's
+        no "this is expected" story for local-only content that never
+        reached the datalad server, unlike pipeline completeness."""
+        output_dir = _make_synced_repo(tmp_path)
+        _dirty(output_dir)
+        _save_runnable_project(disposable_project, tmp_path, output_dir, pipeline_app_name="qsiprep")
+
+        resp = client.post(
+            "/cohort/cleanup_local_storage",
+            json={
+                "project_id": disposable_project,
+                "force_unverified": True,
+                "force_incomplete_output": True,
+            },
+        )
+        assert resp.status_code == 409
+        data = resp.get_json()
+        assert data["ok"] is False
+        assert "not fully synced" in data["error"]

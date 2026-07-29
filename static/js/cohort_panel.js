@@ -123,6 +123,14 @@ async function closeCohortOpenJobs() {
 }
 
 let _cohortStorageSyncCheck = { checking: false, error: null, canReclaim: false };
+// Which override the currently-shown checkbox corresponds to -- 'incomplete'
+// (a registered checker ran and found missing items, but the operator knows
+// why, e.g. excluded/artefact subjects) or 'unsupported' (no checker at all
+// for this pipeline_app_name). Determines which force_* flag
+// cleanupCohortLocalStorage() sends, and is null when the checkbox isn't
+// shown (nothing to override, or sync itself isn't ok -- sync has no
+// override).
+let _cohortStorageOverrideKind = null;
 
 function _renderMissingItemsList(missingItems, max) {
     const shown = missingItems.slice(0, max);
@@ -140,6 +148,7 @@ async function checkCohortStorageSync() {
     const cleanupBtn = document.getElementById('cohortCleanupStorageBtn');
     const forceWrap = document.getElementById('cohortStorageForceUnverifiedWrap');
     const forceCheckbox = document.getElementById('cohortStorageForceUnverified');
+    const forceLabel = document.getElementById('cohortStorageForceUnverifiedLabel');
     if (!panel || !lastProjectId) { if (panel) panel.style.display = 'none'; return; }
 
     panel.style.display = 'block';
@@ -151,6 +160,7 @@ async function checkCohortStorageSync() {
     cleanupBtn.style.display = 'none';
     forceWrap.style.display = 'none';
     forceCheckbox.checked = false;
+    _cohortStorageOverrideKind = null;
 
     const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
     const params = new URLSearchParams({
@@ -173,6 +183,7 @@ async function checkCohortStorageSync() {
 
     _cohortStorageSyncCheck.checking = false;
     _cohortStorageSyncCheck.canReclaim = !!data.can_reclaim;
+    _cohortStorageSyncCheck.completeness = data.completeness || null;
 
     if (!data.output_cloned) {
         panel.className = 'alert alert-secondary py-2 px-3 small mb-3';
@@ -207,40 +218,59 @@ async function checkCohortStorageSync() {
     }
 
     // Synced, but the pipeline-specific completeness check (run only once
-    // sync passes) didn't come back clean.
+    // sync passes) didn't come back clean. Both cases below are
+    // overridable -- unlike the sync check above, there's a legitimate
+    // "I know why this is expected" story for incomplete/unverifiable
+    // pipeline output (known-bad subjects, a custom app with no checker).
     const completeness = data.completeness || {};
     panel.className = 'alert alert-warning py-2 px-3 small mb-3';
+    badge.className = 'badge bg-warning text-dark';
+
     if (completeness.supported) {
-        badge.className = 'badge bg-warning text-dark';
         badge.textContent = 'Incomplete output';
         const missing = completeness.missing_items || [];
         detail.innerHTML = `Output clone is synced, but '${completeness.pipeline}' is missing `
-            + `${missing.length} item(s) -- cannot reclaim until the run is complete:`
+            + `${missing.length} item(s):`
             + _renderMissingItemsList(missing, 5);
+        forceLabel.textContent = "I understand this pipeline's output is incomplete and want to "
+            + 'remove the local HPC copy anyway';
+        _cohortStorageOverrideKind = 'incomplete';
     } else {
-        badge.className = 'badge bg-warning text-dark';
         badge.textContent = 'Unverified';
         detail.textContent = completeness.error
             || `No automated completeness checker is available for pipeline '${completeness.pipeline}'.`;
-        forceWrap.style.display = 'block';
-        forceCheckbox.onchange = () => {
-            cleanupBtn.style.display = forceCheckbox.checked ? 'inline-flex' : 'none';
-        };
+        forceLabel.textContent = "I've manually verified this pipeline's output is complete";
+        _cohortStorageOverrideKind = 'unsupported';
     }
+    forceWrap.style.display = 'block';
+    forceCheckbox.onchange = () => {
+        cleanupBtn.style.display = forceCheckbox.checked ? 'inline-flex' : 'none';
+    };
 }
 
 async function cleanupCohortLocalStorage() {
     const forceCheckbox = document.getElementById('cohortStorageForceUnverified');
-    const forceUnverified = !!(forceCheckbox && forceCheckbox.checked);
+    const forceChecked = !!(forceCheckbox && forceCheckbox.checked);
+    const forceIncompleteOutput = forceChecked && _cohortStorageOverrideKind === 'incomplete';
+    const forceUnverified = forceChecked && _cohortStorageOverrideKind === 'unsupported';
 
     let confirmMsg = 'Reclaim local HPC disk for this dataset?\n\n'
         + 'This runs `datalad drop` on BOTH the input clone and output clone '
         + '(git-annex refuses if it cannot confirm content is safe elsewhere -- '
         + 'this is not a raw delete, and repo metadata stays intact for a fast '
         + 're-fetch later).';
-    if (forceUnverified) {
+    if (forceIncompleteOutput) {
+        const completeness = _cohortStorageSyncCheck.completeness || {};
+        const missingCount = (completeness.missing_items || []).length;
+        confirmMsg += `\n\nWARNING: pipeline output is INCOMPLETE (${missingCount} missing `
+            + `item(s) for '${completeness.pipeline}'). This only deletes the LOCAL COPY on `
+            + 'the HPC -- the data already synced to the datalad server is NOT affected and '
+            + 'stays there.\n\nProceed with removing the incomplete local copy?';
+    } else if (forceUnverified) {
         confirmMsg += '\n\nWARNING: output completeness for this pipeline could NOT be '
-            + 'automatically verified -- you are proceeding on your own manual check.';
+            + 'automatically verified -- you are proceeding on your own manual check. This '
+            + 'only deletes the LOCAL COPY on the HPC -- the data already synced to the '
+            + 'datalad server is NOT affected and stays there.';
     }
     confirmMsg += '\n\nContinue?';
     if (!confirm(confirmMsg)) return;
@@ -257,6 +287,7 @@ async function cleanupCohortLocalStorage() {
                 pipeline_id: currentPipelineId || '',
                 max_concurrent: maxConcurrent,
                 force_unverified: forceUnverified,
+                force_incomplete_output: forceIncompleteOutput,
             }),
         });
         const data = await resp.json();

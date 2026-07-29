@@ -1331,11 +1331,17 @@
                                     <span id="cohortStorageBadge" class="badge bg-secondary">Checking...</span>
                                 </div>
                                 <div id="cohortStorageDetail" class="mt-2"></div>
-                                <div class="form-check mt-2" id="cohortStorageForceUnverifiedWrap" style="display:none;">
-                                    <input class="form-check-input" type="checkbox" id="cohortStorageForceUnverified">
-                                    <label class="form-check-label" for="cohortStorageForceUnverified">
-                                        I've manually verified this pipeline's output is complete
-                                    </label>
+                                <div id="cohortStorageForceUnverifiedWrap" style="display:none;">
+                                    <div class="text-danger fw-bold mt-2">
+                                        Only the local HPC copy is removed -- data already synced to
+                                        the datalad server is NOT affected and stays there.
+                                    </div>
+                                    <div class="form-check mt-1">
+                                        <input class="form-check-input" type="checkbox" id="cohortStorageForceUnverified">
+                                        <label class="form-check-label" id="cohortStorageForceUnverifiedLabel" for="cohortStorageForceUnverified">
+                                            I've manually verified this pipeline's output is complete
+                                        </label>
+                                    </div>
                                 </div>
                                 <button type="button" class="btn btn-sm btn-outline-danger mt-2" id="cohortCleanupStorageBtn"
                                         onclick="cleanupCohortLocalStorage()" style="display:none;">

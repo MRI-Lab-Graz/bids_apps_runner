@@ -8,6 +8,7 @@ const FIXTURE_HTML = `
         <div id="cohortStorageDetail"></div>
         <div id="cohortStorageForceUnverifiedWrap" style="display:none;">
             <input type="checkbox" id="cohortStorageForceUnverified">
+            <label id="cohortStorageForceUnverifiedLabel"></label>
         </div>
         <button id="cohortCleanupStorageBtn" style="display:none;"></button>
     </div>
@@ -41,7 +42,7 @@ describe('checkCohortStorageSync', () => {
         expect(document.getElementById('cohortStorageForceUnverifiedWrap').style.display).toBe('none');
     });
 
-    it('shows missing items and hides the cleanup button when the pipeline output is incomplete', async () => {
+    it('shows missing items and an overridable checkbox when the pipeline output is incomplete', async () => {
         window.fetch = vi.fn().mockResolvedValue({
             json: () => Promise.resolve({
                 output_cloned: true,
@@ -60,8 +61,18 @@ describe('checkCohortStorageSync', () => {
 
         expect(document.getElementById('cohortStorageBadge').textContent).toBe('Incomplete output');
         expect(document.getElementById('cohortCleanupStorageBtn').style.display).toBe('none');
-        expect(document.getElementById('cohortStorageForceUnverifiedWrap').style.display).toBe('none');
         expect(document.getElementById('cohortStorageDetail').innerHTML).toContain('sub-01');
+
+        // Overridable: checking the box (operator knows why, e.g. excluded
+        // subjects) reveals the cleanup button.
+        const forceWrap = document.getElementById('cohortStorageForceUnverifiedWrap');
+        expect(forceWrap.style.display).toBe('block');
+        expect(document.getElementById('cohortStorageForceUnverifiedLabel').textContent).toContain('incomplete');
+
+        const forceCheckbox = document.getElementById('cohortStorageForceUnverified');
+        forceCheckbox.checked = true;
+        forceCheckbox.onchange();
+        expect(document.getElementById('cohortCleanupStorageBtn').style.display).toBe('inline-flex');
     });
 
     it('shows the force-unverified checkbox for pipelines with no automated checker, and reveals cleanup when checked', async () => {
@@ -158,5 +169,58 @@ describe('cleanupCohortLocalStorage', () => {
         expect(JSON.parse(options.body)).toMatchObject({ project_id: 'proj-1' });
         expect(fetchMock.mock.calls[1][0]).toContain('/cohort/check_storage_sync');
         expect(document.getElementById('cohortCleanupStorageBtn').disabled).toBe(false);
+    });
+
+    it('sends force_incomplete_output (not force_unverified) when overriding an incomplete-but-known pipeline', async () => {
+        window.fetch = vi.fn().mockResolvedValue({
+            json: () => Promise.resolve({
+                output_cloned: true,
+                can_reclaim: false,
+                output_sync: { ok: true, uncommitted: 0, unpushed: 0 },
+                completeness: { ok: false, supported: true, pipeline: 'qsiprep', missing_items: ['[ERROR] sub-99 excluded'] },
+            }),
+        });
+        await checkCohortStorageSync();
+        document.getElementById('cohortStorageForceUnverified').checked = true;
+
+        window.confirm = vi.fn().mockReturnValue(true);
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce({ json: () => Promise.resolve({ ok: true }) })
+            .mockResolvedValueOnce({ json: () => Promise.resolve({ output_cloned: true, can_reclaim: true }) });
+        window.fetch = fetchMock;
+
+        await cleanupCohortLocalStorage();
+
+        const [, options] = fetchMock.mock.calls[0];
+        const body = JSON.parse(options.body);
+        expect(body.force_incomplete_output).toBe(true);
+        expect(body.force_unverified).toBe(false);
+        expect(window.confirm.mock.calls[0][0]).toContain('INCOMPLETE');
+    });
+
+    it('sends force_unverified (not force_incomplete_output) when overriding an unsupported pipeline', async () => {
+        window.fetch = vi.fn().mockResolvedValue({
+            json: () => Promise.resolve({
+                output_cloned: true,
+                can_reclaim: false,
+                output_sync: { ok: true, uncommitted: 0, unpushed: 0 },
+                completeness: { ok: false, supported: false, pipeline: 'custom_app', missing_items: [], error: 'no checker' },
+            }),
+        });
+        await checkCohortStorageSync();
+        document.getElementById('cohortStorageForceUnverified').checked = true;
+
+        window.confirm = vi.fn().mockReturnValue(true);
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce({ json: () => Promise.resolve({ ok: true }) })
+            .mockResolvedValueOnce({ json: () => Promise.resolve({ output_cloned: true, can_reclaim: true }) });
+        window.fetch = fetchMock;
+
+        await cleanupCohortLocalStorage();
+
+        const [, options] = fetchMock.mock.calls[0];
+        const body = JSON.parse(options.body);
+        expect(body.force_unverified).toBe(true);
+        expect(body.force_incomplete_output).toBe(false);
     });
 });
