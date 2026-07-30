@@ -18,15 +18,67 @@
 #
 # Usage: scripts/check_output_sync.sh
 # Exit code is nonzero if any clone has pending state, so this is
-# suitable for wiring into cron/a monitor job with alerting on failure.
+# suitable for wiring into cron/a monitor job with alerting on failure --
+# cron's own built-in behavior (mail whatever a job prints to stdout) is
+# enough, no extra notification plumbing needed, but this script prints
+# its "OK" line on every clean run too, so a plain `script.sh` crontab
+# entry would mail hourly regardless of outcome. Only surface output on
+# an actual failure:
+#   MAILTO=you@example.org
+#   0 * * * *  /path/to/repo/scripts/check_output_sync.sh >/tmp/cos.out 2>&1 || cat /tmp/cos.out
+# (put MAILTO above the entry in the crontab; `cat` only runs -- and only
+# then produces the stdout cron mails -- in the `||` branch, i.e. when the
+# script itself exited nonzero).
+#
+# Before reporting a dirty clone as a problem, cross-checks it against
+# datalad-slurm's own open-job bookkeeping (_open_job_status below) -- a
+# cohort simply still mid-run always has local-only state until its finish
+# job completes, and reporting that as a "problem" would make this useless
+# to actually run unattended (every real cohort would trip it constantly).
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECTS_DIR="${REPO_ROOT}/projects"
 
+# Same venv-pinned datalad binary the finish-job scripts use (see
+# submit_bids_cohort.sh) -- a plain `datalad` on PATH may be a different
+# install without the datalad-slurm extension enabled at all.
+DATALAD_SLURM_BIN="${REPO_ROOT}/.datalad-slurm-venv/bin/datalad"
+[[ -x "$DATALAD_SLURM_BIN" ]] || DATALAD_SLURM_BIN="datalad"
+
 declare -A SEEN
 problems=0
 checked=0
+
+# Reads datalad-slurm's own "is there an open job for this dataset" table
+# (`--list-open-jobs`, local job-database read -- no network I/O, same
+# no-hang guarantee as the rest of this script; 20s timeout is generation
+# headroom only, matching the same call's timeout in gui/gui_cohort_routes.py).
+# Prints "RUNNING" if a still-open, non-FAILED job exists for this clone,
+# "FAILED:<job_id>" if the only open job(s) are dead, or nothing at all if
+# the check itself couldn't run. Callers must treat "couldn't tell" as
+# "report it anyway" -- silence here is exactly the failure mode this
+# script exists to catch, so an inconclusive check must never suppress a
+# real problem.
+_open_job_status() {
+    local path="$1" out
+    out=$(cd "$path" 2>/dev/null && timeout 20 "$DATALAD_SLURM_BIN" slurm-finish --list-open-jobs 2>/dev/null) || return 1
+
+    local -a jobs
+    mapfile -t jobs < <(printf '%s\n' "$out" | awk 'NF==2 && tolower($1)!="slurm-job-id" {print $1, $2}')
+    [[ ${#jobs[@]} -eq 0 ]] && return 1
+
+    local job status
+    for job in "${jobs[@]}"; do
+        status="${job#* }"
+        if [[ "$status" != "FAILED" ]]; then
+            echo "RUNNING"
+            return 0
+        fi
+    done
+    echo "FAILED:${jobs[0]%% *}"
+    return 0
+}
 
 check_clone() {
     local path="$1"
@@ -59,11 +111,22 @@ check_clone() {
     fi
 
     if [[ "$uncommitted" -gt 0 || "$unpushed" -gt 0 ]]; then
+        local job_status=""
+        job_status=$(_open_job_status "$path") || job_status=""
+        if [[ "$job_status" == "RUNNING" ]]; then
+            # A cohort still mid-run genuinely has local-only state until
+            # its finish job completes -- not a problem, don't report it.
+            return 0
+        fi
+
         problems=$((problems + 1))
         echo "PROBLEM: $path"
         echo "  branch: $branch"
         [[ "$uncommitted" -gt 0 ]] && echo "  uncommitted paths: $uncommitted"
         [[ "$unpushed" -gt 0 ]] && echo "  commits not yet pushed to origin/${branch}: $unpushed"
+        if [[ "$job_status" == FAILED:* ]]; then
+            echo "  datalad-slurm job ${job_status#FAILED:} is FAILED -- this is state left behind by a dead job, not one still running"
+        fi
         if [[ "$uncommitted" -gt 0 ]]; then
             printf '%s\n' "$status_out" | head -5 | sed 's/^/    /'
         fi

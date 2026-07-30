@@ -116,6 +116,50 @@ check_todos() {
     fi
 }
 
+# Emits the shell text (evaluated at job-runtime on the compute node, not
+# here) that verifies a finish job's `datalad push --to origin` actually
+# landed -- both the finish-job heredocs below (cmd_submit and
+# submit_subregion_segmentation) interpolate this via `$(push_verification_block)`
+# so the check can't drift out of sync between the two call sites.
+#
+# `datalad push` can exit 0 without the push having actually landed: a
+# rejected git ref update (real incident 2026-07-29 -- "remote rejected
+# (branch is currently checked out)" against 129/freesurfer, which sat
+# unpushed for days before anyone noticed) or a partial annexed-content
+# transfer failure are both surfaced only in datalad's own JSON result
+# stream, never as a nonzero process exit, so `set -e` never catches them.
+# This independently confirms (a) the remote ref for the current branch now
+# equals local HEAD via a live but cheap (metadata-only, no data transfer)
+# `git ls-remote`, and (b) every annexed file datalad believes it pushed is
+# actually present on origin via `git annex find --not --in origin`.
+#
+# Uses a quoted heredoc (<<'BLOCK') so none of its $vars expand here --
+# they're meant to stay literal text, to be evaluated later when the
+# generated finish script actually runs on the compute node (the same
+# effect the two call sites already get from hand-escaping \$uncommitted
+# etc. in their own unquoted <<EOF heredocs).
+push_verification_block() {
+    cat <<'BLOCK'
+# Verify the push actually landed on the remote -- datalad push can exit 0
+# without it really landing (see push_verification_block() in
+# submit_bids_cohort.sh for why).
+current_branch=$(git symbolic-ref --short HEAD)
+local_head=$(git rev-parse HEAD)
+remote_head=$(DATALAD_SSH_MULTIPLEX__CONNECTIONS=false timeout 30 git ls-remote origin "refs/heads/${current_branch}" 2>/dev/null | cut -f1)
+if [[ "$remote_head" != "$local_head" ]]; then
+    echo "ERROR: push did not land -- local HEAD (${local_head}) != origin/${current_branch} (${remote_head:-unreachable}). The commit exists locally but the datalad server does not have it." >&2
+    exit 1
+fi
+
+missing_content=$(git annex find --not --in origin 2>/dev/null | head -20)
+if [[ -n "$missing_content" ]]; then
+    echo "ERROR: annexed content missing from origin after push (git ref landed, but file content did not). First 20 missing files:" >&2
+    echo "$missing_content" >&2
+    exit 1
+fi
+BLOCK
+}
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 COMMAND="${1:-help}"
 shift || true
@@ -464,6 +508,8 @@ if [[ "\$uncommitted" -gt 0 ]]; then
     git status --short | head -30 >&2
     exit 1
 fi
+
+$(push_verification_block)
 EOF
     chmod +x "$subregion_finish_script"
 
@@ -528,6 +574,24 @@ cmd_setup() {
             "mkdir -p '${remote_path}' && \
              (test -d '${remote_path}/.datalad' || datalad create '${remote_path}')" \
             || warn "[$DS] Could not create output repo on server (may already exist)"
+
+        # 2a. Tell the server-side repo to update its checked-out working
+        # tree on push instead of rejecting it. Without this, a push is
+        # rejected with "remote rejected (branch is currently checked out)"
+        # any time someone has that branch checked out server-side -- which
+        # happens routinely, since this repo doubles as a browsable working
+        # copy people inspect directly (real incident 2026-07-29: exactly
+        # this rejection silently blocked a finish job's push against
+        # 129/freesurfer). `updateInstead` (git >=2.3) makes both safe at
+        # once: the push succeeds AND the working tree it left checked out
+        # updates to match, so anyone browsing it also always sees current
+        # data. Idempotent (a plain `git config` overwrite), run
+        # unconditionally like the `gc.auto 0` fix below so it also
+        # retroactively covers datasets set up before this fix existed --
+        # except this one lives server-side, so it needs its own ssh call.
+        run ssh "$ssh_host" \
+            "git -C '${remote_path}' config receive.denyCurrentBranch updateInstead" \
+            || warn "[$DS] Could not set receive.denyCurrentBranch=updateInstead on server repo"
 
         # 2b. Register the output dataset as a subdataset of the INPUT dataset
         #    on the server, confined to a "derivatives" branch of the input
@@ -915,6 +979,8 @@ if [[ "\$uncommitted" -gt 0 ]]; then
     git status --short | head -30 >&2
     exit 1
 fi
+
+$(push_verification_block)
 EOF
         chmod +x "$finish_script"
 
