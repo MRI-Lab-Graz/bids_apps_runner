@@ -1367,6 +1367,121 @@ def _terminate_pid_groups(pids):
     return terminated
 
 
+_VSCODE_SERVER_STACK_RE = re.compile(r"\.vscode-server/cli/servers/stable-([a-f0-9]+)/")
+# Threshold above which a VS Code Remote-SSH server stack is flagged as
+# "stale" rather than just "running" -- see CLAUDE.md's HPC login node
+# policy. Not a hard cutoff for anything destructive: nothing auto-kills a
+# stale stack, this only decides what the GUI's banner surfaces to a human.
+_VSCODE_STALE_THRESHOLD_SECONDS = 12 * 60 * 60
+
+_boot_time_cache = None
+
+
+def _boot_time():
+    """System boot time as a Unix epoch timestamp, or None if unreadable."""
+    global _boot_time_cache
+    if _boot_time_cache is not None:
+        return _boot_time_cache
+    try:
+        with open("/proc/stat", "r") as f:
+            for line in f:
+                if line.startswith("btime"):
+                    _boot_time_cache = float(line.split()[1])
+                    return _boot_time_cache
+    except Exception:
+        pass
+    return None
+
+
+def _process_start_epoch(pid):
+    """Wall-clock epoch timestamp a process started, or None if unavailable."""
+    boot = _boot_time()
+    if boot is None:
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(errors="ignore")
+        # comm (field 2) is parenthesized and may itself contain ")", so
+        # split on the LAST ")" to reliably find where the numeric fields
+        # begin -- fields after that point, 0-indexed, put starttime (the
+        # overall field 22) at index 19.
+        after_comm = raw.rsplit(")", 1)[1].split()
+        starttime_ticks = float(after_comm[19])
+    except Exception:
+        return None
+    try:
+        clk_tck = os.sysconf("SC_CLK_TCK")
+    except (AttributeError, ValueError):
+        clk_tck = 100
+    return boot + starttime_ticks / clk_tck
+
+
+def _process_rss_bytes(pid):
+    """Resident memory of a process in bytes, or 0 if unavailable."""
+    try:
+        with open(f"/proc/{pid}/status", "r") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    return 0
+
+
+def _find_vscode_remote_ssh_stacks():
+    """Group this OS user's own VS Code Remote-SSH server processes by
+    version stack (one "Stable-<hash>" directory per spun-up server, which
+    in practice tracks roughly one per distinct connected window/session --
+    see CLAUDE.md's HPC login node policy on why leftover stacks matter on
+    a shared login node). Only ever inspects processes this OS user
+    actually owns (checked via /proc/<pid> ownership) -- this GUI can be
+    reached by multiple people on a shared login node, and must never
+    surface or touch another user's processes.
+
+    Returns a list of dicts, oldest stack first:
+        {"hash", "pids", "started_at" (epoch|None), "age_seconds" (float|None),
+         "rss_bytes", "stale" (bool)}
+    """
+    my_uid = os.getuid()
+    stacks = {}
+    for pid in _iter_proc_pids():
+        cmdline = _read_proc_cmdline(pid)
+        if not cmdline or ".vscode-server/cli/servers/stable-" not in cmdline:
+            continue
+        try:
+            if os.stat(f"/proc/{pid}").st_uid != my_uid:
+                continue
+        except OSError:
+            continue
+
+        match = _VSCODE_SERVER_STACK_RE.search(cmdline)
+        if not match:
+            continue
+        stacks.setdefault(match.group(1), []).append(pid)
+
+    now = time.time()
+    results = []
+    for stack_hash, pids in stacks.items():
+        starts = [t for t in (_process_start_epoch(p) for p in pids) if t is not None]
+        started_at = min(starts) if starts else None
+        age_seconds = (now - started_at) if started_at is not None else None
+        results.append(
+            {
+                "hash": stack_hash,
+                "pids": sorted(pids),
+                "started_at": started_at,
+                "age_seconds": age_seconds,
+                "rss_bytes": sum(_process_rss_bytes(p) for p in pids),
+                "stale": bool(
+                    age_seconds is not None
+                    and age_seconds >= _VSCODE_STALE_THRESHOLD_SECONDS
+                ),
+            }
+        )
+
+    results.sort(key=lambda s: (s["age_seconds"] is None, -(s["age_seconds"] or 0)))
+    return results
+
+
 def _terminate_tracked_run(state):
     process = state.get("process")
     if process is None:
@@ -1626,6 +1741,8 @@ register_system_routes(
     get_active_tracked_run_jobs=_get_active_tracked_run_jobs,
     project_manager_getter=lambda: ProjectManager,
     find_app_related_pids=_find_app_related_pids,
+    find_vscode_remote_ssh_stacks=_find_vscode_remote_ssh_stacks,
+    terminate_pid_groups=_terminate_pid_groups,
     get_total_memory_bytes=_get_total_memory_bytes,
     current_machine_id=_current_machine_id,
     read_global_settings_doc=_read_global_settings_doc,

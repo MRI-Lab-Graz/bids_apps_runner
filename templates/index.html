@@ -279,6 +279,21 @@
 
 {% block content %}
     <div class="container container-main">
+        <!-- Stale VS Code Remote-SSH session warning -- hidden until
+             refreshVscodeSessionsPanel() (vscode_sessions_panel.js) finds
+             something stale on page load. Sits above every tab since it's
+             a host-wide hygiene concern, not tied to any one project. -->
+        <div id="vscodeSessionsPanel" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;">
+            <div class="d-flex justify-content-between align-items-center">
+                <strong><i class="fas fa-laptop-code me-1"></i>VS Code sessions on this host</strong>
+                <span id="vscodeSessionsBadge" class="badge bg-secondary">Checking...</span>
+            </div>
+            <div id="vscodeSessionsDetail" class="mt-2"></div>
+            <button type="button" class="btn btn-sm btn-outline-danger mt-2" id="vscodeSessionsCleanupBtn"
+                    onclick="cleanupVscodeSessionsPanel()" style="display:none;">
+                <i class="fas fa-broom me-1"></i>Clean up stale session(s)
+            </button>
+        </div>
         <!-- PROJECTS TAB -->
         <div id="projectsTab" class="tab-panel" style="display:block;">
             <div class="card">
@@ -1798,6 +1813,11 @@
          it carries zero risk to that already-working code. See its own
          header comment for the full rationale. -->
     <script src="{{ url_for('static', filename='js/readiness_panel.js') }}"></script>
+    <!-- Warns this OS user about stale VS Code Remote-SSH server stacks
+         lingering on this host (HPC login node footprint hygiene -- see
+         CLAUDE.md). Self-contained, no shared state, checked once on page
+         load. See its own header comment for the full rationale. -->
+    <script src="{{ url_for('static', filename='js/vscode_sessions_panel.js') }}"></script>
     <!-- Project load, pipeline-preset switching, and container/app-options
          fetching -- extracted out of the inline <script> below into its own
          file. Unlike readiness_panel.js above, this one is NOT independent:
@@ -4650,6 +4670,9 @@
             switchTab('projectsTab', document.getElementById('tabProjectsBtn'));
             toggleEngineFields();
             checkSystemStatus();
+            if (typeof refreshVscodeSessionsPanel === 'function') {
+                refreshVscodeSessionsPanel();
+            }
             updateNavbarRunStatus();
             loadGlobalSettings();
             fetchSystemResources();

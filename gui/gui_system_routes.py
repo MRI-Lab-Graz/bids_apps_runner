@@ -16,6 +16,8 @@ def register_system_routes(
     get_active_tracked_run_jobs: Callable[[], list[dict[str, Any]]],
     project_manager_getter: Callable[[], Any],
     find_app_related_pids: Callable[[bool], set[int] | list[int]],
+    find_vscode_remote_ssh_stacks: Callable[[], list[dict[str, Any]]],
+    terminate_pid_groups: Callable[[Any], int],
     get_total_memory_bytes: Callable[[], int | None],
     current_machine_id: Callable[[], str],
     read_global_settings_doc: Callable[[], dict[str, Any]],
@@ -118,6 +120,52 @@ def register_system_routes(
                 "jobs": jobs,
                 "detected_pid_count": len(fallback_pids),
                 "unscoped_count": unscoped_count,
+            }
+        )
+
+    @app.route("/check_vscode_sessions", methods=["GET"])
+    def check_vscode_sessions():
+        stacks = find_vscode_remote_ssh_stacks()
+        stale = [s for s in stacks if s.get("stale")]
+        return jsonify(
+            {
+                "stacks": stacks,
+                "total_count": len(stacks),
+                "stale_count": len(stale),
+                "stale_rss_bytes": sum(s.get("rss_bytes", 0) for s in stale),
+            }
+        )
+
+    @app.route("/cleanup_vscode_session", methods=["POST"])
+    def cleanup_vscode_session():
+        data = request.get_json(silent=True) or {}
+        stack_hash = str(data.get("hash") or "").strip()
+        if not stack_hash:
+            return jsonify({"error": "hash is required"}), 400
+
+        # Re-derive current state rather than trusting a hash from an
+        # earlier GET response's PID list -- avoids acting on stale/reused
+        # PIDs if time has passed since the client last checked.
+        match = next(
+            (s for s in find_vscode_remote_ssh_stacks() if s.get("hash") == stack_hash),
+            None,
+        )
+        if not match:
+            return (
+                jsonify(
+                    {
+                        "error": "No matching VS Code server session found -- it may have already exited."
+                    }
+                ),
+                404,
+            )
+
+        terminated = terminate_pid_groups(match["pids"])
+        return jsonify(
+            {
+                "message": f"Sent termination signal to {terminated} process group(s).",
+                "hash": stack_hash,
+                "pid_count": len(match["pids"]),
             }
         )
 
