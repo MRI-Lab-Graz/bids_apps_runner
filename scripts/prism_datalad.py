@@ -269,6 +269,87 @@ def clone_dataset(source_url: str, target_dir: str, dry_run: bool = False) -> bo
     return run_datalad_command(cmd, dry_run=dry_run)
 
 
+def list_remote_directory_names(
+    ssh_host: str, remote_path: str, timeout: int = 15
+) -> list:
+    """List first-level subdirectory names under ``remote_path`` on ``ssh_host``.
+
+    Shared by the GUI's remote-dataset browsing
+    (``gui/gui_utility_routes.py``'s ``/list_remote_studies``) and CLI tools
+    like ``scripts/sync_openneuro_datasets.py`` so both go through the same
+    already-configured SSH connection (``ssh_host`` must match a Host entry
+    in ``~/.ssh/config``) instead of separate ad-hoc invocations.
+
+    Raises:
+        RuntimeError: if the SSH command fails (non-zero exit, timeout, or
+            ``ssh`` not found), with the remote's stderr (or a description
+            of the failure) as the message.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                ssh_host,
+                "find "
+                + remote_path
+                + r" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"Timed out contacting {ssh_host}")
+    except FileNotFoundError:
+        raise RuntimeError("ssh not found on this host")
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            result.stderr.strip() or f"Failed to list {remote_path} on {ssh_host}"
+        )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def run_remote_script(ssh_host: str, script: str, timeout: int = 30) -> str:
+    """Run a read-only bash ``script`` on ``ssh_host`` via stdin and return stdout.
+
+    Same connection parameters as ``list_remote_directory_names`` (BatchMode,
+    short ConnectTimeout) so this reuses the lab's already-configured SSH
+    access instead of a fresh ad-hoc invocation. Intended for diagnostic
+    scripts (e.g. ``scripts/check_derivatives_conflicts.py``) that need to
+    inspect several remote paths in one round-trip -- callers are
+    responsible for keeping ``script`` read-only, since nothing here
+    enforces that.
+
+    Raises:
+        RuntimeError: if the SSH command fails (non-zero exit, timeout, or
+            ``ssh`` not found), with the remote's stderr (or a description
+            of the failure) as the message.
+    """
+    try:
+        result = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", ssh_host, "bash", "-s"],
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"Timed out contacting {ssh_host}")
+    except FileNotFoundError:
+        raise RuntimeError("ssh not found on this host")
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            result.stderr.strip() or f"Remote script failed on {ssh_host}"
+        )
+    return result.stdout
+
+
 def resolve_openneuro_url(dataset_id_or_url: str) -> str:
     """Resolve an OpenNeuro dataset ID or URL to a clonable GitHub URL.
 

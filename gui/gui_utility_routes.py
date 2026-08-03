@@ -344,39 +344,20 @@ def register_utility_routes(
         Response:
           studies – sorted list of directory names under REMOTE_DATASET_BASE_PATH
         """
+        import prism_datalad  # lazy - scripts/ is on sys.path at runtime
+
         try:
-            result = subprocess.run(
-                [
-                    "ssh",
-                    "-o",
-                    "BatchMode=yes",
-                    "-o",
-                    "ConnectTimeout=10",
-                    REMOTE_DATASET_SSH_HOST,
-                    "find "
-                    + REMOTE_DATASET_BASE_PATH
-                    + r" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
+            studies = prism_datalad.list_remote_directory_names(
+                REMOTE_DATASET_SSH_HOST, REMOTE_DATASET_BASE_PATH, timeout=15
             )
-            if result.returncode != 0:
-                return (
-                    jsonify(
-                        {
-                            "error": result.stderr.strip()
-                            or "Failed to list studies on the remote server."
-                        }
-                    ),
-                    502,
-                )
-            studies = [line.strip() for line in result.stdout.splitlines() if line.strip()]
             return jsonify({"studies": studies})
-        except subprocess.TimeoutExpired:
-            return jsonify({"error": "Timed out contacting the remote DataLad server."}), 504
-        except FileNotFoundError:
-            return jsonify({"error": "ssh not found on this host."}), 500
+        except RuntimeError as exc:
+            message = str(exc)
+            if message.startswith("Timed out"):
+                return jsonify({"error": message}), 504
+            if message == "ssh not found on this host":
+                return jsonify({"error": message + "."}), 500
+            return jsonify({"error": message}), 502
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 

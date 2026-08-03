@@ -1050,6 +1050,26 @@ def generate_subregion_script(
     return script
 
 
+def _apply_dataset_options_override(config: Dict, dataset_id: str) -> None:
+    """Merge a per-dataset ``options_extra`` override into ``bids_app.options``.
+
+    ``config["datasets"]`` entries may be plain ID strings or objects
+    (``{"id": ..., "options_extra": [...]}``) so a mega-study cohort config
+    can share one container/app across datasets with differing needs (e.g.
+    fmriprep flags for datasets lacking fieldmaps) while still using the same
+    ``bids_app`` block for everything else. Mutates ``config`` in place.
+    """
+    for entry in config.get("datasets", []):
+        if isinstance(entry, dict) and entry.get("id") == dataset_id:
+            extra = entry.get("options_extra") or []
+            if extra:
+                config.setdefault("bids_app", {})
+                options = list(config["bids_app"].get("options", []))
+                options.extend(extra)
+                config["bids_app"]["options"] = options
+            return
+
+
 def generate_array_script(
     config_path: str,
     dataset_id: str,
@@ -1076,6 +1096,8 @@ def generate_array_script(
 
     if not validate_compute_config(config):
         sys.exit(1)
+
+    _apply_dataset_options_override(config, dataset_id)
 
     try:
         with open(subject_list_path, "r") as f:

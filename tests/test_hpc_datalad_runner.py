@@ -338,3 +338,43 @@ def test_generate_script_rejects_unsafe_subject(tmp_path):
         hpc_datalad_runner.generate_script(
             str(config_path), "sub-01; touch /tmp/pwned", str(tmp_path / "job.sh")
         )
+
+
+def _mega_study_config():
+    config = _base_config()
+    config["datasets"] = [
+        "ds001",
+        {"id": "ds002", "options_extra": ["--use-syn-sdc"]},
+    ]
+    return config
+
+
+def test_apply_dataset_options_override_merges_matching_dataset():
+    config = _mega_study_config()
+    hpc_datalad_runner._apply_dataset_options_override(config, "ds002")
+    assert config["bids_app"]["options"][-1] == "--use-syn-sdc"
+
+
+def test_apply_dataset_options_override_leaves_other_datasets_untouched():
+    config = _mega_study_config()
+    original_options = list(config["bids_app"]["options"])
+    hpc_datalad_runner._apply_dataset_options_override(config, "ds001")
+    assert config["bids_app"]["options"] == original_options
+
+
+def test_generate_array_script_applies_dataset_options_override(tmp_path):
+    import json
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(_mega_study_config()))
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+
+    script_ds002 = hpc_datalad_runner.generate_array_script(
+        str(config_path), "ds002", subj_list
+    )
+    assert "--use-syn-sdc" in script_ds002
+
+    script_ds001 = hpc_datalad_runner.generate_array_script(
+        str(config_path), "ds001", subj_list
+    )
+    assert "--use-syn-sdc" not in script_ds001

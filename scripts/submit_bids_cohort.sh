@@ -195,8 +195,12 @@ resolve_config() {
     # Support both new generic key and legacy openneuro_url_template
     INPUT_URL_TPL="$(cfg '.datalad.input_url_template // .datalad.openneuro_url_template // ""')"
 
-    # Build dataset list (filtered if -d was given)
-    mapfile -t ALL_DATASETS < <(jq -r '.datasets[]' "$CONFIG")
+    # Build dataset list (filtered if -d was given). Each entry may be a
+    # plain ID string or an object ({"id": ..., "options_extra": [...]})
+    # carrying per-dataset bids_app.options overrides consumed by
+    # hpc_datalad_runner.py --array-mode; only the id is needed here since
+    # every path/URL below is keyed off the plain ID string.
+    mapfile -t ALL_DATASETS < <(jq -r '.datasets[] | if type=="object" then .id else . end' "$CONFIG")
     if [[ ${#FILTER_DATASETS[@]} -gt 0 ]]; then
         DATASETS=("${FILTER_DATASETS[@]}")
     else

@@ -1,5 +1,25 @@
 # Working conventions for this repo
 
+## ⚠️ Data storage — bulk data goes under /cl_tmp/mrilabgraz, never /usr/people
+
+**All BIDS input data, derivatives, per-run scratch, logs, and subject
+lists must live under `/cl_tmp/mrilabgraz`** (a large shared scratch
+filesystem). `/usr/people/mrilabgraz` (the home/user-folder filesystem)
+does **not** have the quota for this — do not point `shared_input_base`,
+`shared_output_base`, `scratch_dir`, `log_dir`, or `subject_lists_dir` at
+anything under `/usr/people` in any HPC cohort config
+(`configs/*.json`, `scripts/submit_bids_cohort.sh` /
+`scripts/hpc_datalad_runner.py` inputs).
+
+Container images (`.sif`) and small shared files like the FreeSurfer
+license (e.g. `/usr/people/mrilabgraz/container/...`) are the one
+exception — they're small, shared infrastructure, not per-run data, and
+that's where the existing containers already live on disk.
+
+When generating or editing any config that sets these path keys, default
+to `/cl_tmp/mrilabgraz/<something>` — never invent a new path under
+`/usr/people/mrilabgraz` for bulk data, even as a placeholder.
+
 ## ⚠️ HPC login node policy — never run real compute there
 
 The admin's instruction is explicit: **do not use the login node** for
