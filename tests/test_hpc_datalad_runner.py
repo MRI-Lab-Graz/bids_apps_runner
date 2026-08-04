@@ -63,6 +63,47 @@ def test_array_generator_has_no_datalad_or_git_calls(tmp_path):
     assert "flock" not in script
 
 
+def test_array_generator_sbatch_logs_land_inside_output_dataset_not_external_log_dir(
+    tmp_path,
+):
+    """Regression test for a real incident: a 31-dataset mriqc pilot cohort
+    got every single result committed locally but never pushed, because
+    the SBATCH --output/--error paths pointed at the external
+    paths.log_dir (only checked paths.get("output_dir", "") directly,
+    which is never set for cohort/array-mode configs -- only
+    shared_output_base is). datalad-slurm reads those exact SBATCH paths
+    back via `scontrol show job` and tries to save them for provenance;
+    pointing them outside the dataset makes `datalad slurm-finish` fail
+    with "path not underneath the reference dataset" for every log file,
+    aborting before the push. _base_config() here deliberately has
+    shared_output_base + log_dir but no explicit paths.output_dir, i.e.
+    exactly the cohort/array-mode shape that was broken.
+    """
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _base_config(), "ds001", subj_list, 1
+    ).generate_script()
+
+    expected_log_dir = "/tmp/output base/ds001/fmriprep/.slurm_logs"
+    assert f"#SBATCH --output={expected_log_dir}/slurm-%A_%a.out" in script
+    assert f"#SBATCH --error={expected_log_dir}/slurm-%A_%a.err" in script
+    # the external log_dir must not be used for the SBATCH log destination
+    assert "--output=/tmp/log dir" not in script
+    assert "--error=/tmp/log dir" not in script
+
+
+def test_resolve_output_dir_respects_explicit_override(tmp_path):
+    config = _base_config()
+    config["paths"]["output_dir"] = "/explicit/output/path"
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        config, "ds001", subj_list, 1
+    ).generate_script()
+
+    assert "#SBATCH --output=/explicit/output/path/.slurm_logs/slurm-%A_%a.out" in script
+    assert "OUT_DIR=/explicit/output/path" in script
+
+
 def _fastsurfer_bids_config(gpu=True):
     config = _base_config()
     config["paths"]["container"] = "/containers/fastsurfer_bids_cuda-v2.5.4.sif"

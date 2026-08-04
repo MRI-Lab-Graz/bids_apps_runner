@@ -279,6 +279,28 @@ class BidsAppComputeScriptGenerator:
 
     # ── private sections ──────────────────────────────────────────────────────
 
+    def _resolve_output_dir(self) -> str:
+        """The actual, dataset-scoped output directory in effect for this
+        run: an explicit paths.output_dir override, or the
+        shared_output_base + dataset_id + output_dir_name composition
+        otherwise (the same composition submit_bids_cohort.sh's own
+        resolve_output_clone() computes in bash). Used by both _header()
+        (to place SBATCH log files inside it, so datalad-slurm can save
+        them for provenance -- see _header()'s comment) and _workdirs()
+        (as OUT_DIR), so the two can never disagree about where the
+        output dataset actually is -- unlike paths.get("output_dir", "")
+        alone, which is only ever set for single-dataset GUI-derived
+        configs and is always empty for cohort/array-mode runs, silently
+        skipping the in-dataset log placement below.
+        """
+        output_dir = self.paths.get("output_dir")
+        if output_dir:
+            return output_dir
+        return (
+            f"{self.paths.get('shared_output_base', '/shared/derivatives')}"
+            f"/{self.dataset_id}/{self._out_dir_name}"
+        )
+
     def _header(self) -> str:
         partition = _validate_sbatch_value(
             self.hpc.get("partition", "compute"), "partition"
@@ -297,15 +319,15 @@ class BidsAppComputeScriptGenerator:
         # outside the dataset (e.g. this repo's own logs/ folder) makes
         # `datalad slurm-finish` fail with "path not underneath the reference
         # dataset" for every log file, aborting before it can push. Use a
-        # dedicated subdirectory of the output dataset itself instead.
-        output_dir = self.paths.get("output_dir", "")
-        log_dir = (
-            f"{output_dir}/.slurm_logs"
-            if output_dir
-            else self.paths.get("log_dir", "$HOME/logs/bids_app")
-        )
-        out_log = f"{log_dir}/{self.dataset_id}/slurm-%A_%a.out"
-        err_log = f"{log_dir}/{self.dataset_id}/slurm-%A_%a.err"
+        # dedicated subdirectory of the *actual* resolved output dataset
+        # instead -- always, not only when an explicit paths.output_dir
+        # override happens to be set (real incident: every dataset in a
+        # 31-dataset mriqc cohort pilot run got its results committed
+        # locally but never pushed, because this fell through to the
+        # external paths.log_dir for every single one of them).
+        log_dir = f"{self._resolve_output_dir()}/.slurm_logs"
+        out_log = f"{log_dir}/slurm-%A_%a.out"
+        err_log = f"{log_dir}/slurm-%A_%a.err"
 
         header = f"""#!/bin/bash
 #SBATCH --job-name={self._app_name}_{self.dataset_id}
@@ -416,13 +438,7 @@ fi
             if input_dir
             else f"{self.paths.get('shared_input_base', '/shared/input')}/{self.dataset_id}"
         )
-        output_dir = self.paths.get("output_dir")
-        out_dir = _shell_quote(
-            output_dir
-            if output_dir
-            else f"{self.paths.get('shared_output_base', '/shared/derivatives')}"
-            f"/{self.dataset_id}/{self._out_dir_name}"
-        )
+        out_dir = _shell_quote(self._resolve_output_dir())
 
         return f"""
 # Working directories
@@ -810,6 +826,19 @@ class SubregionSegmentationScriptGenerator:
         ]
         return "\n".join(parts)
 
+    def _resolve_output_dir(self) -> str:
+        """See BidsAppComputeScriptGenerator._resolve_output_dir() -- same
+        rationale (must match _workdirs()'s OUT_DIR, not just an explicit
+        override, so datalad-slurm's SBATCH log tracking actually lands
+        inside the dataset). This class's OUT_DIR doubles as FreeSurfer's
+        SUBJECTS_DIR, so unlike the BIDS-app composition there's no
+        output_dir_name suffix here.
+        """
+        output_dir = self.paths.get("output_dir")
+        if output_dir:
+            return output_dir
+        return f"{self.paths.get('shared_output_base', '/shared/derivatives')}/{self.dataset_id}"
+
     def _header(self) -> str:
         partition = _validate_sbatch_value(
             self.hpc.get("partition", "compute"), "partition"
@@ -820,14 +849,9 @@ class SubregionSegmentationScriptGenerator:
         max_concurrent = int(self.hpc.get("max_concurrent", 50))
         array_spec = f"0-{self.n_timepoints - 1}%{max_concurrent}"
 
-        output_dir = self.paths.get("output_dir", "")
-        log_dir = (
-            f"{output_dir}/.slurm_logs"
-            if output_dir
-            else self.paths.get("log_dir", "$HOME/logs/bids_app")
-        )
-        out_log = f"{log_dir}/{self.dataset_id}/subregions-%A_%a.out"
-        err_log = f"{log_dir}/{self.dataset_id}/subregions-%A_%a.err"
+        log_dir = f"{self._resolve_output_dir()}/.slurm_logs"
+        out_log = f"{log_dir}/subregions-%A_%a.out"
+        err_log = f"{log_dir}/subregions-%A_%a.err"
 
         header = f"""#!/bin/bash
 #SBATCH --job-name={self._app_name}_subregions_{self.dataset_id}
@@ -890,13 +914,7 @@ fi
     def _workdirs(self) -> str:
         scratch = _shell_quote(self.paths.get("scratch_dir", "/scratch/$USER/bids_app"))
         ds_id = _shell_quote(self.dataset_id)
-        output_dir = self.paths.get("output_dir")
-        out_dir = _shell_quote(
-            output_dir
-            if output_dir
-            else f"{self.paths.get('shared_output_base', '/shared/derivatives')}"
-            f"/{self.dataset_id}"
-        )
+        out_dir = _shell_quote(self._resolve_output_dir())
 
         return f"""
 # Working directories -- OUT_DIR IS the FreeSurfer SUBJECTS_DIR (the

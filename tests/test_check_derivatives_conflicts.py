@@ -1,11 +1,24 @@
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import check_derivatives_conflicts as check_mod
+
+# datalad is an HPC-only system dependency (see requirements-core.txt) --
+# not installed in the lightweight CI tier, only on the actual HPC and in
+# local dev environments that have it. build_removal_script's generated
+# script shells out to a real `datalad save`, so tests that execute it
+# need to skip gracefully rather than fail with "command not found" where
+# datalad isn't on PATH.
+requires_datalad = pytest.mark.skipif(
+    shutil.which("datalad") is None, reason="datalad not installed in this environment"
+)
 
 
 def _run_git(repo, *args):
@@ -161,6 +174,112 @@ def test_path_from_status_line_extracts_path():
     assert check_mod._path_from_status_line(line) == "/datalad/mri/openneuro/ds000256"
 
 
+def test_build_removal_script_references_app_path_and_datalad_save():
+    """Pure string-generation check -- doesn't need a real datalad binary,
+    unlike the @requires_datalad execution tests below."""
+    script = check_mod.build_removal_script(
+        "mriqc", ["/datalad/mri/openneuro/ds000256"]
+    )
+    assert "/datalad/mri/openneuro/ds000256" in script
+    assert "derivatives/mriqc" in script
+    assert "datalad save" in script
+    assert "git -C" in script
+
+
+def test_main_emit_removal_script_prints_script_for_conflicts(monkeypatch, capsys):
+    config = {
+        "datasets": ["ds000031", "ds000256"],
+        "bids_app": {"app_name": "mriqc"},
+        "datalad": {
+            "input_url_template": "datalad-server:/datalad/mri/openneuro/{dataset_id}"
+        },
+    }
+    config_path = Path(__file__).parent / "_tmp_main_test_config.json"
+    config_path.write_text(json.dumps(config))
+    try:
+        fake_output = (
+            "/datalad/mri/openneuro/ds000031: OK (already a proper subdataset on derivatives)\n"
+            "/datalad/mri/openneuro/ds000256: CONFLICT (plain content at derivatives/mriqc on HEAD)\n"
+        )
+        monkeypatch.setattr(
+            check_mod.prism_datalad,
+            "run_remote_script",
+            lambda ssh_host, script, timeout=30: fake_output,
+        )
+        monkeypatch.setattr(
+            sys, "argv",
+            ["check_derivatives_conflicts.py", "-c", str(config_path), "--emit-removal-script"],
+        )
+
+        check_mod.main()
+
+        captured = capsys.readouterr()
+        assert "derivatives/mriqc for 1 dataset(s)" in captured.out
+        assert "ds000256" in captured.out
+        assert "datalad save" in captured.out
+        assert "ds000031" not in captured.out.split("Review before running")[-1]
+    finally:
+        config_path.unlink()
+
+
+def test_main_emit_removal_script_reports_nothing_to_remove(monkeypatch, capsys):
+    config = {
+        "datasets": ["ds000031"],
+        "bids_app": {"app_name": "mriqc"},
+        "datalad": {
+            "input_url_template": "datalad-server:/datalad/mri/openneuro/{dataset_id}"
+        },
+    }
+    config_path = Path(__file__).parent / "_tmp_main_test_config2.json"
+    config_path.write_text(json.dumps(config))
+    try:
+        monkeypatch.setattr(
+            check_mod.prism_datalad,
+            "run_remote_script",
+            lambda ssh_host, script, timeout=30: "/datalad/mri/openneuro/ds000031: OK (already a proper subdataset on derivatives)\n",
+        )
+        monkeypatch.setattr(
+            sys, "argv",
+            ["check_derivatives_conflicts.py", "-c", str(config_path), "--emit-removal-script"],
+        )
+
+        check_mod.main()
+
+        captured = capsys.readouterr()
+        assert "nothing to remove" in captured.out
+    finally:
+        config_path.unlink()
+
+
+def test_main_without_emit_flag_just_scans(monkeypatch, capsys):
+    config = {
+        "datasets": ["ds000031"],
+        "bids_app": {"app_name": "mriqc"},
+        "datalad": {
+            "input_url_template": "datalad-server:/datalad/mri/openneuro/{dataset_id}"
+        },
+    }
+    config_path = Path(__file__).parent / "_tmp_main_test_config3.json"
+    config_path.write_text(json.dumps(config))
+    try:
+        monkeypatch.setattr(
+            check_mod.prism_datalad,
+            "run_remote_script",
+            lambda ssh_host, script, timeout=30: "/datalad/mri/openneuro/ds000031: CLEAN (no derivatives/mriqc on HEAD)\n",
+        )
+        monkeypatch.setattr(
+            sys, "argv", ["check_derivatives_conflicts.py", "-c", str(config_path)]
+        )
+
+        check_mod.main()
+
+        captured = capsys.readouterr()
+        assert "CLEAN: 1" in captured.out
+    finally:
+        config_path.unlink()
+
+
+@requires_datalad
 def test_removal_script_removes_content_with_no_derivatives_branch(tmp_path):
     repo = tmp_path / "ds000256"
     _init_repo(repo)
@@ -182,6 +301,7 @@ def test_removal_script_removes_content_with_no_derivatives_branch(tmp_path):
     assert branch == "master"
 
 
+@requires_datalad
 def test_removal_script_restores_original_branch_when_derivatives_branch_exists(tmp_path):
     repo = tmp_path / "ds_with_branch"
     _init_repo(repo)
