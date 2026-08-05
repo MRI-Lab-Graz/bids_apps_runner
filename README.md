@@ -363,6 +363,26 @@ New projects inherit resolved defaults for the current host. Existing projects r
 - **Validation reports**: `validation_reports/validation_report_YYYYMMDD_HHMMSS.json`
 - **Real-time monitoring**: Use `tail -f` on log files for live progress tracking
 
+### Watching HPC/Slurm jobs
+
+- **Per-cohort progress**: `scripts/submit_bids_cohort.sh status` -- reads
+  the most recent `submission_*.log` for a given cohort config and reports
+  each dataset's array/finish job state and subject-level progress.
+- **All jobs for a user**: `scripts/watch_user_jobs.sh` -- a general "what's
+  running for me right now" view, independent of any specific cohort
+  config. Shows live `squeue` state plus today's terminal-state counts
+  (COMPLETED/FAILED/TIMEOUT/...) from `sacct` per array job, since a task
+  that finishes (success or failure) drops out of `squeue` immediately and
+  so is otherwise invisible once done.
+
+  ```bash
+  scripts/watch_user_jobs.sh                     # one-shot snapshot for $USER
+  scripts/watch_user_jobs.sh -w                   # auto-refresh every 30s (Ctrl-C to stop)
+  scripts/watch_user_jobs.sh -w -n 10             # refresh every 10s
+  scripts/watch_user_jobs.sh -j 5560071,5560082   # also track specific job IDs after they leave the queue
+  scripts/watch_user_jobs.sh -u otheruser         # another user
+  ```
+
 ## Troubleshooting
 
 ### Common Issues

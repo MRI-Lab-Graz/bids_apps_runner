@@ -88,11 +88,6 @@ RESUME=false
 PILOT=false
 FILTER_DATASETS=()
 SUBJ_LISTS_DIR=""        # resolved from config
-# Only ever set via --batch-idx/--submission-log/--commit-prefix, used by
-# the internal `_continue-batch` command (see cmd_continue_batch).
-CONTINUE_BATCH_IDX=""
-CONTINUE_SUBMISSION_LOG=""
-CONTINUE_COMMIT_PREFIX=""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
@@ -176,12 +171,6 @@ while [[ $# -gt 0 ]]; do
         --dry-run)        DRY_RUN=true;           shift ;;
         --resume)         RESUME=true;            shift ;;
         --pilot)          PILOT=true;             shift ;;
-        # Internal, used only by the finish-job chain a batched cohort
-        # submits into itself (see schedule_one_batch/cmd_continue_batch) --
-        # not documented in cmd_help's public command list.
-        --batch-idx)       CONTINUE_BATCH_IDX="$2";      shift 2 ;;
-        --submission-log)  CONTINUE_SUBMISSION_LOG="$2"; shift 2 ;;
-        --commit-prefix)   CONTINUE_COMMIT_PREFIX="$2";  shift 2 ;;
         -h|--help)        COMMAND=help;           shift ;;
         *) die "Unknown option: $1" ;;
     esac
@@ -222,17 +211,6 @@ resolve_config() {
     APP_NAME="$(jq -r '.bids_app.app_name // "bids_app"' "$CONFIG")"
     LOG_DIR_BASE="$(cfg '.paths.log_dir')"
     mapfile -t HPC_MODULES < <(jq -r '.hpc.modules[]? // empty' "$CONFIG")
-
-    # Cohorts get split into sequential batches of this many subjects, each
-    # with its own array+finish job pair, so a slow/failed finish only costs
-    # one batch instead of the whole study (see schedule_one_batch below for
-    # why batches can't just be pre-scheduled with SBATCH --dependency).
-    # jq's `//` only substitutes on null/absent, not on 0 -- so an explicit
-    # `"batch_size": 0` in the config is a real, working escape hatch back to
-    # today's single-array-per-dataset behavior, not accidentally defaulted
-    # away.
-    BATCH_SIZE="$(jq -r '.hpc.batch_size // 30' "$CONFIG")"
-    [[ "$BATCH_SIZE" =~ ^[0-9]+$ ]] || die "hpc.batch_size must be a non-negative integer, got: ${BATCH_SIZE}"
 
     # Optional FreeSurfer subregion segmentation follow-up (thalamus /
     # hippo-amygdala / brainstem, see submit_subregion_segmentation below).
@@ -737,243 +715,6 @@ prefetch_cohort_subjects() {
     return 0
 }
 
-# Path a given batch's subject-list file would live at, whether or not it's
-# actually been created yet -- callers check -f themselves. batch_idx is
-# 1-based, zero-padded to 2 digits (matches the awk splitter in cmd_submit).
-_batch_subj_list() {
-    local ds="$1" subj_list_suffix="$2" batch_idx="$3"
-    echo "${SUBJ_LISTS_DIR}/${ds}_subjects${subj_list_suffix}_batch$(printf '%02d' "$batch_idx").txt"
-}
-
-# Schedule one array+finish job pair for a batch of subjects (or, when
-# batch_idx is empty, today's single whole-cohort array -- everything below
-# reduces to the pre-batching behavior byte-for-byte in that case, same
-# filenames included).
-#
-# Batches are NOT pre-scheduled up front with SBATCH --dependency. Confirmed
-# directly against datalad-slurm's own source
-# (datalad_slurm/schedule.py::check_output_conflict): `datalad slurm-schedule
-# -o .` refuses to declare new outputs against a dataset while *any* prior
-# job's outputs are still open (not yet slurm-finish'd) -- SBATCH
-# --dependency only delays when a job *runs* on the cluster, it does nothing
-# to delay the slurm-schedule call itself, which happens synchronously at
-# submit time. (This is also why submit_subregion_segmentation's own
-# concurrent -o . schedule, fired right after the main array below, is
-# explicitly best-effort/likely-to-conflict with a documented manual
-# fallback -- same constraint, pre-dating this batching feature.)
-#
-# So instead this chains itself: once THIS batch's finish job actually
-# commits (closing its DB entry), it invokes `submit_bids_cohort.sh
-# _continue-batch` for the next one, if any -- see the "continue_block"
-# below and cmd_continue_batch. That only ever runs from inside an
-# already-`sbatch`-dispatched finish job, on a real compute node, so it
-# never touches the HPC login-node policy.
-#
-# Sets _SCHEDULED_ARRAY_JOB_ID / _SCHEDULED_FINISH_JOB_ID on success.
-# Returns 1 (with a [WARN]) on failure -- callers decide what that means:
-# cmd_submit's loop counts one more failed dataset and continues to the
-# next; cmd_continue_batch has no such fallback, so its failure propagates
-# (no `||` guard) and fails the finish job that invoked it, surfacing via
-# SLURM's own --mail-type=FAIL instead of the chain silently stalling.
-schedule_one_batch() {
-    local ds="$1" output_clone="$2" subj_list="$3" array_script="$4" \
-          finish_script="$5" commit_prefix="$6" batch_idx="$7" \
-          next_subj_list="$8" submission_log="$9"
-
-    local n_subjects
-    n_subjects=$(wc -l < "$subj_list" | tr -d ' ')
-    if [[ "$n_subjects" -eq 0 ]]; then
-        warn "[$ds] Batch subject list is empty: ${subj_list}"
-        return 1
-    fi
-
-    local batch_label="" job_name_suffix=""
-    if [[ -n "$batch_idx" ]]; then
-        batch_label=" (batch ${batch_idx})"
-        job_name_suffix="_batch$(printf '%02d' "$batch_idx")"
-    fi
-    local has_next=false
-    [[ -n "$next_subj_list" ]] && has_next=true
-
-    log "[$ds] ${n_subjects} subjects${batch_label}"
-
-    if [[ -f "$array_script" ]] && $RESUME; then
-        log "[$ds] Array script exists, skipping generation (--resume)"
-    else
-        log "[$ds] Generating array script${batch_label}..."
-        run python3 "${SCRIPT_DIR}/hpc_datalad_runner.py" \
-            --config "$CONFIG" \
-            --array-mode \
-            --dataset-id "$ds" \
-            --subject-list "$subj_list" \
-            --output "$array_script" \
-            || { warn "[$ds] Script generation failed${batch_label}"; return 1; }
-    fi
-
-    if [[ ! -d "${output_clone}/.datalad" ]]; then
-        warn "[$ds] Output not cloned at ${output_clone} – run setup first"
-        return 1
-    fi
-
-    # Declare the whole dataset as output ("-o ." is an explicit, documented
-    # special case in `datalad slurm-schedule --help`, not a forbidden
-    # wildcard glob like "-o sub-*"). Per-subject -o flags only cover each
-    # subject's own subdirectory -- BIDS apps commonly also write loose
-    # report files at the dataset root, which per-subject flags would miss.
-    local -a output_flags=(-o .)
-
-    if $DRY_RUN; then
-        echo "[DRY-RUN] (cd ${output_clone} && datalad -f json slurm-schedule ${output_flags[*]} -m '...' sbatch ${array_script})"
-        echo "[DRY-RUN]   then sbatch a dependent finish job: datalad slurm-finish && datalad push --to origin"
-        $has_next && echo "[DRY-RUN]   finish job would then chain batch $((batch_idx + 1)) from ${next_subj_list}"
-        _SCHEDULED_ARRAY_JOB_ID="DRY-RUN"
-        _SCHEDULED_FINISH_JOB_ID="DRY-RUN"
-        return 0
-    fi
-
-    # Ensure log dir exists before slurm-schedule writes its env.json there,
-    # and pre-create the array job's own SBATCH --output/--error location,
-    # which lives *inside* the output dataset (see hpc_datalad_runner.py) so
-    # datalad-slurm can save those logs as part of the job's provenance.
-    mkdir -p "${LOG_DIR_BASE}/${ds}" "${output_clone}/.slurm_logs/${ds}"
-
-    # stdout/stderr captured separately, and `|| schedule_exit=$?` directly
-    # on the assignment -- both required for set -e safety and accurate
-    # error reporting, see the matching comment historically kept on this
-    # exact call in cmd_submit (now here).
-    local schedule_stdout schedule_stderr schedule_exit job_id schedule_stderr_file
-    schedule_stderr_file=$(mktemp)
-    schedule_exit=0
-    schedule_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
-        "${output_flags[@]}" \
-        -m "${commit_prefix}${APP_NAME} array for ${ds}${batch_label} (${n_subjects} subjects)" \
-        sbatch "$array_script" 2>"$schedule_stderr_file") || schedule_exit=$?
-    schedule_stderr=$(cat "$schedule_stderr_file"); rm -f "$schedule_stderr_file"
-    if [[ $schedule_exit -ne 0 ]]; then
-        local schedule_reason
-        schedule_reason=$(printf '%s\n%s\n' "$schedule_stdout" "$schedule_stderr" \
-            | jq -r 'select(.message) | .message' 2>/dev/null | tail -1)
-        warn "[$ds] datalad slurm-schedule failed${batch_label}${schedule_reason:+: $schedule_reason}"
-        return 1
-    fi
-
-    job_id=$(printf '%s\n' "$schedule_stdout" \
-        | jq -r 'select(.action=="slurm-schedule") | .slurm_run_info.slurm_job_id // empty' \
-        | tail -1)
-    if [[ -z "$job_id" ]]; then
-        warn "[$ds] Could not determine SLURM job id from slurm-schedule output${batch_label}"
-        return 1
-    fi
-    log "[$ds] ${commit_prefix}Scheduled array job ${job_id}${batch_label} (${n_subjects} subjects)"
-
-    local module_load_line=""
-    if [[ ${#HPC_MODULES[@]} -gt 0 ]]; then
-        module_load_line="module load ${HPC_MODULES[*]}"
-    fi
-    # Notify on the finish job only (not the per-subject array, which would
-    # send one email per task).
-    local notify_email
-    notify_email="$(cfg '.hpc.notify_email // ""')"
-    local mail_lines=""
-    if [[ -n "$notify_email" ]]; then
-        mail_lines="#SBATCH --mail-user=${notify_email}
-#SBATCH --mail-type=END,FAIL"
-    fi
-    local finish_node finish_node_line=""
-    finish_node="$(pick_idle_node "$(cfg '.hpc.partition')")"
-    [[ -n "$finish_node" ]] && finish_node_line="#SBATCH --nodelist=${finish_node}"
-
-    local continue_block=""
-    if $has_next; then
-        continue_block="
-# This batch's outputs are committed and pushed above -- its DB entry is now
-# closed, so the next batch's slurm-schedule can go ahead. Chained from here
-# rather than pre-scheduled up front; see schedule_one_batch()'s own comment
-# in submit_bids_cohort.sh for why.
-bash \"${REPO_DIR}/scripts/submit_bids_cohort.sh\" _continue-batch \\
-    --config \"${CONFIG}\" -d \"${ds}\" --batch-idx $((batch_idx + 1)) \\
-    --submission-log \"${submission_log}\" --commit-prefix \"${commit_prefix}\""
-    fi
-
-    cat > "$finish_script" <<EOF
-#!/bin/bash
-#SBATCH --job-name=finish_${ds}${job_name_suffix}
-#SBATCH --dependency=afterany:${job_id}
-#SBATCH --partition=$(cfg '.hpc.partition')
-${finish_node_line}
-# 3h was not enough: job 5505212 (a 3-subject retry finish) exceeded it
-# mid-\`datalad save\` with no output at all, leaving the array's outputs
-# staged but uncommitted (see the datalad-slurm known-bug comment below).
-#SBATCH --time=12:00:00
-#SBATCH --mem=2G
-#SBATCH --cpus-per-task=1
-#SBATCH --output=${LOG_DIR_BASE}/${ds}/finish-%j.out
-#SBATCH --error=${LOG_DIR_BASE}/${ds}/finish-%j.err
-${mail_lines}
-set -euo pipefail
-${module_load_line}
-# Use the dedicated datalad-slurm venv's own datalad entry point (pinned to
-# a uv-managed portable Python 3.10) instead of .appsrunner -- compute nodes
-# on this cluster can have a different system python3 than the login node
-# (observed 3.12 vs 3.10), which silently breaks a venv that just symlinks
-# to system python. Must call the venv's bin/datalad script directly (not
-# \`python -m datalad\`, which uses a different, more limited entry point
-# that doesn't recognize e.g. \`-f json\`). Also prepend its bin/ to PATH so
-# datalad picks up the venv's git-annex, not the system/uv-tool one (which
-# has the same node-dependent-python-version problem).
-export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
-DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
-cd "${output_clone}"
-"\$DATALAD_BIN" slurm-finish -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${ds}${batch_label}"
-# Disable datalad's SSH connection multiplexing for this push. Finish jobs
-# land on whichever compute node the scheduler/pick_idle_node picks, but
-# \$HOME (and its datalad control-socket cache under ~/.cache/datalad/sockets/)
-# is NFS-shared across all of them -- a control socket a previous finish job
-# created on a *different* node is a dead reference on this one, and
-# connecting to it can hang indefinitely instead of failing fast (confirmed
-# real incident: two separate pushes for the 129/freesurfer output dataset
-# hung for hours at an identical near-zero byte count before this was found).
-# DATALAD_SSH_MULTIPLEX__CONNECTIONS=false forces a plain, direct-per-call
-# SSH connection instead, sidestepping the shared/stale-socket risk entirely.
-DATALAD_SSH_MULTIPLEX__CONNECTIONS=false "\$DATALAD_BIN" push --to origin
-
-# Verify a real commit actually happened. datalad-slurm's finish_cmd()
-# removes the open-job bookkeeping entry BEFORE performing the actual
-# save/commit (see .datalad-slurm-venv's datalad_slurm/finish.py) -- if
-# THIS finish job gets interrupted (wallclock timeout, manual scancel)
-# between those two steps, a later resubmit finds nothing left in its job
-# database and silently no-ops straight to an empty-looking "successful"
-# push, having never actually committed the array's output. Confirmed real
-# incident: two separate "COMPLETED" finish jobs for a 150-subject
-# FreeSurfer cohort never committed anything at all. Reported upstream:
-# https://github.com/knuedd/datalad-slurm/issues/97. Fail loudly here
-# instead of reporting false success, so normal job-failure monitoring
-# (email, cmd_status) catches it rather than it going unnoticed.
-uncommitted=\$(git status --porcelain | wc -l)
-if [[ "\$uncommitted" -gt 0 ]]; then
-    echo "ERROR: \${uncommitted} uncommitted change(s) remain after slurm-finish -- the real commit likely never happened (see datalad-slurm's known premature-DB-removal issue). Uncommitted paths:" >&2
-    git status --short | head -30 >&2
-    exit 1
-fi
-
-$(push_verification_block)
-${continue_block}
-EOF
-    chmod +x "$finish_script"
-
-    local finish_job_id
-    finish_job_id=$(sbatch "$finish_script" 2>&1 | grep -oP '\d+$') \
-        || { warn "[$ds] Failed to submit dependent finish job${batch_label}"; return 1; }
-
-    mkdir -p "$(dirname "$submission_log")"
-    echo "${ds} ${job_id} ${n_subjects} ${finish_job_id} ${batch_idx:--}" >> "$submission_log"
-    log "[$ds] Submitted finish job ${finish_job_id}${batch_label} (runs after ${job_id} completes)"
-
-    _SCHEDULED_ARRAY_JOB_ID="$job_id"
-    _SCHEDULED_FINISH_JOB_ID="$finish_job_id"
-    return 0
-}
-
 cmd_submit() {
     check_todos
     resolve_config
@@ -1058,55 +799,205 @@ cmd_submit() {
         local commit_prefix=""
         $PILOT && commit_prefix="[PILOT] "
 
+        # Generate SLURM array script
+        if [[ -f "$array_script" ]] && $RESUME; then
+            log "[$DS] Array script exists, skipping generation (--resume)"
+        else
+            log "[$DS] Generating array script..."
+            run python3 "${SCRIPT_DIR}/hpc_datalad_runner.py" \
+                --config "$CONFIG" \
+                --array-mode \
+                --dataset-id "$DS" \
+                --subject-list "$subj_list" \
+                --output "$array_script" \
+                || { warn "[$DS] Script generation failed"; failed=$((failed + 1)); continue; }
+        fi
+
         if [[ ! -d "${output_clone}/.datalad" ]]; then
             warn "[$DS] Output not cloned at ${output_clone} – run setup first"
             failed=$((failed + 1)); continue
         fi
 
-        local _SCHEDULED_ARRAY_JOB_ID="" _SCHEDULED_FINISH_JOB_ID=""
+        # Declare the whole dataset as output ("-o ." is an explicit,
+        # documented special case in `datalad slurm-schedule --help`, not a
+        # forbidden wildcard glob like "-o sub-*"). Per-subject -o flags
+        # (-o sub-01 -o sub-02 ...) only cover each subject's own
+        # subdirectory -- BIDS apps commonly also write loose report files
+        # at the dataset root (e.g. MRIQC's sub-01_ses-1_T1w.html), which
+        # per-subject flags silently miss, leaving real output uncommitted
+        # after slurm-finish. "-o ." covers any app's output layout.
+        local -a output_flags=(-o .)
 
-        if [[ "$BATCH_SIZE" -gt 0 && "$BATCH_SIZE" -lt "$n_subjects" ]]; then
-            # Cohort is bigger than one batch -- split it and schedule only
-            # batch 1 here. Batch 2+ get scheduled later, from inside each
-            # preceding batch's own finish job (see schedule_one_batch).
-            local batch01_file
-            batch01_file=$(_batch_subj_list "$DS" "$subj_list_suffix" 1)
-            if [[ -f "$batch01_file" ]] && $RESUME; then
-                log "[$DS] Batch subject lists exist, skipping re-split (--resume)"
-            else
-                log "[$DS] Splitting ${n_subjects} subjects into batches of ${BATCH_SIZE}..."
-                # Deliberately NOT run()-wrapped/DRY_RUN-gated like the
-                # scheduling steps below -- splitting a text file into
-                # smaller text files touches no network/git/scheduler state
-                # (same harmlessness class as the mkdir calls elsewhere in
-                # this script), and schedule_one_batch always needs a real
-                # batch01_file to read n_subjects from, dry-run or not. This
-                # also makes --dry-run actually usable for previewing the
-                # full batch shape without requiring a prior real split.
-                local batch_prefix="${SUBJ_LISTS_DIR}/${DS}_subjects${subj_list_suffix}_batch"
-                bash -c "awk -v n='${BATCH_SIZE}' -v pre='${batch_prefix}' '{b=int((NR-1)/n)+1; fn=sprintf(\"%s%02d.txt\", pre, b); print > fn}' '${subj_list}'" \
-                    || { warn "[$DS] Failed to split subject list into batches"; failed=$((failed + 1)); continue; }
-            fi
-
-            local next_batch_file
-            next_batch_file=$(_batch_subj_list "$DS" "$subj_list_suffix" 2)
-            [[ -f "$next_batch_file" ]] || next_batch_file=""
-
-            schedule_one_batch "$DS" "$output_clone" "$batch01_file" \
-                "${scripts_dir}/${DS}_bids_array_batch01.sh" \
-                "${scripts_dir}/${DS}_bids_finish_batch01.sh" \
-                "$commit_prefix" 1 "$next_batch_file" "$submission_log" \
-                || { failed=$((failed + 1)); continue; }
-        else
-            schedule_one_batch "$DS" "$output_clone" "$subj_list" "$array_script" "$finish_script" \
-                "$commit_prefix" "" "" "$submission_log" \
-                || { failed=$((failed + 1)); continue; }
+        if $DRY_RUN; then
+            echo "[DRY-RUN] (cd ${output_clone} && datalad -f json slurm-schedule ${output_flags[*]} -m '...' sbatch ${array_script})"
+            echo "[DRY-RUN]   then sbatch a dependent finish job: datalad slurm-finish && datalad push --to origin"
+            submitted=$((submitted + 1))
+            continue
         fi
 
+        # Ensure log dir exists before slurm-schedule writes its env.json there.
+        mkdir -p "${LOG_DIR_BASE}/${DS}"
+
+        # Also pre-create the array job's own SBATCH --output/--error location,
+        # which now lives *inside* the output dataset (see hpc_datalad_runner.py)
+        # so datalad-slurm can save those logs as part of the job's provenance
+        # instead of erroring on paths outside the dataset.
+        mkdir -p "${output_clone}/.slurm_logs/${DS}"
+
+        # Schedule the array job. Nothing inside the job touches git --
+        # slurm-schedule declares/prepares the per-subject outputs and
+        # submits via sbatch itself; we parse the SLURM job id back out of
+        # its JSON result.
+        #
+        # stdout and stderr are captured SEPARATELY (not 2>&1-merged) --
+        # confirmed real regression: merging them so the failure branch
+        # below could report datalad-slurm's own reason also fed stderr
+        # chatter into the job_id jq parse on the *success* path. A 1-subject
+        # pilot's schedule call apparently produces little/no stderr, so this
+        # went unnoticed there; declaring outputs for a 150-subject array
+        # produces enough non-JSON stderr text that jq's parse of the merged
+        # stream broke ("Invalid numeric literal...") even though the
+        # schedule itself (and the real sbatch submission behind it)
+        # succeeded -- silently skipping the dependent finish-job submission
+        # for an already-running array job.
+        local schedule_stdout schedule_stderr schedule_exit job_id
+        local schedule_stderr_file
+        schedule_stderr_file=$(mktemp)
+        # `|| schedule_exit=$?` directly on the assignment (not a separate
+        # `schedule_exit=$?` statement afterward) is required for this to be
+        # set -e safe: a bare `var=$(cmd)` with no attached `||`/`if` is a
+        # simple command in its own right, and set -e aborts the whole
+        # script on its failure immediately -- before a following statement
+        # ever runs. Confirmed real regression: a genuine slurm-schedule
+        # failure (conflicting outputs from an unfinished prior job) killed
+        # the entire submit run silently, with no [WARN] and no per-dataset
+        # Submitted/Skipped/Failed summary at all.
+        schedule_exit=0
+        schedule_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
+            "${output_flags[@]}" \
+            -m "${commit_prefix}${APP_NAME} array for ${DS} (${n_subjects} subjects)" \
+            sbatch "$array_script" 2>"$schedule_stderr_file") || schedule_exit=$?
+        schedule_stderr=$(cat "$schedule_stderr_file"); rm -f "$schedule_stderr_file"
+        if [[ $schedule_exit -ne 0 ]]; then
+            # Surface datalad-slurm's own reason (e.g. "There are
+            # conflicting outputs with previously scheduled jobs..." when
+            # an earlier job for this dataset hasn't been finished yet)
+            # instead of a bare "failed" -- confirmed real gap: this was
+            # previously swallowed entirely, requiring manual reproduction
+            # to find out why. Checks both streams since the JSON error
+            # record could land on either.
+            local schedule_reason
+            schedule_reason=$(printf '%s\n%s\n' "$schedule_stdout" "$schedule_stderr" \
+                | jq -r 'select(.message) | .message' 2>/dev/null | tail -1)
+            warn "[$DS] datalad slurm-schedule failed${schedule_reason:+: $schedule_reason}"
+            failed=$((failed + 1)); continue
+        fi
+
+        job_id=$(printf '%s\n' "$schedule_stdout" \
+            | jq -r 'select(.action=="slurm-schedule") | .slurm_run_info.slurm_job_id // empty' \
+            | tail -1)
+        if [[ -z "$job_id" ]]; then
+            warn "[$DS] Could not determine SLURM job id from slurm-schedule output"
+            failed=$((failed + 1)); continue
+        fi
+        log "[$DS] ${commit_prefix}Scheduled array job ${job_id} (${n_subjects} subjects)"
+
+        # Chain a finish job: once the whole array completes, this is the
+        # only step that touches git -- one `datalad slurm-finish` commit
+        # covering every subject's output, then a single push.
+        local module_load_line=""
+        if [[ ${#HPC_MODULES[@]} -gt 0 ]]; then
+            module_load_line="module load ${HPC_MODULES[*]}"
+        fi
+        # Notify on the finish job only (not the per-subject array, which
+        # would send one email per task) -- the finish job only runs once
+        # the whole array has settled (--dependency=afterany), so its own
+        # completion is the single "the cohort submission is done" signal.
+        local notify_email
+        notify_email="$(cfg '.hpc.notify_email // ""')"
+        local mail_lines=""
+        if [[ -n "$notify_email" ]]; then
+            mail_lines="#SBATCH --mail-user=${notify_email}
+#SBATCH --mail-type=END,FAIL"
+        fi
+        local finish_node finish_node_line=""
+        finish_node="$(pick_idle_node "$(cfg '.hpc.partition')")"
+        [[ -n "$finish_node" ]] && finish_node_line="#SBATCH --nodelist=${finish_node}"
+        cat > "$finish_script" <<EOF
+#!/bin/bash
+#SBATCH --job-name=finish_${DS}${subj_list_suffix}
+#SBATCH --dependency=afterany:${job_id}
+#SBATCH --partition=$(cfg '.hpc.partition')
+${finish_node_line}
+# 3h was not enough: job 5505212 (a 3-subject retry finish) exceeded it
+# mid-\`datalad save\` with no output at all, leaving the array's outputs
+# staged but uncommitted (see the datalad-slurm known-bug comment below).
+#SBATCH --time=12:00:00
+#SBATCH --mem=2G
+#SBATCH --cpus-per-task=1
+#SBATCH --output=${LOG_DIR_BASE}/${DS}/finish-%j.out
+#SBATCH --error=${LOG_DIR_BASE}/${DS}/finish-%j.err
+${mail_lines}
+set -euo pipefail
+${module_load_line}
+# Use the dedicated datalad-slurm venv's own datalad entry point (pinned to
+# a uv-managed portable Python 3.10) instead of .appsrunner -- compute nodes
+# on this cluster can have a different system python3 than the login node
+# (observed 3.12 vs 3.10), which silently breaks a venv that just symlinks
+# to system python. Must call the venv's bin/datalad script directly (not
+# \`python -m datalad\`, which uses a different, more limited entry point
+# that doesn't recognize e.g. \`-f json\`). Also prepend its bin/ to PATH so
+# datalad picks up the venv's git-annex, not the system/uv-tool one (which
+# has the same node-dependent-python-version problem).
+export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
+DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
+cd "${output_clone}"
+"\$DATALAD_BIN" slurm-finish -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${DS}"
+# Disable datalad's SSH connection multiplexing for this push. Finish jobs
+# land on whichever compute node the scheduler/pick_idle_node picks, but
+# \$HOME (and its datalad control-socket cache under ~/.cache/datalad/sockets/)
+# is NFS-shared across all of them -- a control socket a previous finish job
+# created on a *different* node is a dead reference on this one, and
+# connecting to it can hang indefinitely instead of failing fast (confirmed
+# real incident: two separate pushes for the 129/freesurfer output dataset
+# hung for hours at an identical near-zero byte count before this was found).
+# DATALAD_SSH_MULTIPLEX__CONNECTIONS=false forces a plain, direct-per-call
+# SSH connection instead, sidestepping the shared/stale-socket risk entirely.
+DATALAD_SSH_MULTIPLEX__CONNECTIONS=false "\$DATALAD_BIN" push --to origin
+
+# Verify a real commit actually happened. datalad-slurm's finish_cmd()
+# removes the open-job bookkeeping entry BEFORE performing the actual
+# save/commit (see .datalad-slurm-venv's datalad_slurm/finish.py) -- if
+# THIS finish job gets interrupted (wallclock timeout, manual scancel)
+# between those two steps, a later resubmit finds nothing left in its job
+# database and silently no-ops straight to an empty-looking "successful"
+# push, having never actually committed the array's output. Confirmed real
+# incident: two separate "COMPLETED" finish jobs for a 150-subject
+# FreeSurfer cohort never committed anything at all. Reported upstream:
+# https://github.com/knuedd/datalad-slurm/issues/97. Fail loudly here
+# instead of reporting false success, so normal job-failure monitoring
+# (email, cmd_status) catches it rather than it going unnoticed.
+uncommitted=\$(git status --porcelain | wc -l)
+if [[ "\$uncommitted" -gt 0 ]]; then
+    echo "ERROR: \${uncommitted} uncommitted change(s) remain after slurm-finish -- the real commit likely never happened (see datalad-slurm's known premature-DB-removal issue). Uncommitted paths:" >&2
+    git status --short | head -30 >&2
+    exit 1
+fi
+
+$(push_verification_block)
+EOF
+        chmod +x "$finish_script"
+
+        local finish_job_id
+        finish_job_id=$(sbatch "$finish_script" 2>&1 | grep -oP '\d+$') \
+            || { warn "[$DS] Failed to submit dependent finish job"; failed=$((failed + 1)); continue; }
+
+        echo "${DS} ${job_id} ${n_subjects} ${finish_job_id}" >> "$submission_log"
+        log "[$DS] Submitted finish job ${finish_job_id} (runs after ${job_id} completes)"
         submitted=$((submitted + 1))
 
         if [[ "$SUBREGION_ENABLED" == "true" ]] && ! $PILOT; then
-            submit_subregion_segmentation "$DS" "$output_clone" "$_SCHEDULED_FINISH_JOB_ID" "$commit_prefix" \
+            submit_subregion_segmentation "$DS" "$output_clone" "$finish_job_id" "$commit_prefix" \
                 || warn "[$DS] Subregion segmentation submission failed (main run was still submitted successfully)"
         fi
     done
@@ -1184,20 +1075,11 @@ cmd_status() {
 
     log "Reading: ${log_file}"
     echo ""
-    printf "%-20s %-6s %-12s %-10s %-10s %-40s %s\n" "DATASET" "BATCH" "JOB_ARRAY" "SUBJECTS" "PROGRESS" "ARRAY_STATUS" "FINISH_STATUS"
-    printf "%-20s %-6s %-12s %-10s %-10s %-40s %s\n" "-------" "-----" "---------" "--------" "--------" "------------" "-------------"
+    printf "%-20s %-12s %-10s %-10s %-40s %s\n" "DATASET" "JOB_ARRAY" "SUBJECTS" "PROGRESS" "ARRAY_STATUS" "FINISH_STATUS"
+    printf "%-20s %-12s %-10s %-10s %-40s %s\n" "-------" "---------" "--------" "--------" "------------" "-------------"
 
-    # One row per (dataset, batch) line actually present in the log --
-    # batched cohorts append one line per batch as each is scheduled (the
-    # later ones potentially hours/days after this file was created, from
-    # inside a prior batch's finish job -- see schedule_one_batch), so a
-    # batch not yet scheduled simply has no row yet, which is the correct
-    # "what's been scheduled so far" view. batch_info is a 5th field added
-    # alongside batching; unbatched lines just leave it empty/"-" and `read`
-    # handles a short line fine as long as every named var is declared here.
-    while read -r ds job_id n_subjects finish_job_id batch_info; do
+    while read -r ds job_id n_subjects finish_job_id; do
         local status progress finish_status terminal_count
-        [[ -z "$batch_info" ]] && batch_info="-"
 
         # squeue only shows currently-queued (PENDING/RUNNING) tasks -- once a
         # task finishes (success or failure) it drops out of squeue entirely,
@@ -1220,7 +1102,7 @@ cmd_status() {
             [[ -z "$finish_status" ]] && finish_status="UNKNOWN"
         fi
 
-        printf "%-20s %-6s %-12s %-10s %-10s %-40s %s\n" "$ds" "$batch_info" "$job_id" "$n_subjects" "$progress" "$status" "$finish_status"
+        printf "%-20s %-12s %-10s %-10s %-40s %s\n" "$ds" "$job_id" "$n_subjects" "$progress" "$status" "$finish_status"
     done < "$log_file"
 
     # Subregion segmentation follow-up jobs (see submit_subregion_segmentation),
@@ -1260,40 +1142,6 @@ cmd_status() {
 }
 
 # ── Help ──────────────────────────────────────────────────────────────────────
-# ── Internal: continue a batched cohort's chain ────────────────────────────────
-# Not a user-facing command (undocumented in cmd_help) -- invoked only by a
-# batch's own finish job once it has committed+pushed, to schedule the next
-# batch. See schedule_one_batch's header comment for why this can't just be
-# pre-scheduled up front with SBATCH --dependency.
-cmd_continue_batch() {
-    [[ -n "$CONTINUE_BATCH_IDX" ]] || die "_continue-batch requires --batch-idx"
-    [[ -n "$CONTINUE_SUBMISSION_LOG" ]] || die "_continue-batch requires --submission-log"
-    [[ ${#FILTER_DATASETS[@]} -eq 1 ]] || die "_continue-batch requires exactly one -d DATASET_ID"
-
-    resolve_config
-    local ds="${DATASETS[0]}"
-    local scripts_dir="$(dirname "$(realpath "$CONFIG")")/generated"
-    resolve_output_clone "$ds"
-    local output_clone="$OUTPUT_CLONE"
-
-    local subj_list
-    subj_list=$(_batch_subj_list "$ds" "" "$CONTINUE_BATCH_IDX")
-    [[ -f "$subj_list" ]] || die "[$ds] Batch ${CONTINUE_BATCH_IDX} subject list not found: ${subj_list}"
-
-    local padded_idx
-    padded_idx="$(printf '%02d' "$CONTINUE_BATCH_IDX")"
-    local array_script="${scripts_dir}/${ds}_bids_array_batch${padded_idx}.sh"
-    local finish_script="${scripts_dir}/${ds}_bids_finish_batch${padded_idx}.sh"
-
-    local next_subj_list
-    next_subj_list=$(_batch_subj_list "$ds" "" $((CONTINUE_BATCH_IDX + 1)))
-    [[ -f "$next_subj_list" ]] || next_subj_list=""
-
-    local _SCHEDULED_ARRAY_JOB_ID="" _SCHEDULED_FINISH_JOB_ID=""
-    schedule_one_batch "$ds" "$output_clone" "$subj_list" "$array_script" "$finish_script" \
-        "$CONTINUE_COMMIT_PREFIX" "$CONTINUE_BATCH_IDX" "$next_subj_list" "$CONTINUE_SUBMISSION_LOG"
-}
-
 cmd_help() {
     sed -n '2,/^# Edit/p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
 }
@@ -1304,7 +1152,6 @@ case "$COMMAND" in
     submit)            cmd_submit            ;;
     submit-subregions) cmd_submit_subregions ;;
     status)            cmd_status            ;;
-    _continue-batch)   cmd_continue_batch    ;;
     help|-h|--help)    cmd_help              ;;
     *) die "Unknown command: $COMMAND  (use setup | submit | submit-subregions | status)" ;;
 esac

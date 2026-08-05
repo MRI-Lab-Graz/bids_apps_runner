@@ -320,10 +320,12 @@ async function previewCohortConfig() {
     if (!_requireSavedProjectForHpc('previewing the cohort config')) return;
 
     const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
+    const batchSize = document.getElementById('cohort_batch_size').value || 30;
     const params = new URLSearchParams({
         project_id: lastProjectId,
         pipeline_id: currentPipelineId || '',
         max_concurrent: maxConcurrent,
+        batch_size: batchSize,
     });
 
     try {
@@ -382,6 +384,7 @@ async function runCohort(command) {
     const resumeEl = document.getElementById('cohortResume');
     const resume = !!(resumeEl && resumeEl.checked);
     const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
+    const batchSize = document.getElementById('cohort_batch_size').value || 30;
     // Pilot mode: submit_bids_cohort.sh (--pilot) narrows the array job down
     // to one randomly-chosen subject instead of the whole cohort -- lets you
     // validate the full container/mount/DataLad-provenance path (the actual
@@ -412,6 +415,7 @@ async function runCohort(command) {
                 dry_run: dryRun,
                 resume,
                 max_concurrent: maxConcurrent,
+                batch_size: batchSize,
                 pilot,
             }),
         });

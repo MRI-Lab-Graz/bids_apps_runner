@@ -203,7 +203,11 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         # ~24GB peak (SynthSeg) -- 32G gives headroom, 16G OOM'd in practice.
         "recommended_hpc": {
             "partition": "hpc",
-            "time": "20:00:00",
+            # Bumped from 20h -> 60h after cohort 134: 11/117 longitudinal
+            # subjects hit TIMEOUT at 36h (job 5542889), still mid-parcellation
+            # stats when killed. See freesurfer_bids below, which intentionally
+            # mirrors this value.
+            "time": "60:00:00",
             "mem": "32G",
             "cpus": 1,
         },
@@ -236,7 +240,10 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         # subject instead of manifest-driven staged jobs.
         "recommended_hpc": {
             "partition": "hpc",
-            "time": "20:00:00",
+            # Bumped from 20h -> 60h after cohort 134: 11/117 longitudinal
+            # subjects hit TIMEOUT at 36h (job 5542889), still mid-parcellation
+            # stats when killed.
+            "time": "60:00:00",
             "mem": "32G",
             "cpus": 1,
         },

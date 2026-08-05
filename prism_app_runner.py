@@ -716,7 +716,7 @@ class CohortConfigError(ValueError):
     """Raised when a project's settings can't be used for a SLURM array run."""
 
 
-def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50):
+def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50, batch_size=30):
     """Build a cohort_hpc-schema dict (datasets/paths/datalad/hpc/bids_app)
     straight from a project's already-materialized runtime config -- the
     same dict Local and single-job HPC execution already use. This is the
@@ -801,6 +801,14 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50):
             "mem": hpc.get("mem"),
             "cpus": hpc.get("cpus"),
             "max_concurrent": int(max_concurrent or 50),
+            # Cohorts get split into sequential batches of this many
+            # subjects, each with its own array+finish job pair, so a
+            # slow/failed finish only costs one batch instead of the whole
+            # study -- see schedule_one_batch() in submit_bids_cohort.sh.
+            # 0 disables batching (today's single-array-per-dataset
+            # behavior); unset/None falls back to 30, the same way
+            # max_concurrent falls back to 50 above.
+            "batch_size": 30 if batch_size in (None, "") else int(batch_size),
             "modules": hpc.get("modules") or [],
             "environment": hpc.get("environment") or {},
             "notify_email": hpc.get("notify_email") or "",

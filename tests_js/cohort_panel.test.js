@@ -3,6 +3,7 @@ import { loadScript } from './helpers/loadScript.js';
 
 const FIXTURE_HTML = `
     <input id="cohort_max_concurrent" value="50">
+    <input id="cohort_batch_size" value="30">
     <div id="cohortStoragePanel" style="display:none;">
         <span id="cohortStorageBadge"></span>
         <div id="cohortStorageDetail"></div>
@@ -12,6 +13,19 @@ const FIXTURE_HTML = `
         </div>
         <button id="cohortCleanupStorageBtn" style="display:none;"></button>
     </div>
+    <input type="checkbox" id="cohortDryRun">
+    <input type="checkbox" id="cohortResume">
+    <input type="checkbox" id="cohortPilot">
+    <button id="cohortSetupBtn"></button>
+    <button id="cohortSubmitBtn"></button>
+    <button id="cohortStatusBtn"></button>
+    <button id="cohortSubmitSubregionsBtn"></button>
+    <button id="cohortCancelBtn" style="display:none;"></button>
+    <div id="cohortStatusBadge" style="display:none;">
+        <span id="cohortBadge"></span>
+        <span id="cohortStatusMsg"></span>
+    </div>
+    <pre id="cohortConfigPreview" style="display:none;"></pre>
 `;
 
 beforeEach(() => {
@@ -20,6 +34,7 @@ beforeEach(() => {
     window.currentPipelineId = 'default';
     window.logHPC = vi.fn();
     window.escapeHtml = (s) => s;
+    window._requireSavedProjectForHpc = vi.fn().mockReturnValue(true);
     loadScript('missing_items.js');
     loadScript('cohort_panel.js');
 });
@@ -222,5 +237,62 @@ describe('cleanupCohortLocalStorage', () => {
         const body = JSON.parse(options.body);
         expect(body.force_unverified).toBe(true);
         expect(body.force_incomplete_output).toBe(false);
+    });
+});
+
+describe('runCohort', () => {
+    it('sends batch_size alongside max_concurrent in the /cohort/run POST body', async () => {
+        document.getElementById('cohort_batch_size').value = '15';
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            json: () => Promise.resolve({ job_id: 'job-1' }),
+        });
+        window.fetch = fetchMock;
+        vi.useFakeTimers();
+
+        await runCohort('submit');
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [url, options] = fetchMock.mock.calls[0];
+        expect(url).toBe('/cohort/run');
+        const body = JSON.parse(options.body);
+        expect(body.batch_size).toBe('15');
+        expect(body.max_concurrent).toBe('50');
+
+        vi.useRealTimers();
+    });
+
+    it('defaults batch_size to 30 when the field is empty', async () => {
+        document.getElementById('cohort_batch_size').value = '';
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            json: () => Promise.resolve({ job_id: 'job-1' }),
+        });
+        window.fetch = fetchMock;
+        vi.useFakeTimers();
+
+        await runCohort('submit');
+
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+        expect(body.batch_size).toBe(30);
+
+        vi.useRealTimers();
+    });
+});
+
+describe('previewCohortConfig', () => {
+    it('includes batch_size in the /cohort/preview_config query params', async () => {
+        document.getElementById('cohort_batch_size').value = '20';
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            json: () => Promise.resolve({ config: { hpc: { batch_size: 20 } } }),
+        });
+        window.fetch = fetchMock;
+
+        await previewCohortConfig();
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [url] = fetchMock.mock.calls[0];
+        expect(url).toContain('batch_size=20');
     });
 });

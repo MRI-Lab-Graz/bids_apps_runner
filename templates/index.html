@@ -1301,7 +1301,7 @@
                             </p>
 
                             <div class="row mb-3">
-                                <div class="col-md-9">
+                                <div class="col-md-6">
                                     <label class="form-label fw-semibold">Dataset (from this project)</label>
                                     <input type="text" class="form-control font-monospace" id="cohortDatasetIdDisplay" readonly>
                                     <small class="text-muted">Derived from this project's BIDS Dataset Folder above.</small>
@@ -1311,6 +1311,12 @@
                                     <input type="number" class="form-control hpc-setting" id="cohort_max_concurrent"
                                            value="50" min="1" max="500">
                                     <small class="text-muted">Array %N throttle. Saved with HPC settings.</small>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold" title="Subjects get split into sequential batches, each with its own array+finish job pair, so a slow/failed finish only costs one batch instead of the whole study. 0 disables batching (one array for the whole cohort, like before).">Batch size</label>
+                                    <input type="number" class="form-control hpc-setting" id="cohort_batch_size"
+                                           value="30" min="0" max="5000">
+                                    <small class="text-muted">Subjects per batch. 0 = no batching.</small>
                                 </div>
                             </div>
 
@@ -1842,6 +1848,12 @@
          shared `var`-declared state (lastProjectId, currentPipelineId) from
          the inline script below. See its own header comment. -->
     <script src="{{ url_for('static', filename='js/cohort_panel.js') }}"></script>
+    <!-- Advanced: SLURM Settings form <-> project config round-trip
+         (loadHpcSettingsToForm/getHpcSettingsFromForm) -- same pattern as
+         project_loader.js above: reads still-inline validator helpers and
+         cohort_panel.js's updateCohortDatasetDisplay(). See its own header
+         comment. -->
+    <script src="{{ url_for('static', filename='js/hpc_settings.js') }}"></script>
     <!-- BIDS Dataset Source toggle (Local Folder vs Remote (SSH)) -- same
          pattern as project_loader.js above: reads/writes shared `var`-declared
          state (_bidsSourceMode, _remoteStudiesLoaded) from the inline script
@@ -5397,102 +5409,8 @@
             return valid;
         }
 
-        function loadHpcSettingsToForm(hpc) {
-            const presetSel = document.getElementById('hpc_preset');
-            // Legacy projects saved before the preset dropdown existed have no
-            // hpc.preset -- default them to 'auto' so they immediately reflect
-            // the currently configured container instead of stale saved values.
-            if (presetSel) presetSel.value = hpc.preset || 'auto';
-
-            // Load raw saved partition/time/mem/cpus/gres first so 'custom'
-            // preset (a no-op on these fields) preserves them; applyHpcPreset
-            // then overwrites them for any non-custom preset as intended.
-            document.getElementById('hpc_partition').value = hpc.partition || '';
-            document.getElementById('hpc_time').value = hpc.time || '';
-            document.getElementById('hpc_mem').value = hpc.mem || '';
-            document.getElementById('hpc_cpus').value = hpc.cpus || 1;
-            document.getElementById('hpc_sbatch_gres').value = hpc.sbatch_gres || '';
-            applyHpcPreset({ silent: true });
-
-            document.getElementById('hpc_job_name').value = hpc.job_name || '';
-            document.getElementById('hpc_output_pattern').value = hpc.output_pattern || '';
-            document.getElementById('hpc_error_pattern').value = hpc.error_pattern || '';
-            document.getElementById('hpc_notify_email').value = hpc.notify_email || '';
-            document.getElementById('hpc_modules').value = (hpc.modules || []).join('\n');
-            document.getElementById('hpc_environment').value = JSON.stringify(hpc.environment || {}, null, 2);
-            document.getElementById('hpc_monitor_jobs').checked = hpc.monitor_jobs !== false;
-            document.getElementById('cohort_max_concurrent').value = hpc.max_concurrent || 50;
-            updateCohortDatasetDisplay();
-            validateHpcEmailField();
-            scheduleHpcPreflightRefresh();
-        }
-
-        function getHpcSettingsFromForm(options = {}) {
-            const silent = !!options.silent;
-            const modules = document.getElementById('hpc_modules').value
-                .split('\n')
-                .map(m => m.trim())
-                .filter(m => m);
-
-            const partition = (document.getElementById('hpc_partition').value || '').trim();
-            const timeVal = (document.getElementById('hpc_time').value || '').trim();
-            const memVal = (document.getElementById('hpc_mem').value || '').trim();
-            const cpusRaw = (document.getElementById('hpc_cpus').value || '').trim();
-            const cpus = parseInt(cpusRaw, 10);
-
-            const envResult = _parseHpcEnvironmentInput(document.getElementById('hpc_environment').value || '');
-            if (!envResult.ok) {
-                if (!silent) logHPC(envResult.error, true);
-                return null;
-            }
-
-            if (!partition) {
-                if (!silent) logHPC('Partition is required.', true);
-                return null;
-            }
-            if (!timeVal || !_validateHpcTimeFormat(timeVal)) {
-                if (!silent) logHPC('Time must be HH:MM:SS or D-HH:MM:SS.', true);
-                return null;
-            }
-            if (!memVal || !_validateHpcMemFormat(memVal)) {
-                if (!silent) logHPC('Memory format is invalid. Example: 32G.', true);
-                return null;
-            }
-            if (!Number.isInteger(cpus) || cpus < 1) {
-                if (!silent) logHPC('CPUs must be an integer >= 1.', true);
-                return null;
-            }
-
-            const maxConcurrentRaw = (document.getElementById('cohort_max_concurrent').value || '').trim();
-            const maxConcurrent = parseInt(maxConcurrentRaw, 10);
-            if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
-                if (!silent) logHPC('Max concurrent jobs must be an integer >= 1.', true);
-                return null;
-            }
-
-            const notifyEmail = (document.getElementById('hpc_notify_email').value || '').trim();
-            if (notifyEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notifyEmail)) {
-                if (!silent) logHPC('Notify email is not a valid email address.', true);
-                return null;
-            }
-
-            return {
-                preset: document.getElementById('hpc_preset').value || 'auto',
-                partition: partition,
-                time: timeVal,
-                mem: memVal,
-                cpus: cpus,
-                sbatch_gres: (document.getElementById('hpc_sbatch_gres').value || '').trim(),
-                job_name: (document.getElementById('hpc_job_name').value || '').trim(),
-                output_pattern: (document.getElementById('hpc_output_pattern').value || '').trim(),
-                error_pattern: (document.getElementById('hpc_error_pattern').value || '').trim(),
-                notify_email: notifyEmail,
-                modules: modules,
-                environment: envResult.environment,
-                monitor_jobs: document.getElementById('hpc_monitor_jobs').checked,
-                max_concurrent: maxConcurrent
-            };
-        }
+        // loadHpcSettingsToForm() / getHpcSettingsFromForm() moved to
+        // static/js/hpc_settings.js
 
         async function saveHPCSettings() {
             if (hpcSaveInProgress) return;

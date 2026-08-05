@@ -236,7 +236,7 @@ def register_cohort_routes(
 ) -> None:
     cohort_script = base_dir / "scripts" / "submit_bids_cohort.sh"
 
-    def _build_cohort_config(project_id, pipeline_id, max_concurrent):
+    def _build_cohort_config(project_id, pipeline_id, max_concurrent, batch_size=None):
         """Load the project, derive its cohort config, and validate it's
         actually runnable. Returns (cohort_cfg, error_response_or_None)."""
         if not project_id:
@@ -254,6 +254,7 @@ def register_cohort_routes(
                 runtime_cfg,
                 project_dir=project_dir,
                 max_concurrent=max_concurrent,
+                batch_size=batch_size,
             )
         except ValueError as exc:
             return None, (jsonify({"error": str(exc)}), 400)
@@ -267,7 +268,7 @@ def register_cohort_routes(
 
         return cohort_cfg, None
 
-    def _cohort_readiness_checks(project_id, pipeline_id, max_concurrent):
+    def _cohort_readiness_checks(project_id, pipeline_id, max_concurrent, batch_size=None):
         """Load the project fresh and run every cohort-run precondition as a
         full checklist (not stop-at-first-error), mirroring
         gui_run_routes.py::_local_run_checks for the Quick Test path so both
@@ -340,7 +341,10 @@ def register_cohort_routes(
             project_dir = resolve_project_dir(project_id)
             try:
                 cohort_cfg = derive_cohort_config(
-                    runtime_cfg, project_dir=project_dir, max_concurrent=max_concurrent
+                    runtime_cfg,
+                    project_dir=project_dir,
+                    max_concurrent=max_concurrent,
+                    batch_size=batch_size,
                 )
             except ValueError as exc:
                 add("cohort_config", "Cohort config derivable", False, detail=str(exc))
@@ -393,8 +397,11 @@ def register_cohort_routes(
         project_id = (request.args.get("project_id") or "").strip()
         pipeline_id = (request.args.get("pipeline_id") or "").strip()
         max_concurrent = request.args.get("max_concurrent")
+        batch_size = request.args.get("batch_size")
 
-        _cohort_cfg, checks = _cohort_readiness_checks(project_id, pipeline_id, max_concurrent)
+        _cohort_cfg, checks = _cohort_readiness_checks(
+            project_id, pipeline_id, max_concurrent, batch_size
+        )
         ready = all(c["ok"] for c in checks if c["blocking"])
         return jsonify({"ready": ready, "checks": checks})
 
@@ -407,9 +414,10 @@ def register_cohort_routes(
         project_id = (request.args.get("project_id") or "").strip()
         pipeline_id = (request.args.get("pipeline_id") or "").strip()
         max_concurrent = request.args.get("max_concurrent")
+        batch_size = request.args.get("batch_size")
 
         cohort_cfg, error_response = _build_cohort_config(
-            project_id, pipeline_id, max_concurrent
+            project_id, pipeline_id, max_concurrent, batch_size
         )
         if error_response:
             return error_response
@@ -667,9 +675,10 @@ def register_cohort_routes(
         resume = bool(data.get("resume", False))
         pilot = bool(data.get("pilot", False))
         max_concurrent = data.get("max_concurrent")
+        batch_size = data.get("batch_size")
 
         cohort_cfg, error_response = _build_cohort_config(
-            project_id, pipeline_id, max_concurrent
+            project_id, pipeline_id, max_concurrent, batch_size
         )
         if error_response:
             return error_response
