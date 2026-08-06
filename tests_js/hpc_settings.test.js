@@ -16,7 +16,7 @@ const FIXTURE_HTML = `
     <textarea id="hpc_environment">{}</textarea>
     <input type="checkbox" id="hpc_monitor_jobs" checked>
     <input id="cohort_max_concurrent" value="50">
-    <input id="cohort_batch_size" value="30">
+    <input id="cohort_batch_size" value="10">
 `;
 
 beforeEach(() => {
@@ -40,10 +40,10 @@ describe('loadHpcSettingsToForm', () => {
         expect(document.getElementById('cohort_max_concurrent').value).toBe('40');
     });
 
-    it('defaults cohort_batch_size to 30 when hpc.batch_size is missing', () => {
+    it('defaults cohort_batch_size to 10 when hpc.batch_size is missing', () => {
         loadHpcSettingsToForm({});
 
-        expect(document.getElementById('cohort_batch_size').value).toBe('30');
+        expect(document.getElementById('cohort_batch_size').value).toBe('10');
     });
 
     it('preserves an explicit batch_size of 0 (batching disabled) instead of defaulting it away', () => {

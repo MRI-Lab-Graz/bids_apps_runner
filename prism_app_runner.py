@@ -716,7 +716,7 @@ class CohortConfigError(ValueError):
     """Raised when a project's settings can't be used for a SLURM array run."""
 
 
-def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50, batch_size=30):
+def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50, batch_size=10):
     """Build a cohort_hpc-schema dict (datasets/paths/datalad/hpc/bids_app)
     straight from a project's already-materialized runtime config -- the
     same dict Local and single-job HPC execution already use. This is the
@@ -806,9 +806,18 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50, batch_
             # slow/failed finish only costs one batch instead of the whole
             # study -- see schedule_one_batch() in submit_bids_cohort.sh.
             # 0 disables batching (today's single-array-per-dataset
-            # behavior); unset/None falls back to 30, the same way
-            # max_concurrent falls back to 50 above.
-            "batch_size": 30 if batch_size in (None, "") else int(batch_size),
+            # behavior); unset/None falls back to 10, the same way
+            # max_concurrent falls back to 50 above. Lowered from 30 after a
+            # 117-subject FreeSurfer cohort (134) sat with nothing pushed to
+            # the datalad server for 2+ days: a single slurm-finish covering
+            # a whole batch has to hash+commit everything in that batch
+            # before anything lands, and a 30-subject batch (or worse, a
+            # ~150-subject one with batching off) can run long enough to hit
+            # datalad-slurm's known premature-DB-removal bug on interruption
+            # (https://github.com/knuedd/datalad-slurm/issues/97). Smaller
+            # batches mean more frequent, cheaper finish jobs and a smaller
+            # blast radius if one of them fails.
+            "batch_size": 10 if batch_size in (None, "") else int(batch_size),
             "modules": hpc.get("modules") or [],
             "environment": hpc.get("environment") or {},
             "notify_email": hpc.get("notify_email") or "",

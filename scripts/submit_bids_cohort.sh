@@ -231,7 +231,7 @@ resolve_config() {
     # `"batch_size": 0` in the config is a real, working escape hatch back to
     # today's single-array-per-dataset behavior, not accidentally defaulted
     # away.
-    BATCH_SIZE="$(jq -r '.hpc.batch_size // 30' "$CONFIG")"
+    BATCH_SIZE="$(jq -r '.hpc.batch_size // 10' "$CONFIG")"
     [[ "$BATCH_SIZE" =~ ^[0-9]+$ ]] || die "hpc.batch_size must be a non-negative integer, got: ${BATCH_SIZE}"
 
     # Optional FreeSurfer subregion segmentation follow-up (thalamus /

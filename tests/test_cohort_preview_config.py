@@ -57,25 +57,25 @@ def _save_runnable_project(project_id, tmp_path):
     )
 
 
-def test_preview_config_defaults_batch_size_to_30(client, disposable_project, tmp_path):
+def test_preview_config_defaults_batch_size_to_10(client, disposable_project, tmp_path):
     _save_runnable_project(disposable_project, tmp_path)
 
     resp = client.get(f"/cohort/preview_config?project_id={disposable_project}")
     data = resp.get_json()
 
     assert resp.status_code == 200
-    assert data["config"]["hpc"]["batch_size"] == 30
+    assert data["config"]["hpc"]["batch_size"] == 10
 
 
 def test_preview_config_honors_explicit_batch_size(client, disposable_project, tmp_path):
     _save_runnable_project(disposable_project, tmp_path)
 
     resp = client.get(
-        f"/cohort/preview_config?project_id={disposable_project}&batch_size=10"
+        f"/cohort/preview_config?project_id={disposable_project}&batch_size=15"
     )
     data = resp.get_json()
 
-    assert data["config"]["hpc"]["batch_size"] == 10
+    assert data["config"]["hpc"]["batch_size"] == 15
 
 
 def test_preview_config_batch_size_zero_disables_batching(client, disposable_project, tmp_path):

@@ -3,7 +3,7 @@ import { loadScript } from './helpers/loadScript.js';
 
 const FIXTURE_HTML = `
     <input id="cohort_max_concurrent" value="50">
-    <input id="cohort_batch_size" value="30">
+    <input id="cohort_batch_size" value="10">
     <div id="cohortStoragePanel" style="display:none;">
         <span id="cohortStorageBadge"></span>
         <div id="cohortStorageDetail"></div>
@@ -262,7 +262,7 @@ describe('runCohort', () => {
         vi.useRealTimers();
     });
 
-    it('defaults batch_size to 30 when the field is empty', async () => {
+    it('defaults batch_size to 10 when the field is empty', async () => {
         document.getElementById('cohort_batch_size').value = '';
         const fetchMock = vi.fn().mockResolvedValue({
             ok: true,
@@ -274,7 +274,7 @@ describe('runCohort', () => {
         await runCohort('submit');
 
         const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-        expect(body.batch_size).toBe(30);
+        expect(body.batch_size).toBe(10);
 
         vi.useRealTimers();
     });

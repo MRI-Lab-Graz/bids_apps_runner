@@ -35,10 +35,10 @@ function loadHpcSettingsToForm(hpc) {
     document.getElementById('hpc_monitor_jobs').checked = hpc.monitor_jobs !== false;
     document.getElementById('cohort_max_concurrent').value = hpc.max_concurrent || 50;
     // batch_size can be legitimately 0 (batching disabled) -- only fall
-    // back to the 30 default when it's actually missing (null/undefined),
+    // back to the 10 default when it's actually missing (null/undefined),
     // not when it's a falsy-but-meaningful 0.
     document.getElementById('cohort_batch_size').value =
-        (hpc.batch_size === null || hpc.batch_size === undefined) ? 30 : hpc.batch_size;
+        (hpc.batch_size === null || hpc.batch_size === undefined) ? 10 : hpc.batch_size;
     updateCohortDatasetDisplay();
     validateHpcEmailField();
     scheduleHpcPreflightRefresh();
