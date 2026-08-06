@@ -516,6 +516,15 @@ ${finish_node_line}
 ${mail_lines}
 set -euo pipefail
 ${module_load_line}
+# See the matching comment on the main finish job template in cmd_submit
+# for what this best-effort ntfy push covers and why it's non-fatal.
+_notify_failure() {
+    echo "subregion finish job for ${ds} failed at line \$LINENO" >&2
+    "${REPO_DIR}/scripts/notify_ntfy.sh" "Cohort finish FAILED: ${ds} (subregions)" \
+        "subregion finish job \$SLURM_JOB_ID for ${ds} (concat job ${concat_job_id}) failed at line \$LINENO on \$(hostname) -- see ${LOG_DIR_BASE}/${ds}/finish-subregions-\$SLURM_JOB_ID.err" \
+        high x >/dev/null 2>&1 || true
+}
+trap _notify_failure ERR
 export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
 DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
@@ -701,10 +710,17 @@ REMOTE_SCRIPT
 # (already-fetched content just reports "notneeded"), so retry a few times
 # before actually giving up -- a real, unrecoverable problem (bad URL,
 # missing permissions, etc) will still fail all 3 attempts and surface the
-# same way as before. Scoped to subject directories only, not filtered
-# further by BIDS datatype/modality.
+# same way as before.
+#
+# Scoped by BIDS datatype (anat/func/dwi/...) whenever the app profile
+# (scripts/app_profiles.py) declares one via required_datatypes -- e.g. a
+# FreeSurfer/FastSurfer/CAT12 cohort only reads anat, so there's no reason
+# to pull other subjects' dwi/func data onto shared scratch. Apps with no
+# declared (or unrecognized) profile fall back to the previous
+# whole-subject-directory behavior, since guessing wrong here means a real
+# run failing on missing input.
 prefetch_cohort_subjects() {
-    local ds="$1" input_clone="$2" subj_list="$3"
+    local ds="$1" input_clone="$2" subj_list="$3" app_name="${4:-}"
     local -a subj_ids
     mapfile -t subj_ids < "$subj_list"
     if [[ ${#subj_ids[@]} -eq 0 ]]; then
@@ -712,16 +728,97 @@ prefetch_cohort_subjects() {
         return 1
     fi
 
-    local targets=""
+    local -a datatypes=()
+    if [[ -n "$app_name" ]]; then
+        mapfile -t datatypes < <(python3 "${SCRIPT_DIR}/app_profiles.py" --required-datatypes "$app_name" 2>/dev/null)
+    fi
+
+    local subj_targets=""
     local s
     for s in "${subj_ids[@]}"; do
-        targets+="'${s}/' "
+        subj_targets+="'${s}/' "
     done
 
-    log "[$ds] Prefetching ${#subj_ids[@]} subject(s)..."
+    local -a targets_arr=()
+    if [[ ${#datatypes[@]} -eq 0 ]]; then
+        log "[$ds] Prefetching ${#subj_ids[@]} subject(s) (no datatype restriction for app '${app_name:-unknown}')..."
+        for s in "${subj_ids[@]}"; do
+            targets_arr+=("${s}/")
+        done
+    else
+        log "[$ds] Prefetching ${#subj_ids[@]} subject(s), scoped to datatype(s) ${datatypes[*]} (per '${app_name}' app profile)..."
+        # The datatype subdirectories below don't exist on disk at all until
+        # each subject's own subdataset is installed (this dataset is one
+        # subdataset per subject) -- install (`-n`/--no-data) the subject
+        # subdatasets first, without fetching any file content yet, so the
+        # glob below (against the real filesystem, not a pattern string
+        # handed to a nested shell) has a real directory tree to match.
+        local install_ok=false
+        for attempt in 1 2 3; do
+            if run bash -c "cd '${input_clone}' && datalad get -n -r --recursion-limit 1 ${subj_targets} 2>/dev/null"; then
+                install_ok=true
+                break
+            fi
+            if [[ $attempt -lt 3 ]]; then
+                warn "[$ds] Subdataset install attempt ${attempt}/3 had failures, retrying..."
+                sleep 5
+            fi
+        done
+        if ! $install_ok; then
+            warn "[$ds] Subdataset install failed after 3 attempts"
+            return 1
+        fi
+
+        # Resolve which datatype dirs actually exist right here (not inside
+        # a nested `bash -c` string) so only real, existing paths are ever
+        # handed to `datalad get` below -- covers both session-level
+        # (sub-X/ses-Y/anat) and session-less (sub-X/anat) BIDS layouts.
+        # This matters because `datalad get` given a nonexistent literal
+        # path doesn't just skip it: it reports that one target
+        # "impossible" and exits non-zero even though every other target
+        # succeeded, which would make the retry loop below misreport a
+        # fully-successful fetch as a failure.
+        # `A && B`/`A || B` as a standalone statement aborts the whole
+        # script under `set -e` whenever the left side is false (bash
+        # treats the compound statement's own exit status as the trigger,
+        # not just the last element of a pipeline) -- every conditional
+        # below is an explicit if/then specifically to avoid that, since
+        # "directory doesn't exist for this subject/datatype combo" and
+        # "nullglob was already off" are both expected, non-error outcomes
+        # here, not something that should ever abort submission.
+        local dt match nullglob_was_off
+        nullglob_was_off=1
+        if shopt -q nullglob; then
+            nullglob_was_off=0
+        fi
+        shopt -s nullglob
+        for s in "${subj_ids[@]}"; do
+            for dt in "${datatypes[@]}"; do
+                for match in "${input_clone}/${s}"/*/"${dt}" "${input_clone}/${s}/${dt}"; do
+                    if [[ -d "$match" ]]; then
+                        targets_arr+=("${match#"${input_clone}"/}")
+                    fi
+                done
+            done
+        done
+        if [[ $nullglob_was_off -eq 1 ]]; then
+            shopt -u nullglob
+        fi
+
+        if [[ ${#targets_arr[@]} -eq 0 ]]; then
+            warn "[$ds] No ${datatypes[*]} data found under these subjects -- nothing to fetch"
+            return 1
+        fi
+    fi
+
+    log "[$ds] Fetching content..."
     local prefetch_ok=false
     for attempt in 1 2 3; do
-        if run bash -c "cd '${input_clone}' && datalad get ${targets} 2>/dev/null"; then
+        # Each target is %q-escaped individually (rather than relying on the
+        # naive single-quote wrapping used elsewhere in this file) since
+        # targets_arr entries came from real filesystem paths, not
+        # hand-built literals.
+        if run bash -c "cd '${input_clone}' && datalad get $(printf '%q ' "${targets_arr[@]}") 2>/dev/null"; then
             prefetch_ok=true
             break
         fi
@@ -912,6 +1009,17 @@ ${finish_node_line}
 ${mail_lines}
 set -euo pipefail
 ${module_load_line}
+# Best-effort ntfy push on failure (see scripts/notify_ntfy.sh -- silently
+# no-ops if configs/ntfy.conf isn't set up). Catches anything below that
+# exits non-zero: slurm-finish itself, the uncommitted-check, or
+# push_verification_block's own checks.
+_notify_failure() {
+    echo "finish job for ${ds}${batch_label} failed at line \$LINENO" >&2
+    "${REPO_DIR}/scripts/notify_ntfy.sh" "Cohort finish FAILED: ${ds}" \
+        "finish job \$SLURM_JOB_ID for ${ds}${batch_label} (array ${job_id}, ${n_subjects} subjects) failed at line \$LINENO on \$(hostname) -- see ${LOG_DIR_BASE}/${ds}/finish-\$SLURM_JOB_ID.err" \
+        high x >/dev/null 2>&1 || true
+}
+trap _notify_failure ERR
 # Use the dedicated datalad-slurm venv's own datalad entry point (pinned to
 # a uv-managed portable Python 3.10) instead of .appsrunner -- compute nodes
 # on this cluster can have a different system python3 than the login node
@@ -957,6 +1065,8 @@ if [[ "\$uncommitted" -gt 0 ]]; then
 fi
 
 $(push_verification_block)
+
+"${REPO_DIR}/scripts/notify_ntfy.sh" "Cohort finish OK: ${ds}" "${ds}${batch_label} committed + pushed: array job ${job_id}, ${n_subjects} subjects (commit \$(git rev-parse --short HEAD))." default white_check_mark >/dev/null 2>&1 || true
 ${continue_block}
 EOF
     chmod +x "$finish_script"
@@ -1052,7 +1162,7 @@ cmd_submit() {
         fi
         log "[$DS] ${n_subjects} subjects$($PILOT && echo ' (PILOT)')"
 
-        prefetch_cohort_subjects "$DS" "$input_clone" "$subj_list" \
+        prefetch_cohort_subjects "$DS" "$input_clone" "$subj_list" "$APP_NAME" \
             || { failed=$((failed + 1)); continue; }
 
         local commit_prefix=""
@@ -1224,11 +1334,20 @@ cmd_status() {
     done < "$log_file"
 
     # Subregion segmentation follow-up jobs (see submit_subregion_segmentation),
-    # if any were submitted -- same log format, different file/prefix.
+    # if any were submitted -- same log format, different file/prefix. Unlike
+    # the main submission log above, having none here is a normal, common
+    # case (most cohorts never run subregion segmentation), not a die()-worthy
+    # error -- but `ls` on a glob that matches nothing exits 2, and under
+    # `set -euo pipefail` a bare `var=$(...)` assignment DOES abort the
+    # script on that (real incident: this took cmd_status from printing a
+    # perfectly good status table to reporting the whole command "failed
+    # (exit 2)" for any cohort with no subregion job). `|| true` is the fix --
+    # explicitly means "no match is fine, leave it empty", the same as the
+    # `if` guard three lines down already assumed it would.
     local subregion_log_glob="subregions_submission_"
     $PILOT && subregion_log_glob="subregions_pilot_submission_"
     local subregion_log_file
-    subregion_log_file=$(ls -t "${REPO_DIR}/logs/${subregion_log_glob}"*.log 2>/dev/null | head -1)
+    subregion_log_file=$(ls -t "${REPO_DIR}/logs/${subregion_log_glob}"*.log 2>/dev/null | head -1) || true
     if [[ -n "$subregion_log_file" ]]; then
         echo ""
         log "Reading: ${subregion_log_file}"

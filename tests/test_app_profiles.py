@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import app_profiles
-from app_profiles import CATALOG, resolve_app_name, resolve_app_profile
+from app_profiles import CATALOG, required_datatypes_for_app, resolve_app_name, resolve_app_profile
 
 
 def test_mriqc_resolves_with_nprocs_flags_and_no_sub():
@@ -181,6 +181,29 @@ def test_qsirecon_has_longer_completion_wait_than_default():
 def test_fmriprep_cannot_self_fetch_datalad_but_mriqc_can():
     assert CATALOG["mriqc"]["supports_datalad_self_fetch"] is True
     assert CATALOG["fmriprep"]["supports_datalad_self_fetch"] is False
+
+
+def test_anat_only_apps_declare_required_datatypes():
+    # Real incident: a FreeSurfer pilot's cohort prefetch pulled a
+    # subject's dwi data too, even though recon-all never reads it --
+    # scripts/submit_bids_cohort.sh's prefetch_cohort_subjects scopes
+    # `datalad get` to just these datatypes for apps that declare them.
+    for app_name in ("freesurfer", "freesurfer_bids", "fastsurfer", "fastsurfer_bids", "cat12"):
+        assert required_datatypes_for_app(app_name) == ["anat"]
+
+
+def test_multimodal_or_unknown_apps_have_no_datatype_restriction():
+    # None means "don't restrict" -- the prefetch fallback -- since getting
+    # this wrong (omitting a datatype a pipeline actually needs) breaks a
+    # real run, which is worse than an unrestricted fetch.
+    for app_name in ("mriqc", "fmriprep", "qsiprep", "qsirecon", "nibabies"):
+        assert required_datatypes_for_app(app_name) is None
+    assert required_datatypes_for_app("some_unknown_app") is None
+    assert required_datatypes_for_app("") is None
+
+
+def test_required_datatypes_for_app_is_case_insensitive():
+    assert required_datatypes_for_app("FreeSurfer") == ["anat"]
 
 
 def test_container_matches_app_precise_matching():

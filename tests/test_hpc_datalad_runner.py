@@ -63,6 +63,33 @@ def test_array_generator_has_no_datalad_or_git_calls(tmp_path):
     assert "flock" not in script
 
 
+def test_array_generator_notifies_on_both_error_and_timeout(tmp_path):
+    """A SLURM --time timeout kills the task with SIGTERM directly -- that
+    never runs as a "failing command", so an ERR-only trap misses it (this
+    is exactly how 11 subjects timed out silently on study 134, unnoticed
+    for two days). Both traps must route through the same notifier."""
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _base_config(), "ds001", subj_list, 1
+    ).generate_script()
+
+    assert "trap '_notify_failure error' ERR" in script
+    assert 'trap \'_notify_failure "timeout or terminated"\' TERM' in script
+    assert "notify_ntfy.sh" in script
+    # the notify call must carry the app name and dataset id for the message
+    assert "fmriprep (ds001) task failed" in script
+
+
+def test_array_generator_notify_script_path_is_absolute(tmp_path):
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    gen = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _base_config(), "ds001", subj_list, 1
+    )
+    notify_path = gen._notify_script_path()
+    assert notify_path.startswith("/")
+    assert notify_path.endswith("scripts/notify_ntfy.sh")
+
+
 def test_array_generator_sbatch_logs_land_inside_output_dataset_not_external_log_dir(
     tmp_path,
 ):
@@ -419,3 +446,17 @@ def test_generate_array_script_applies_dataset_options_override(tmp_path):
         str(config_path), "ds001", subj_list
     )
     assert "--use-syn-sdc" not in script_ds001
+
+
+def test_subregion_generator_notifies_on_both_error_and_timeout(tmp_path):
+    timepoint_list = tmp_path / "timepoints.txt"
+    timepoint_list.write_text("sub-01_ses-1\n")
+
+    script = hpc_datalad_runner.SubregionSegmentationScriptGenerator(
+        _base_config(), "ds001", str(timepoint_list), 1, ["thalamus"], "cross"
+    ).generate_script()
+
+    assert "trap '_notify_failure error' ERR" in script
+    assert 'trap \'_notify_failure "timeout or terminated"\' TERM' in script
+    assert "notify_ntfy.sh" in script
+    assert "fmriprep subregions (ds001) task failed" in script

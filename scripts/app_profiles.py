@@ -47,6 +47,17 @@ DEFAULT_PROFILE: Dict[str, Any] = {
     # (e.g. freesurfer below, which defaults to /bin/bash) need an explicit
     # in-container executable instead.
     "help_args": None,
+    # BIDS raw-data datatype subdirectories (anat/func/dwi/fmap/...) this
+    # app actually reads. None means "unknown/multimodal -- don't restrict",
+    # which is also the safe default for any app not in CATALOG: cohort
+    # prefetch (scripts/submit_bids_cohort.sh prefetch_cohort_subjects, via
+    # required_datatypes_for_app below) falls back to fetching the whole
+    # subject rather than risk silently omitting a datatype a pipeline
+    # actually needs. Only set this for apps confidently known to read a
+    # single datatype -- getting it wrong here means a real run failing on
+    # missing input, which is worse than the disk/quota cost of an
+    # unrestricted fetch.
+    "required_datatypes": None,
 }
 
 # recommended_hpc values are starting points tuned from a real production run
@@ -151,6 +162,7 @@ CATALOG: Dict[str, Dict[str, Any]] = {
             "fastsurfer-cross": "fastsurfer-cross",
             "bids-fastsurfer": "fastsurfer-cross",
         },
+        "required_datatypes": ["anat"],
         # FastSurfer's HPC script path (prism_hpc.py fastsurfer_mode) always
         # passes --nv to apptainer, so it effectively requires a GPU node
         # regardless of this profile -- request one here too so SLURM
@@ -175,6 +187,7 @@ CATALOG: Dict[str, Dict[str, Any]] = {
             "fastsurfer-bids": "fastsurfer-bids",
             "fastsurfer_bids": "fastsurfer-bids",
         },
+        "required_datatypes": ["anat"],
         # Longer walltime than the cross-sectional "fastsurfer" default
         # (02:00:00): one job now runs run_fastsurfer_bids.py for a whole
         # subject, which auto-dispatches to long_fastsurfer.sh and covers
@@ -197,6 +210,7 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         # rather than reaching anything help-aware). recon-all is the
         # actual pipeline driver and does understand --help.
         "help_args": ["recon-all", "--help"],
+        "required_datatypes": ["anat"],
         # mem/cpus validated against a real staged cross->base->long run
         # (template_run.sbatch): recon-all/segment_subregions are
         # single-threaded per call, and FreeSurfer 8.x's own docs cite
@@ -228,6 +242,7 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         # runscript and works correctly -- same fix shape as the raw
         # "freesurfer" profile's help_args above, different underlying bug.
         "help_args": ["python", "/run.py", "--help"],
+        "required_datatypes": ["anat"],
         "execution_adapter_default": "freesurfer-bids",
         "execution_adapter_aliases": {
             "freesurfer-bids": "freesurfer-bids",
@@ -252,6 +267,7 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "display_name": "CAT12",
         "docs_url": "https://neuro-jena.github.io/cat/",
         "container_match_names": ["cat12"],
+        "required_datatypes": ["anat"],
     },
     "nibabies": {
         "display_name": "NiBabies",
@@ -343,6 +359,17 @@ def resolve_app_profile(
                 profile[key] = value
 
     return profile
+
+
+def required_datatypes_for_app(app_name: str) -> Optional[List[str]]:
+    """BIDS datatype subdirectories (e.g. ["anat"]) the named catalog app
+    actually reads, or None if unknown/multimodal -- callers (cohort
+    prefetch) should treat None as "don't restrict, fetch everything" rather
+    than guess. Looked up by catalog key directly (not the full 3-tier
+    resolve_app_name precedence) since callers such as
+    scripts/submit_bids_cohort.sh already have the resolved app_name
+    (bids_app.app_name / common.pipeline_app_name) in hand."""
+    return CATALOG.get(str(app_name or "").strip().lower(), {}).get("required_datatypes")
 
 
 def _sinfo_partition_gres(partition: str) -> Optional[List[str]]:
@@ -470,3 +497,24 @@ def describe_execution_adapter_resolution(
     if not resolved_adapter:
         return None
     return {"resolved_adapter": resolved_adapter, "source": source}
+
+
+if __name__ == "__main__":
+    import argparse as _argparse
+
+    _parser = _argparse.ArgumentParser(
+        description="Query the BIDS app profile catalog (scripts/app_profiles.py) from bash."
+    )
+    _parser.add_argument(
+        "--required-datatypes",
+        metavar="APP_NAME",
+        help="Print the app's required BIDS datatypes (one per line), used by "
+        "scripts/submit_bids_cohort.sh's prefetch_cohort_subjects to scope "
+        "`datalad get` to only the datatypes an app actually reads. Prints "
+        "nothing (exit 0) when the app is unknown or multimodal -- callers "
+        "should treat that as 'don't restrict'.",
+    )
+    _args = _parser.parse_args()
+    if _args.required_datatypes is not None:
+        for _dt in required_datatypes_for_app(_args.required_datatypes) or []:
+            print(_dt)

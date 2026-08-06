@@ -361,8 +361,24 @@ fi
 SUBJECT_LABEL="${{SUBJECT#sub-}}"
 """
 
+    def _notify_script_path(self) -> str:
+        return str(Path(__file__).resolve().parent / "notify_ntfy.sh")
+
     def _info_block(self) -> str:
-        return """
+        # Two traps, not one: a bash command failure fires ERR, but a SLURM
+        # job hitting its --time limit kills the task with SIGTERM directly
+        # -- that never runs as a "failing command" so ERR alone misses it.
+        # This is exactly the failure mode that went unnoticed for two days
+        # on study 134 (11 subjects TIMEOUT, nobody watching): a single
+        # shared _notify_failure() function/best-effort curl call for both
+        # signals closes that gap without needing separate wiring per case.
+        notify_cmd = (
+            '"%s" "%s (%s) task failed" '
+            '"sub-${SUBJECT_LABEL} (task $SLURM_ARRAY_TASK_ID) on $(hostname): $1" '
+            'high x >/dev/null 2>&1 || true'
+        ) % (self._notify_script_path(), self._app_name, self.dataset_id)
+        return (
+            """
 echo "========================================"
 echo "Array job:  ${SLURM_ARRAY_JOB_ID}[${SLURM_ARRAY_TASK_ID}]"
 echo "Subject:    sub-${SUBJECT_LABEL}"
@@ -372,7 +388,12 @@ echo "========================================"
 
 set -e
 set -u
-trap 'echo "FAILED at line $LINENO (task $SLURM_ARRAY_TASK_ID, sub-${SUBJECT_LABEL})" >&2' ERR
+_notify_failure() {
+    echo "FAILED ($1) at line $LINENO (task $SLURM_ARRAY_TASK_ID, sub-${SUBJECT_LABEL})" >&2
+    NOTIFY_CMD_PLACEHOLDER
+}
+trap '_notify_failure error' ERR
+trap '_notify_failure "timeout or terminated"' TERM
 
 # Pre-flight: verify user is resolvable (apptainer requires getpwuid to succeed)
 if ! getent passwd "$(id -u)" > /dev/null 2>&1; then
@@ -391,6 +412,7 @@ else
     exit 1
 fi
 """
+        ).replace("NOTIFY_CMD_PLACEHOLDER", notify_cmd)
 
     def _module_and_env(self) -> str:
         lines = []
@@ -881,8 +903,20 @@ if [[ -z "$TIMEPOINT" ]]; then
 fi
 """
 
+    def _notify_script_path(self) -> str:
+        return str(Path(__file__).resolve().parent / "notify_ntfy.sh")
+
     def _info_block(self) -> str:
-        return """
+        # See BidsAppComputeScriptGenerator._info_block()'s comment: ERR
+        # alone misses a SLURM --time timeout (SIGTERM, not a failing
+        # command), so both traps share one notify function.
+        notify_cmd = (
+            '"%s" "%s subregions (%s) task failed" '
+            '"${TIMEPOINT} (task $SLURM_ARRAY_TASK_ID) on $(hostname): $1" '
+            'high x >/dev/null 2>&1 || true'
+        ) % (self._notify_script_path(), self._app_name, self.dataset_id)
+        return (
+            """
 echo "========================================"
 echo "Array job:  ${SLURM_ARRAY_JOB_ID}[${SLURM_ARRAY_TASK_ID}]"
 echo "Timepoint:  ${TIMEPOINT}"
@@ -892,9 +926,15 @@ echo "========================================"
 
 set -e
 set -u
-trap 'echo "FAILED at line $LINENO (task $SLURM_ARRAY_TASK_ID, ${TIMEPOINT})" >&2' ERR
+_notify_failure() {
+    echo "FAILED ($1) at line $LINENO (task $SLURM_ARRAY_TASK_ID, ${TIMEPOINT})" >&2
+    NOTIFY_CMD_PLACEHOLDER
+}
+trap '_notify_failure error' ERR
+trap '_notify_failure "timeout or terminated"' TERM
 
-# Pre-flight: verify user is resolvable (apptainer requires getpwuid to succeed)
+# Pre-flight: verify user is resolvable (apptainer requires getpwuid to succeed)"""
+        ).replace("NOTIFY_CMD_PLACEHOLDER", notify_cmd) + "\n" + """
 if ! getent passwd "$(id -u)" > /dev/null 2>&1; then
     echo "FATAL: Cannot resolve user UID $(id -u) on $(hostname)" >&2
     echo "       Apptainer will fail with: Couldn't determine user account information" >&2
