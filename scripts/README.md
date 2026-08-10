@@ -9,13 +9,6 @@ This directory contains all scripts and utilities for the BIDS Apps Runner proje
   - Handles configuration, parallelization, logging
   - Required by prism_app_runner.py
   
-- **`run_bids_apps_hpc.py`** (32KB) - HPC runner with SLURM integration
-  - DataLad-aware batch submission
-  - Used for HPC environments
-
-- **`hpc_batch_submit.py`** (7.3KB) - SLURM job submission wrapper
-  - Required by HPC workflows
-  
 - **`hpc_datalad_runner.py`** (16KB) - DataLad integration for HPC
   - Script generator for DataLad workflows
   - Required by prism_app_runner.py (HPC mode)
@@ -26,15 +19,6 @@ This directory contains all scripts and utilities for the BIDS Apps Runner proje
   - Required by prism_app_runner.py
   - Heavily used in workflows
 
-- **`bids_validation_integration.py`** (17KB) - BIDS validator integration
-  - Not currently imported by main app
-  - **ASSESSMENT**: Useful utility but could be standalone
-
-### System Management
-- **`check_system_deps.py`** (3.5KB) - Dependency checker
-  - Validates Apptainer, containers, system requirements
-  - **ASSESSMENT**: Good utility, but not imported by main app
-
 ## Installation & Environment (Keep)
 
 - **`install.sh`** (9.1KB) - Main installation script
@@ -43,12 +27,6 @@ This directory contains all scripts and utilities for the BIDS Apps Runner proje
   
 - **`activate_appsrunner.sh`** (670B) - Virtual environment activation helper
   - Simple wrapper for development
-
-## Build & Container Scripts (Keep)
-
-- **`manage_datalad_repos.sh`** (9.0KB) - DataLad repository management
-  - Clone, unlock, commit operations
-  - Required for HPC DataLad workflows
 
 ## BIDS Utility Scripts (Evaluate - May be project-specific)
 
@@ -128,15 +106,10 @@ This directory contains all scripts and utilities for the BIDS Apps Runner proje
 scripts/
 ├── README.md                          # This file
 ├── run_bids_apps.py                   # Core runners
-├── run_bids_apps_hpc.py
-├── hpc_batch_submit.py
 ├── hpc_datalad_runner.py
 ├── check_app_output.py                # Validation
-├── bids_validation_integration.py
-├── check_system_deps.py               # System checks
 ├── install.sh                         # Installation
-├── activate_appsrunner.sh
-└── manage_datalad_repos.sh
+└── activate_appsrunner.sh
 
 tests/                                 # NEW
 ├── test_docker_api.py
