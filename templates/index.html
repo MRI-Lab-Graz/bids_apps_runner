@@ -311,6 +311,10 @@
                             <div id="recentProjectsList" class="list-group">
                                 <div class="list-group-item text-muted">Loading projects...</div>
                             </div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary mt-2" id="showAllProjectsBtn"
+                                    onclick="loadRecentProjects(true)" style="display:none;">
+                                Show all projects
+                            </button>
                             <div class="mt-3 d-flex gap-2">
                                 <button type="button" class="btn btn-outline-success" onclick="saveCurrentProjectFromProjectsTab()">
                                     <i class="fas fa-save me-1"></i>Save Loaded Project
@@ -969,15 +973,15 @@
                                         <div class="mb-2">
                                             <label class="form-label mb-1 small fw-semibold d-block">Structures</label>
                                             <div class="form-check form-check-inline">
-                                                <input class="form-check-input" type="checkbox" id="subregion_structure_thalamus" value="thalamus">
+                                                <input class="form-check-input" type="checkbox" id="subregion_structure_thalamus" value="thalamus" onchange="updateSubregionSegmentationSubmitAvailability()">
                                                 <label class="form-check-label" for="subregion_structure_thalamus">Thalamus</label>
                                             </div>
                                             <div class="form-check form-check-inline">
-                                                <input class="form-check-input" type="checkbox" id="subregion_structure_hippo_amygdala" value="hippo-amygdala">
+                                                <input class="form-check-input" type="checkbox" id="subregion_structure_hippo_amygdala" value="hippo-amygdala" onchange="updateSubregionSegmentationSubmitAvailability()">
                                                 <label class="form-check-label" for="subregion_structure_hippo_amygdala">Hippocampus &amp; Amygdala</label>
                                             </div>
                                             <div class="form-check form-check-inline">
-                                                <input class="form-check-input" type="checkbox" id="subregion_structure_brainstem" value="brainstem">
+                                                <input class="form-check-input" type="checkbox" id="subregion_structure_brainstem" value="brainstem" onchange="updateSubregionSegmentationSubmitAvailability()">
                                                 <label class="form-check-label" for="subregion_structure_brainstem">Brainstem</label>
                                             </div>
                                         </div>
@@ -1404,6 +1408,7 @@
                                         title="Run subregion segmentation (see the checkbox in Execution Parameters above) directly against this dataset's ALREADY-FINISHED output -- no fresh recon-all array, unlike Submit. Use this to add subregion segmentation to a cohort that already completed.">
                                     <i class="fas fa-brain me-1"></i>Submit Subregions Only
                                 </button>
+                                <small class="text-muted align-self-center" id="cohortSubmitSubregionsStatus" style="display:none;"></small>
                                 <button class="btn btn-outline-danger ms-auto" id="cohortCancelBtn"
                                         onclick="cancelCohort()" style="display:none;">
                                     <i class="fas fa-stop me-1"></i>Cancel

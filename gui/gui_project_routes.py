@@ -121,14 +121,20 @@ def register_project_config_handlers(
     def get_projects():
         try:
             manager = project_manager_getter()
-            limit = 5
+            limit_param = (request.args.get("limit") or "5").strip().lower()
+            if limit_param == "all":
+                limit = None
+            elif limit_param.isdigit() and 1 <= int(limit_param) <= 100:
+                limit = int(limit_param)
+            else:
+                return jsonify({"error": "limit must be 'all' or an integer from 1 to 100"}), 400
             projects = manager.list_projects(limit=limit)
             total_projects = manager.count_projects()
             return (
                 jsonify(
                     {
                         "projects": projects,
-                        "limit": limit,
+                        "limit": limit if limit is not None else "all",
                         "total_projects": total_projects,
                     }
                 ),

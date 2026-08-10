@@ -363,6 +363,9 @@ function _cohortSetDone(status, command) {
     ['cohortSetupBtn','cohortSubmitBtn','cohortStatusBtn','cohortSubmitSubregionsBtn'].forEach(id => {
         document.getElementById(id).disabled = false;
     });
+    if (typeof updateSubregionSegmentationSubmitAvailability === 'function') {
+        updateSubregionSegmentationSubmitAvailability();
+    }
     document.getElementById('cohortCancelBtn').style.display = 'none';
     const badge = document.getElementById('cohortBadge');
     const msg   = document.getElementById('cohortStatusMsg');
@@ -376,6 +379,13 @@ function _cohortSetDone(status, command) {
 
 async function runCohort(command) {
     if (!_requireSavedProjectForHpc(`running cohort ${command}`)) return;
+    if (command === 'submit-subregions'
+            && typeof isSubregionSegmentationReady === 'function'
+            && !isSubregionSegmentationReady()) {
+        updateSubregionSegmentationSubmitAvailability();
+        logHPC('Enable subregion segmentation and select at least one structure before submitting it.', true);
+        return;
+    }
 
     const dryRun = document.getElementById('cohortDryRun').checked;
     // Pre-existing checkbox that was never actually wired to a request --

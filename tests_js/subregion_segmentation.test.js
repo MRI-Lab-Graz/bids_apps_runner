@@ -13,6 +13,7 @@ const FIXTURE_HTML = `
         <input id="subregion_sessions" value="">
     </div>
     <button id="cohortSubmitSubregionsBtn"></button>
+    <small id="cohortSubmitSubregionsStatus"></small>
 `;
 
 beforeEach(() => {
@@ -46,6 +47,26 @@ describe('updateSubregionSegmentationVisibility', () => {
         updateSubregionSegmentationVisibility();
         expect(document.getElementById('subregion_segmentation_section_wrap').style.display).toBe('none');
         expect(document.getElementById('cohortSubmitSubregionsBtn').style.display).toBe('none');
+    });
+
+    it('requires enabled segmentation and at least one selected structure before submission', () => {
+        window.inferCurrentPipelineAppName = () => 'freesurfer';
+        const button = document.getElementById('cohortSubmitSubregionsBtn');
+        const status = document.getElementById('cohortSubmitSubregionsStatus');
+
+        updateSubregionSegmentationVisibility();
+        expect(button.disabled).toBe(true);
+        expect(status.textContent).toContain('Enable subregion segmentation');
+
+        document.getElementById('subregion_segmentation_enabled').checked = true;
+        updateSubregionSegmentationSubmitAvailability();
+        expect(button.disabled).toBe(true);
+        expect(status.textContent).toContain('Select at least one subregion structure');
+
+        document.getElementById('subregion_structure_thalamus').checked = true;
+        updateSubregionSegmentationSubmitAvailability();
+        expect(button.disabled).toBe(false);
+        expect(status.style.display).toBe('none');
     });
 
     it('defaults to hidden when inferCurrentPipelineAppName is unavailable', () => {

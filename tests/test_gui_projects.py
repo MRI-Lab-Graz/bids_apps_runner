@@ -119,3 +119,20 @@ def test_save_project_writes_backup_of_previous_state(store):
         backup = json.load(f)
     # Backup captures state *before* the most recent save.
     assert backup["config"]["hpc"]["partition"] == "gpu"
+
+
+def test_get_projects_can_return_all_persisted_projects(monkeypatch, store):
+    for index in range(6):
+        store.create_project(f"study_{index}")
+
+    monkeypatch.setattr(prism_app_runner, "ProjectManager", store)
+    prism_app_runner.app.config["TESTING"] = True
+
+    with prism_app_runner.app.test_client() as client:
+        response = client.get("/get_projects?limit=all")
+        invalid_response = client.get("/get_projects?limit=0")
+
+    assert response.status_code == 200
+    assert response.get_json()["limit"] == "all"
+    assert len(response.get_json()["projects"]) == 6
+    assert invalid_response.status_code == 400

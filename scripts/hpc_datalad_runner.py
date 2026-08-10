@@ -390,6 +390,17 @@ set -e
 set -u
 _notify_failure() {
     echo "FAILED ($1) at line $LINENO (task $SLURM_ARRAY_TASK_ID, sub-${SUBJECT_LABEL})" >&2
+    # _cleanup() (the normal "rm -rf WORK_DIR" step) only runs on the
+    # success path -- set -e skips straight past it on any failure, and a
+    # TERM-killed task never reaches it either. That's the exact mechanism
+    # behind hundreds of orphaned per-task scratch dirs found on the
+    # openneuro MRIQC scratch volume (687, closely matching the failed
+    # task count) and study 134's freesurfer scratch (11, matching its
+    # timed-out subjects). WORK_DIR may not be set yet if the failure
+    # happened before _workdirs() ran, hence the guard.
+    if [[ -n "${WORK_DIR:-}" ]]; then
+        rm -rf "${WORK_DIR}" 2>/dev/null || true
+    fi
     NOTIFY_CMD_PLACEHOLDER
 }
 trap '_notify_failure error' ERR
@@ -928,6 +939,12 @@ set -e
 set -u
 _notify_failure() {
     echo "FAILED ($1) at line $LINENO (task $SLURM_ARRAY_TASK_ID, ${TIMEPOINT})" >&2
+    # See BidsAppComputeScriptGenerator._info_block()'s comment: the normal
+    # cleanup step never runs on a failure/timeout path, which is why
+    # orphaned scratch accumulates.
+    if [[ -n "${WORK_DIR:-}" ]]; then
+        rm -rf "${WORK_DIR}" 2>/dev/null || true
+    fi
     NOTIFY_CMD_PLACEHOLDER
 }
 trap '_notify_failure error' ERR

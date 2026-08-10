@@ -460,3 +460,38 @@ def test_subregion_generator_notifies_on_both_error_and_timeout(tmp_path):
     assert 'trap \'_notify_failure "timeout or terminated"\' TERM' in script
     assert "notify_ntfy.sh" in script
     assert "fmriprep subregions (ds001) task failed" in script
+
+
+def test_array_generator_cleans_up_scratch_on_failure(tmp_path):
+    """Regression test: the normal cleanup step (rm -rf WORK_DIR) only runs
+    on the success path, so a failed/timed-out task always leaked its
+    scratch dir. Real incident: 687 orphaned per-task scratch dirs found on
+    the openneuro MRIQC scratch volume (closely matching the failed task
+    count) and 11 on study 134's freesurfer scratch (matching its timed-out
+    subjects)."""
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _base_config(), "ds001", subj_list, 1
+    ).generate_script()
+
+    notify_fn_start = script.index("_notify_failure() {")
+    notify_fn_end = script.index("trap '_notify_failure error' ERR", notify_fn_start)
+    notify_fn_body = script[notify_fn_start:notify_fn_end]
+    assert 'rm -rf "${WORK_DIR}"' in notify_fn_body
+    # must guard against WORK_DIR being unset if the failure happened
+    # before _workdirs() ran (set -u would otherwise abort the trap itself)
+    assert "${WORK_DIR:-}" in notify_fn_body
+
+
+def test_subregion_generator_cleans_up_scratch_on_failure(tmp_path):
+    timepoint_list = tmp_path / "timepoints.txt"
+    timepoint_list.write_text("sub-01_ses-1\n")
+    script = hpc_datalad_runner.SubregionSegmentationScriptGenerator(
+        _base_config(), "ds001", str(timepoint_list), 1, ["thalamus"], "cross"
+    ).generate_script()
+
+    notify_fn_start = script.index("_notify_failure() {")
+    notify_fn_end = script.index("trap '_notify_failure error' ERR", notify_fn_start)
+    notify_fn_body = script[notify_fn_start:notify_fn_end]
+    assert 'rm -rf "${WORK_DIR}"' in notify_fn_body
+    assert "${WORK_DIR:-}" in notify_fn_body

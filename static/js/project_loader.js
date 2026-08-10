@@ -616,12 +616,13 @@ function getConfiguredContainerValue() {
     return `${folder}/${image}`;
 }
 
-async function loadRecentProjects() {
+async function loadRecentProjects(showAll = false) {
     try {
-        const resp = await fetch('/get_projects');
+        const resp = await fetch(showAll ? '/get_projects?limit=all' : '/get_projects');
         const data = await resp.json();
         const list = document.getElementById('recentProjectsList');
         const meta = document.getElementById('recentProjectsMeta');
+        const showAllBtn = document.getElementById('showAllProjectsBtn');
 
         if (!resp.ok) {
             throw new Error(data.error || 'Failed to load recent projects');
@@ -641,11 +642,12 @@ async function loadRecentProjects() {
         const limit = Number.isInteger(data.limit) ? data.limit : RECENT_PROJECTS_LIMIT;
         if (meta) {
             let metaText = `Showing ${shownCount} of ${totalProjects} projects (latest first).`;
-            if (totalProjects > shownCount || shownCount >= limit) {
-                metaText += ' Use "Load Project from File" to open older projects.';
+            if (!showAll && (totalProjects > shownCount || shownCount >= limit)) {
+                metaText += ' Show all to open an older project.';
             }
             meta.textContent = metaText;
         }
+        if (showAllBtn) showAllBtn.style.display = !showAll && totalProjects > shownCount ? '' : 'none';
 
         list.innerHTML = '';
         data.projects.forEach((proj) => {

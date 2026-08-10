@@ -11,6 +11,7 @@ function toggleSubregionSegmentationOptions() {
     const options = document.getElementById('subregion_segmentation_options');
     if (!enabled || !options) return;
     options.style.display = enabled.checked ? '' : 'none';
+    updateSubregionSegmentationSubmitAvailability();
 }
 
 // Unlike most pipeline-specific fields in this form (which stay visible for
@@ -29,6 +30,54 @@ function updateSubregionSegmentationVisibility() {
 
     const cohortBtn = document.getElementById('cohortSubmitSubregionsBtn');
     if (cohortBtn) cohortBtn.style.display = isFreesurfer ? '' : 'none';
+
+    updateSubregionSegmentationSubmitAvailability();
+}
+
+function isSubregionSegmentationReady() {
+    const enabled = document.getElementById('subregion_segmentation_enabled');
+    const structures = [
+        'subregion_structure_thalamus',
+        'subregion_structure_hippo_amygdala',
+        'subregion_structure_brainstem',
+    ];
+
+    return !!enabled?.checked
+        && structures.some(id => document.getElementById(id)?.checked);
+}
+
+function updateSubregionSegmentationSubmitAvailability() {
+    const cohortBtn = document.getElementById('cohortSubmitSubregionsBtn');
+    if (!cohortBtn) return;
+
+    const isFreesurfer = typeof inferCurrentPipelineAppName === 'function'
+        && inferCurrentPipelineAppName() === 'freesurfer';
+    const enabled = document.getElementById('subregion_segmentation_enabled')?.checked;
+    const ready = isFreesurfer && isSubregionSegmentationReady();
+    const status = document.getElementById('cohortSubmitSubregionsStatus');
+
+    cohortBtn.disabled = !ready;
+    if (!isFreesurfer) return;
+
+    if (!enabled) {
+        cohortBtn.title = 'Enable FreeSurfer subregion segmentation before submitting it.';
+        if (status) {
+            status.textContent = 'Enable subregion segmentation to submit this follow-up.';
+            status.style.display = '';
+        }
+    } else if (!ready) {
+        cohortBtn.title = 'Select at least one subregion structure before submitting it.';
+        if (status) {
+            status.textContent = 'Select at least one subregion structure to submit this follow-up.';
+            status.style.display = '';
+        }
+    } else {
+        cohortBtn.title = 'Run subregion segmentation directly against this dataset\'s already-finished output; no fresh recon-all array is submitted.';
+        if (status) {
+            status.textContent = '';
+            status.style.display = 'none';
+        }
+    }
 }
 
 // Populate the UI from a loaded pipeline's app config.
