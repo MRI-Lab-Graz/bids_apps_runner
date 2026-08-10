@@ -1,16 +1,6 @@
 # Minimal requirements for BIDS App Runner
 # Core functionality only - system dependencies noted below
 
-# For enhanced logging and user experience
-colorlog>=6.0.0
-tqdm>=4.60.0
-
-# For system process monitoring
-psutil>=5.8.0
-
-# For JSON configuration validation
-jsonschema>=4.0.0
-
 # GUI dependencies
 flask>=2.3.0
 waitress>=3.0.0
