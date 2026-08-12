@@ -22,6 +22,11 @@ _clone_jobs_lock = threading.Lock()
 REMOTE_DATASET_SSH_HOST = "datalad-server"
 REMOTE_DATASET_BASE_PATH = "/datalad/mri/MRI-Lab_Repository"
 LOCAL_DATASET_BASE_DIR = "/cl_tmp/mrilab"
+# Cohort array-job logs, generated array scripts, and subject lists are
+# per-run bulk data (CLAUDE.md: never under /usr/people, whose home-folder
+# filesystem has no quota for this) -- unlike the small per-project JSON
+# bookkeeping under resolve_project_dir(), which stays on /usr/people.
+COHORT_LOG_BASE_DIR = "/cl_tmp/mrilabgraz/bids_apps_runner_cohort_logs"
 _STUDY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 

@@ -46,4 +46,10 @@ venv
 .coverage
 coverage.xml
 .secret_key
-scripts/.nfs00000000023cc65000011cfe
+
+# NFS "silly rename" ghost files: when a file open by another process gets
+# deleted/replaced on this NFS-mounted home dir, NFS renames it to .nfs<hex>
+# instead (only truly unlinked once the last open fd closes). The hex suffix
+# is a new inode number every time, so a literal filename entry (as this used
+# to be) only ever matches the one that already happened.
+.nfs*

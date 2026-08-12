@@ -47,6 +47,7 @@ from gui.gui_utility_routes import (
     register_utility_routes,
     REMOTE_DATASET_SSH_HOST,
     REMOTE_DATASET_BASE_PATH,
+    COHORT_LOG_BASE_DIR,
 )
 from gui.gui_security import (
     is_loopback_host as _is_loopback_host,
@@ -753,15 +754,23 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50, batch_
 
     dataset_id = os.path.basename(bids_folder) or "dataset"
     app_name = str(common.get("pipeline_app_name") or "").strip() or "bids_app"
-    # .resolve(): a relative project_dir would silently write a relative
-    # log_dir/subject_lists_dir into the generated cohort config. Harmless
-    # for the main array (its own bash steps run from REPO_DIR too, so it
-    # happens to resolve), but datalad-slurm submits via
-    # `datalad -C output_clone ... sbatch`, which changes the *job's* cwd to
-    # the output dataset -- a relative timepoint-list path then resolves
-    # against output_clone on the compute node instead, failing every array
-    # task instantly with a confusing "No such file" deep in a SLURM log.
-    cohort_log_dir = Path(project_dir).resolve() / "logs" / "cohort"
+    # Bulk per-run data (array-job stdout/stderr, generated array scripts,
+    # subject lists) -- CLAUDE.md requires this live under /cl_tmp/mrilabgraz,
+    # never /usr/people, which has no quota for it. Deliberately rooted at
+    # COHORT_LOG_BASE_DIR rather than under project_dir (small per-project
+    # JSON bookkeeping, which does stay on /usr/people) -- project_dir.name
+    # is the same normalized project id resolve_project_dir() already
+    # validated, so this just relocates the logs/cohort subtree onto
+    # cl_tmp. .resolve(): a relative log_dir/subject_lists_dir written into
+    # the generated cohort config would break datalad-slurm's array
+    # submission, which runs via `datalad -C output_clone ... sbatch` --
+    # that changes the *job's* cwd to the output dataset, so a relative
+    # timepoint-list path would resolve against output_clone on the compute
+    # node instead, failing every array task instantly with a confusing "No
+    # such file" deep in a SLURM log.
+    cohort_log_dir = (
+        Path(COHORT_LOG_BASE_DIR) / Path(project_dir).name / "logs" / "cohort"
+    ).resolve()
 
     # Custom SBATCH directives (e.g. sbatch_gres: "gpu:1" for GPU-capable
     # apps like QSIPrep/FastSurfer) -- forwarded the same way the single-job

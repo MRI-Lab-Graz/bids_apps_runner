@@ -297,6 +297,16 @@ check_output_clone_fresh() {
         return 0
     fi
 
+    # Local is purely ahead (its own unpushed commits, e.g. a finish/recover
+    # job still mid-push) with nothing new upstream -- not a real divergence,
+    # since origin has no subjects this clone doesn't already know about.
+    # Confirmed real false-positive: 082_KK02_Slackline flagged as
+    # "DIVERGED" while a recover job was mid-push, purely ahead by 10
+    # commits / 0 behind.
+    if git -C "$output_clone" merge-base --is-ancestor origin/derivatives "$local_rev"; then
+        return 0
+    fi
+
     warn "[$ds] Output clone's derivatives branch has DIVERGED from origin/derivatives" \
          "-- refusing to submit (would reprocess subjects already pushed upstream and" \
          "fail to push its own results). Reconcile manually first: cd ${output_clone}"
@@ -528,7 +538,7 @@ trap _notify_failure ERR
 export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
 DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
-"\$DATALAD_BIN" slurm-finish -m "${commit_prefix}Finish subregion segmentation job ${subregion_job_id} for ${ds}"
+"\$DATALAD_BIN" slurm-finish --slurm-job-id "${subregion_job_id}" -m "${commit_prefix}Finish subregion segmentation job ${subregion_job_id} for ${ds}"
 # See the matching comment on the main finish job template in cmd_submit for
 # why this push forces DATALAD_SSH_MULTIPLEX__CONNECTIONS=false (stale
 # cross-node SSH control socket under the NFS-shared ~/.cache/datalad/sockets/).
@@ -1032,7 +1042,15 @@ trap _notify_failure ERR
 export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
 DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
-"\$DATALAD_BIN" slurm-finish -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${ds}${batch_label}"
+# --slurm-job-id must be explicit: datalad-slurm's finish_cmd(), when called
+# without one, processes EVERY still-open job in the dataset's bookkeeping DB
+# (datalad_slurm/finish.py's get_scheduled_commits()), not just this array.
+# Confirmed real incident: job 5578842's finish swept in three stale open-job
+# entries left over from an earlier unrelated pilot run and none of the four
+# jobs it then tried to finish -- including this one -- ended up committed,
+# tripping the uncommitted-check below. Scoping to this array's own job_id
+# keeps a finish job's blast radius limited to the array it was dispatched for.
+"\$DATALAD_BIN" slurm-finish --slurm-job-id "${job_id}" -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${ds}${batch_label}"
 # Disable datalad's SSH connection multiplexing for this push. Finish jobs
 # land on whichever compute node the scheduler/pick_idle_node picks, but
 # \$HOME (and its datalad control-socket cache under ~/.cache/datalad/sockets/)
