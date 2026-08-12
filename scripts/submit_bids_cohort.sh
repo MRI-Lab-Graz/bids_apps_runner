@@ -191,6 +191,14 @@ done
 resolve_config() {
     require_jq
     [[ -f "$CONFIG" ]] || die "Config not found: $CONFIG"
+    # Normalize to an absolute path: finish jobs embed $CONFIG verbatim into
+    # a self-chained `_continue-batch` call (see continue_block) that runs
+    # after `cd "${output_clone}"` on a compute node -- a relative CONFIG
+    # (e.g. from `-c configs/foo.json` on the login node) no longer resolves
+    # there, silently breaking multi-batch chaining after batch 1's push
+    # already succeeded. Confirmed real incident (2026-08-11): every batched
+    # dataset in the megastudy_openneuro_mriqc cohort stalled after batch 1.
+    CONFIG="$(realpath "$CONFIG")"
 
     SHARED_INPUT_BASE="$(jq -r '.paths.shared_input_base // ""' "$CONFIG")"
     SHARED_OUTPUT_BASE="$(jq -r '.paths.shared_output_base // ""' "$CONFIG")"
