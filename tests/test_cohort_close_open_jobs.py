@@ -131,6 +131,58 @@ class TestCloseOpenJobs:
         assert data["ok"] is True
         assert "No closeable" in data["output"]
 
+    def test_stops_after_time_budget_and_reports_remaining(
+        self, client, disposable_project, tmp_path, monkeypatch
+    ):
+        """Regression test: this loop calls --commit-failed-jobs once per
+        stale job with a 60s subprocess timeout each, serially, inside a
+        synchronous Flask request handler. With enough stale jobs that adds
+        up to minutes inside one HTTP request -- ties up one of only a
+        handful of GUI worker threads, and risks a reverse-proxy or browser
+        timing the request out mid-slurm-finish, which is exactly the
+        interrupted-mid-finish failure mode this whole fix exists to avoid,
+        just reintroduced via the HTTP layer instead of SLURM wallclock.
+        A wall-clock budget must cap the loop and report what's left rather
+        than attempting every stale job no matter how many there are."""
+        output_dir = tmp_path / "output"
+        (output_dir / ".datalad").mkdir(parents=True)
+        _save_runnable_project(disposable_project, tmp_path, output_dir)
+
+        list_open_jobs_stdout = (
+            "slurm-job-id   slurm-job-status\n"
+            "111            FAILED\n"
+            "222            FAILED\n"
+            "333            FAILED\n"
+        )
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if "--list-open-jobs" in cmd:
+                return _FakeCompletedProcess(returncode=0, stdout=list_open_jobs_stdout)
+            return _FakeCompletedProcess(returncode=0, stdout="ok")
+
+        monkeypatch.setattr(gui_cohort_routes.subprocess, "run", fake_run)
+
+        # First value is the loop's start timestamp; the jump to 500 on the
+        # very next read simulates the budget having elapsed before a
+        # second job could be attempted.
+        monotonic_values = iter([0.0, 0.0, 500.0, 500.0, 500.0, 500.0])
+        monkeypatch.setattr(
+            gui_cohort_routes.time, "monotonic", lambda: next(monotonic_values, 500.0)
+        )
+
+        resp = client.post(
+            "/cohort/close_open_jobs",
+            json={"project_id": disposable_project, "pipeline_id": "default"},
+        )
+        data = resp.get_json()
+
+        close_calls = [c for c in calls if "--commit-failed-jobs" in c]
+        assert len(close_calls) == 1, "must stop after the budget instead of attempting every job"
+        assert data["ok"] is False
+        assert "2" in data["output"] and "re-run" in data["output"].lower()
+
     def test_one_bad_job_does_not_block_the_others(self, client, disposable_project, tmp_path, monkeypatch):
         """A legacy stale entry that still fails to close on its own scoped
         call must not prevent other, unrelated jobs from being closed."""

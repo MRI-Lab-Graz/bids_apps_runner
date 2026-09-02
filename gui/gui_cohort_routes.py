@@ -550,9 +550,33 @@ def register_cohort_routes(
         if not closeable:
             return jsonify({"ok": True, "output": "No closeable (failed/cancelled) open jobs found."})
 
+        # Wall-clock budget for the whole loop, not just each subprocess call.
+        # --commit-failed-jobs (unlike the --close-failed-jobs this replaced)
+        # can now involve a real `datalad save` of a stale job's leftover
+        # output, so each of these calls is no longer a cheap metadata-only
+        # op -- with enough stale jobs, a naive "attempt every one" loop can
+        # tie up one of this GUI's few synchronous worker threads for
+        # minutes, and risks a browser/reverse-proxy timeout cutting the
+        # request off mid-slurm-finish -- the exact interrupted-mid-finish
+        # failure mode this whole fix exists to avoid, just reintroduced via
+        # the HTTP layer instead of SLURM wallclock. Stop and report what's
+        # left instead; re-POSTing the route picks up where this left off,
+        # since already-closed jobs won't be in --list-open-jobs anymore.
+        BUDGET_SECONDS = 240
+        start = time.monotonic()
+
         output_lines = []
         all_ok = True
-        for job in closeable:
+        for i, job in enumerate(closeable):
+            if time.monotonic() - start > BUDGET_SECONDS:
+                remaining = len(closeable) - i
+                output_lines.append(
+                    f"--- stopped after {BUDGET_SECONDS}s budget: {remaining} job(s) "
+                    "not attempted -- re-run to continue ---"
+                )
+                all_ok = False
+                break
+
             job_id = job["job_id"]
             try:
                 proc = subprocess.run(

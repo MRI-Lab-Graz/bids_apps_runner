@@ -81,6 +81,45 @@ class TestFinishJobsRunIncrementalSaveFirst:
         assert '-s "${subj_list}"' in match.group(0)
 
 
+class TestFinishJobsGuaranteeAProvenanceCommit:
+    """Verified against the installed datalad source (datalad/core/local/
+    save.py:619-633): once incremental_datalad_save.sh has committed
+    everything, the tree is fully clean, and slurm-finish's own
+    Save.__call__ on an empty `paths_by_ds` yields status='notneeded' and
+    creates ZERO commits -- the `[DATALAD SLURM RUN]` provenance record
+    this call exists to write would silently never be created. datalad_slurm's
+    remove_from_database() (finish.py:561-572) does a hard DELETE with no
+    archival, so that job's entire history would be lost from git, not
+    merely reduced -- contradicting this whole design's point of keeping
+    slurm-finish around for its provenance commit. A marker file written
+    just before slurm-finish (within the -o . output scope, after the
+    incremental save) guarantees Save always has a real, non-empty diff to
+    attach the provenance message to.
+    """
+
+    def test_array_finish_writes_a_marker_before_slurm_finish(self):
+        source = _source()
+        array_region = source[source.find("schedule_one_batch() {") :]
+        marker_pos = array_region.find("finish-marker-")
+        incr_pos = array_region.find("incremental_datalad_save.sh")
+        finish_pos = array_region.find('--slurm-job-id "${job_id}"')
+        assert marker_pos != -1, "array finish job template does not write a provenance marker"
+        assert incr_pos < marker_pos < finish_pos, (
+            "marker must be written after the incremental save and before slurm-finish"
+        )
+
+    def test_subregion_finish_writes_a_marker_before_slurm_finish(self):
+        source = _source()
+        region = source[source.find("schedule_one_subregion_batch() {") :]
+        marker_pos = region.find("finish-marker-")
+        incr_pos = region.find("incremental_datalad_save.sh")
+        finish_pos = region.find('--slurm-job-id "${subregion_job_id}"')
+        assert marker_pos != -1, "subregion finish job template does not write a provenance marker"
+        assert incr_pos < marker_pos < finish_pos, (
+            "marker must be written after the incremental save and before slurm-finish"
+        )
+
+
 class TestUncommittedCheckIsShared:
     """The post-finish 'uncommitted change(s) remain' check was hand-copied
     verbatim into both the array-finish and subregion-finish heredocs.

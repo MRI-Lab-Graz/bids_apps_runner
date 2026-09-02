@@ -658,11 +658,15 @@ cd "${output_clone}"
 # comment on the main finish job template in cmd_submit for why the
 # monolithic slurm-finish Save call is the failure mode this avoids.
 "${REPO_DIR}/scripts/incremental_datalad_save.sh" -d "${output_clone}" -s "${timepoint_list}" -J 4 --push-every 10
+# Guarantee slurm-finish's own Save call below always has something to
+# commit -- see the matching comment on the main finish job template in
+# cmd_submit for why an empty diff would otherwise silently lose this
+# job's entire provenance record, not just skip a redundant save.
+echo "${subregion_job_id} \$(date -Iseconds)" > ".slurm_logs/${ds}/finish-marker-${subregion_job_id}.txt"
 # --commit-failed-jobs (not --close-failed-jobs): see the matching comment
 # on the main finish job template in cmd_submit for why that distinction
 # is what actually keeps a TIMEOUT'd concat job's real output from being
-# silently abandoned as untracked. The incremental save above already
-# committed everything, so this is normally a no-op save + DB close.
+# silently abandoned as untracked.
 "\$DATALAD_BIN" slurm-finish --commit-failed-jobs --slurm-job-id "${subregion_job_id}" -m "${commit_prefix}Finish subregion segmentation job ${subregion_job_id} for ${ds}${batch_label}"
 # See the matching comment on the main finish job template in cmd_submit for
 # why this push forces DATALAD_SSH_MULTIPLEX__CONNECTIONS=false (stale
@@ -1189,10 +1193,24 @@ cd "${output_clone}"
 # weeks. incremental_datalad_save.sh commits per subject, checkpointed and
 # resumable, so an interruption here costs at most one subject, not the
 # cohort. By the time slurm-finish runs below, the tree is already clean,
-# so its own Save call is a fast no-op -- it only has to do what it's
-# actually good for: the provenance commit and closing the datalad-slurm
-# DB entry (keeping slurm-schedule's conflicting-outputs guard working).
+# so its own Save call only has to do what it's actually good for: closing
+# the datalad-slurm DB entry (keeping slurm-schedule's conflicting-outputs
+# guard working).
 "${REPO_DIR}/scripts/incremental_datalad_save.sh" -d "${output_clone}" -s "${subj_list}" -J 4 --push-every 10
+#
+# Guarantee slurm-finish's own Save call actually commits something.
+# Verified against the installed datalad source
+# (datalad/core/local/save.py:619-633): Save.__call__ on an already-clean
+# tree (empty paths_by_ds) yields status='notneeded' and creates ZERO
+# commits -- meaning the [DATALAD SLURM RUN] provenance record this whole
+# call exists to write would silently never be created once the
+# incremental save above has already cleaned the tree, which is now the
+# common case. datalad_slurm's remove_from_database() (finish.py:561-572)
+# does a hard DELETE with no archival, so that job's entire history would
+# be lost from git, not merely a redundant save skipped. This marker file
+# (inside the -o . output scope) guarantees a real, non-empty diff for
+# Save to attach the provenance message to.
+echo "${job_id} \$(date -Iseconds)" > ".slurm_logs/${ds}/finish-marker-${job_id}.txt"
 #
 # --commit-failed-jobs must be here too, not just on the GUI's manual
 # close_open_jobs route: this finish job is dependency-chained with
@@ -1203,8 +1221,10 @@ cd "${output_clone}"
 # silently abandoned as untracked. Confirmed real incident (2026-09-01,
 # megastudy_openneuro mriqc): see gui_cohort_routes.py's close_open_jobs
 # docstring for the incident this same flag fixes on the manual-close path.
-# The incremental save above already committed everything, so this is
-# normally a no-op save + DB close, not a repeat of the heavy lifting.
+# The incremental save above already committed the real output, and the
+# marker file above guarantees this call still has the provenance-record
+# commit to make -- so this is now a cheap, small commit, not a repeat of
+# the heavy lifting, but never a true no-op.
 "\$DATALAD_BIN" slurm-finish --commit-failed-jobs --slurm-job-id "${job_id}" -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${ds}${batch_label}"
 # Disable datalad's SSH connection multiplexing for this push. Finish jobs
 # land on whichever compute node the scheduler/pick_idle_node picks, but
