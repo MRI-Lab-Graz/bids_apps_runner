@@ -478,7 +478,40 @@ def register_cohort_routes(
     def cohort_close_open_jobs():
         """Close failed/cancelled datalad-slurm jobs so a new slurm-schedule
         stops being rejected for "conflicting outputs". Never touches
-        pending or running jobs (datalad-slurm itself refuses to)."""
+        pending or running jobs (datalad-slurm itself refuses to).
+
+        Scopes each close to its own --slurm-job-id rather than one bulk
+        `slurm-finish --commit-failed-jobs` call. Without --slurm-job-id,
+        slurm-finish processes EVERY still-open job in the dataset's
+        bookkeeping DB, not just the ones this dataset's operator actually
+        wants closed -- confirmed real incident (134_subregions, job
+        5611881/5612206): an unscoped call swept in an ancient unrelated
+        open-job entry, which failed to commit and took the entire call
+        down with it (241,531 "uncommitted" files), leaving even the
+        intended job un-closed. Same root cause as the main finish path's
+        --slurm-job-id fix; see that call site's comment. Closing one job
+        id at a time means a single bad legacy entry can only fail its own
+        close, not the whole batch.
+
+        Uses --commit-failed-jobs, NOT --close-failed-jobs. Read literally,
+        both flags sound like they'd do the same thing for a FAILED/CANCELLED
+        job, but datalad_slurm's finish_cmd() treats them very differently:
+        --close-failed-jobs alone removes the job's DB entry and returns
+        immediately, *never* calling Save on the job's declared outputs. For
+        a TIMEOUT'd array job where some elements genuinely completed and
+        wrote real output before timing out, that output is then silently
+        abandoned as untracked -- confirmed real incident (2026-09-01,
+        megastudy_openneuro mriqc): 5 datasets closed cleanly per this
+        route's own scoping fix, yet each left 2-11 untracked paths behind,
+        because --close-failed-jobs never attempted to save them.
+        --commit-failed-jobs instead falls through to the same Save.__call__
+        the normal (all-COMPLETED) finish path uses, committing whatever
+        output exists before removing the DB entry, and DB removal already
+        runs after that save (scripts/patches/
+        datalad_slurm_finish_db_removal_order.patch, applied to
+        .datalad-slurm-venv). It implies close_failed_jobs, so passing both
+        flags together is redundant.
+        """
         data = request.get_json(silent=True) or {}
         project_id = (data.get("project_id") or "").strip()
         pipeline_id = (data.get("pipeline_id") or "").strip()
@@ -498,23 +531,57 @@ def register_cohort_routes(
             )
 
         try:
-            proc = subprocess.run(
-                ["datalad", "slurm-finish", "--close-failed-jobs"],
+            list_proc = subprocess.run(
+                ["datalad", "slurm-finish", "--list-open-jobs"],
                 cwd=output_dir,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=20,
                 env=_datalad_subprocess_env(),
             )
         except subprocess.TimeoutExpired:
-            return jsonify({"ok": False, "error": "Timed out closing failed jobs."}), 504
+            return jsonify({"ok": False, "error": "Timed out listing open jobs."}), 504
 
-        return jsonify(
-            {
-                "ok": proc.returncode == 0,
-                "output": (proc.stdout or "") + (proc.stderr or ""),
-            }
-        )
+        closeable = [
+            j
+            for j in _parse_open_slurm_jobs(list_proc.stdout)
+            if j["status"] not in ("RUNNING", "PENDING")
+        ]
+        if not closeable:
+            return jsonify({"ok": True, "output": "No closeable (failed/cancelled) open jobs found."})
+
+        output_lines = []
+        all_ok = True
+        for job in closeable:
+            job_id = job["job_id"]
+            try:
+                proc = subprocess.run(
+                    [
+                        "datalad",
+                        "slurm-finish",
+                        "--commit-failed-jobs",
+                        "--slurm-job-id",
+                        job_id,
+                        "-m",
+                        f"Close stale failed/cancelled job {job_id}",
+                    ],
+                    cwd=output_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=_datalad_subprocess_env(),
+                )
+            except subprocess.TimeoutExpired:
+                all_ok = False
+                output_lines.append(f"--- job {job_id}: TIMED OUT ---")
+                continue
+            all_ok = all_ok and proc.returncode == 0
+            output_lines.append(
+                f"--- job {job_id} ({'ok' if proc.returncode == 0 else 'FAILED'}) ---\n"
+                + (proc.stdout or "") + (proc.stderr or "")
+            )
+
+        return jsonify({"ok": all_ok, "output": "\n".join(output_lines)})
 
     @app.route("/cohort/check_storage_sync", methods=["GET"])
     def cohort_check_storage_sync():

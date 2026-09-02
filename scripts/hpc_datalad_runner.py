@@ -1126,13 +1126,37 @@ def generate_subregion_script(
 
 
 def _apply_dataset_options_override(config: Dict, dataset_id: str) -> None:
-    """Merge a per-dataset ``options_extra`` override into ``bids_app.options``.
+    """Merge per-dataset ``options_extra``/``apptainer_args_extra``/
+    ``hpc_overrides`` overrides into ``bids_app.options``/
+    ``bids_app.apptainer_args``/``hpc``.
 
     ``config["datasets"]`` entries may be plain ID strings or objects
-    (``{"id": ..., "options_extra": [...]}``) so a mega-study cohort config
-    can share one container/app across datasets with differing needs (e.g.
-    fmriprep flags for datasets lacking fieldmaps) while still using the same
-    ``bids_app`` block for everything else. Mutates ``config`` in place.
+    (``{"id": ..., "options_extra": [...], "apptainer_args_extra": [...],
+    "hpc_overrides": {...}}``) so a mega-study cohort config can share one
+    container/app/walltime across datasets with differing needs (e.g.
+    fmriprep flags for datasets lacking fieldmaps, an extra bind mount for a
+    dataset-specific input file, or a longer --time for datasets with an
+    unusually dense per-subject protocol) while still using the same
+    ``bids_app``/``hpc`` block for everything else. ``options_extra`` and
+    ``apptainer_args_extra`` each extend their target list; ``hpc_overrides``
+    keys (e.g. "time", "mem") replace the corresponding ``hpc`` key outright.
+    Confirmed real incidents this covers:
+    - megastudy_openneuro_mriqc.json's flat 8h `time` (sized for a typical
+      1-2 session OpenNeuro dataset) was too short for
+      ds006072/ds006373/ds006707/ds007328, whose subjects have 12-19
+      sessions and, for ds006072/ds007328, dozens of DWI runs each -- every
+      subject in those 4 datasets hit the wall-clock limit on 2026-08-15
+      mid-workflow, not from any error.
+    - ds003823 ships two T1w acquisitions per session (acq-wholebrain and a
+      small-FOV acq-lc locus-coeruleus scan MRIQC's structural workflow
+      can't assess); excluding acq-lc needs a --bids-filter-file, which in
+      turn needs its own bind mount since -B "${BIDS_DIR}":/bids:ro and the
+      other binds this class's _run_participant() already sets up don't
+      cover an arbitrary repo-config-directory path (deliberately no
+      reliance on apptainer's default home-dir auto-bind, matching how
+      fs_license is always bind-mounted explicitly rather than assumed
+      visible -- see _run_participant()'s extra_binds).
+    Mutates ``config`` in place.
     """
     for entry in config.get("datasets", []):
         if isinstance(entry, dict) and entry.get("id") == dataset_id:
@@ -1142,6 +1166,16 @@ def _apply_dataset_options_override(config: Dict, dataset_id: str) -> None:
                 options = list(config["bids_app"].get("options", []))
                 options.extend(extra)
                 config["bids_app"]["options"] = options
+            apptainer_args_extra = entry.get("apptainer_args_extra") or []
+            if apptainer_args_extra:
+                config.setdefault("bids_app", {})
+                apptainer_args = list(config["bids_app"].get("apptainer_args", []))
+                apptainer_args.extend(apptainer_args_extra)
+                config["bids_app"]["apptainer_args"] = apptainer_args
+            hpc_overrides = entry.get("hpc_overrides") or {}
+            if hpc_overrides:
+                config.setdefault("hpc", {})
+                config["hpc"].update(hpc_overrides)
             return
 
 

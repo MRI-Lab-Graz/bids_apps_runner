@@ -165,6 +165,36 @@ fi
 BLOCK
 }
 
+# Verify a real commit actually happened after `slurm-finish
+# --commit-failed-jobs`. Shared between the array-finish and
+# subregion-finish templates the same way push_verification_block() is,
+# instead of being hand-copied into both.
+#
+# --commit-failed-jobs (not --close-failed-jobs -- see the call site's own
+# comment for why that distinction matters) already makes datalad_slurm
+# commit whatever output a TIMEOUT'd/CANCELLED array element produced
+# before removing its DB entry, and that removal already runs after the
+# save (scripts/patches/datalad_slurm_finish_db_removal_order.patch,
+# applied to .datalad-slurm-venv). So this check is now a safety net for
+# genuine anomalies (disk full, a git-annex hash failure) rather than the
+# routine occurrence it used to be when only --close-failed-jobs was used.
+# Confirmed real incident this originally guarded against: two separate
+# "COMPLETED" finish jobs for a 150-subject FreeSurfer cohort never
+# committed anything at all. Reported upstream:
+# https://github.com/knuedd/datalad-slurm/issues/97. Fail loudly here
+# instead of reporting false success, so normal job-failure monitoring
+# (email, cmd_status) catches it rather than it going unnoticed.
+uncommitted_check_block() {
+    cat <<'BLOCK'
+uncommitted=$(git status --porcelain | wc -l)
+if [[ "$uncommitted" -gt 0 ]]; then
+    echo "ERROR: ${uncommitted} uncommitted change(s) remain after slurm-finish -- the real commit likely never happened (see datalad-slurm's known premature-DB-removal issue). Uncommitted paths:" >&2
+    git status --short | head -30 >&2
+    exit 1
+fi
+BLOCK
+}
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 COMMAND="${1:-help}"
 shift || true
@@ -215,10 +245,11 @@ resolve_config() {
     INPUT_URL_TPL="$(cfg '.datalad.input_url_template // .datalad.openneuro_url_template // ""')"
 
     # Build dataset list (filtered if -d was given). Each entry may be a
-    # plain ID string or an object ({"id": ..., "options_extra": [...]})
-    # carrying per-dataset bids_app.options overrides consumed by
-    # hpc_datalad_runner.py --array-mode; only the id is needed here since
-    # every path/URL below is keyed off the plain ID string.
+    # plain ID string or an object ({"id": ..., "options_extra": [...],
+    # "apptainer_args_extra": [...], "hpc_overrides": {...}}) carrying
+    # per-dataset bids_app.options/bids_app.apptainer_args/hpc overrides
+    # consumed by hpc_datalad_runner.py --array-mode; only the id is needed
+    # here since every path/URL below is keyed off the plain ID string.
     mapfile -t ALL_DATASETS < <(jq -r '.datasets[] | if type=="object" then .id else . end' "$CONFIG")
     if [[ ${#FILTER_DATASETS[@]} -gt 0 ]]; then
         DATASETS=("${FILTER_DATASETS[@]}")
@@ -360,7 +391,6 @@ submit_subregion_segmentation() {
 
     [[ ${#SUBREGION_STRUCTURES[@]} -gt 0 ]] || { warn "[$ds] Subregion segmentation enabled but no structures selected -- skipping"; return 0; }
 
-    local scripts_dir="$(dirname "$(realpath "$CONFIG")")/generated"
     local timepoint_list="${SUBJ_LISTS_DIR}/${ds}_subregion_timepoints_${SUBREGION_MODE}.txt"
 
     log "[$ds] Building subregion segmentation timepoint list (${SUBREGION_MODE})..."
@@ -398,19 +428,83 @@ submit_subregion_segmentation() {
         warn "[$ds] No ${SUBREGION_MODE} timepoints found for subregion segmentation -- skipping"
         return 0
     fi
-    log "[$ds] ${n_timepoints} ${SUBREGION_MODE} timepoint(s) for subregion segmentation: ${SUBREGION_STRUCTURES[*]}"
 
-    local subregion_array_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}.sh"
+    # Split into batches of BATCH_SIZE, same knob/behavior as the main
+    # recon-all array (see resolve_config) -- a large subregion run hits the
+    # exact same slow-NFS-touch-file problem as the main array (confirmed
+    # real incident: dataset 134's single unbatched 117-timepoint schedule
+    # took hours just unlocking touch files before it could even sbatch),
+    # and datalad-slurm's `-o .` conflict rule means later batches can't be
+    # pre-declared up front either -- see schedule_one_batch's header comment
+    # for why chaining from each batch's own finish job is required instead.
+    if [[ "$BATCH_SIZE" -gt 0 && "$BATCH_SIZE" -lt "$n_timepoints" ]]; then
+        local batch01_file
+        batch01_file=$(_subregion_batch_timepoint_list "$ds" 1)
+        if [[ -f "$batch01_file" ]] && $RESUME; then
+            log "[$ds] Subregion batch timepoint lists exist, skipping re-split (--resume)"
+        else
+            log "[$ds] Splitting ${n_timepoints} subregion timepoints into batches of ${BATCH_SIZE}..."
+            local batch_prefix="${SUBJ_LISTS_DIR}/${ds}_subregion_timepoints_${SUBREGION_MODE}_batch"
+            bash -c "awk -v n='${BATCH_SIZE}' -v pre='${batch_prefix}' '{b=int((NR-1)/n)+1; fn=sprintf(\"%s%02d.txt\", pre, b); print > fn}' '${timepoint_list}'" \
+                || { warn "[$ds] Failed to split subregion timepoint list into batches"; return 1; }
+        fi
 
-    # main_finish_job_id is empty when called from cmd_submit_subregions
+        local next_timepoint_list
+        next_timepoint_list=$(_subregion_batch_timepoint_list "$ds" 2)
+        [[ -f "$next_timepoint_list" ]] || next_timepoint_list=""
+
+        schedule_one_subregion_batch "$ds" "$output_clone" "$batch01_file" "$main_finish_job_id" \
+            "$commit_prefix" 1 "$next_timepoint_list" "$SUBREGION_SUBMISSION_LOG"
+    else
+        schedule_one_subregion_batch "$ds" "$output_clone" "$timepoint_list" "$main_finish_job_id" \
+            "$commit_prefix" "" "" "$SUBREGION_SUBMISSION_LOG"
+    fi
+}
+
+# Schedule one subregion segmentation array+concat+finish job trio for a
+# batch of timepoints (or, when batch_idx is empty, every timepoint in one
+# shot -- the pre-batching behavior). Mirrors schedule_one_batch's chaining
+# pattern: once THIS batch's finish job actually commits+pushes (closing its
+# DB entry), it invokes `submit_bids_cohort.sh _continue-subregion-batch` for
+# the next batch, if any -- see schedule_one_batch's own header comment for
+# why this can't just be pre-scheduled up front with SBATCH --dependency
+# (the same datalad-slurm `-o .` open-job conflict applies here).
+schedule_one_subregion_batch() {
+    local ds="$1" output_clone="$2" timepoint_list="$3" main_finish_job_id="$4" \
+          commit_prefix="$5" batch_idx="$6" next_timepoint_list="$7" submission_log="$8"
+
+    local n_timepoints
+    n_timepoints=$(wc -l < "$timepoint_list" | tr -d ' ')
+    if [[ "$n_timepoints" -eq 0 ]]; then
+        warn "[$ds] Subregion batch timepoint list is empty: ${timepoint_list}"
+        return 1
+    fi
+
+    local batch_label="" job_name_suffix=""
+    if [[ -n "$batch_idx" ]]; then
+        batch_label=" (batch ${batch_idx})"
+        job_name_suffix="_batch$(printf '%02d' "$batch_idx")"
+    fi
+    local has_next=false
+    [[ -n "$next_timepoint_list" ]] && has_next=true
+
+    log "[$ds] ${n_timepoints} ${SUBREGION_MODE} timepoint(s)${batch_label} for subregion segmentation: ${SUBREGION_STRUCTURES[*]}"
+
+    local scripts_dir="$(dirname "$(realpath "$CONFIG")")/generated"
+    local subregion_array_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}${job_name_suffix}.sh"
+
+    # main_finish_job_id is empty both when called from cmd_submit_subregions
     # (running against an already-finished cohort, no fresh main array to
-    # wait on) -- in that case the subregion array can start right away.
+    # wait on) and for every batch after the first (chained from the
+    # previous batch's own finish job instead) -- in either case the array
+    # can start right away.
     local dependency_desc="no dependency (runs immediately)"
     [[ -n "$main_finish_job_id" ]] && dependency_desc="depending on finish job ${main_finish_job_id}"
 
     if $DRY_RUN; then
-        echo "[DRY-RUN] Generate+schedule subregion array (${SUBREGION_STRUCTURES[*]}, ${SUBREGION_MODE}) for ${n_timepoints} timepoint(s), ${dependency_desc}"
+        echo "[DRY-RUN] Generate+schedule subregion array${batch_label} (${SUBREGION_STRUCTURES[*]}, ${SUBREGION_MODE}) for ${n_timepoints} timepoint(s), ${dependency_desc}"
         echo "[DRY-RUN]   then sbatch a dependent finish job: datalad slurm-finish && datalad push --to origin"
+        $has_next && echo "[DRY-RUN]   finish job would then chain subregion batch $((batch_idx + 1)) from ${next_timepoint_list}"
         return 0
     fi
 
@@ -426,7 +520,7 @@ submit_subregion_segmentation() {
         --seg-mode "$SUBREGION_MODE" \
         "${dependency_args[@]}" \
         --output "$subregion_array_script" \
-        || { warn "[$ds] Subregion segmentation script generation failed"; return 1; }
+        || { warn "[$ds] Subregion segmentation script generation failed${batch_label}"; return 1; }
 
     mkdir -p "${LOG_DIR_BASE}/${ds}" "${output_clone}/.slurm_logs/${ds}"
 
@@ -435,7 +529,7 @@ submit_subregion_segmentation() {
     subregion_exit=0
     subregion_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
         -o . \
-        -m "${commit_prefix}Subregion segmentation (${SUBREGION_STRUCTURES[*]}, ${SUBREGION_MODE}) for ${ds}" \
+        -m "${commit_prefix}Subregion segmentation (${SUBREGION_STRUCTURES[*]}, ${SUBREGION_MODE}) for ${ds}${batch_label}" \
         sbatch "$subregion_array_script" 2>"$subregion_stderr_file") || subregion_exit=$?
     local subregion_stderr
     subregion_stderr=$(cat "$subregion_stderr_file"); rm -f "$subregion_stderr_file"
@@ -443,7 +537,7 @@ submit_subregion_segmentation() {
         local subregion_reason
         subregion_reason=$(printf '%s\n%s\n' "$subregion_stdout" "$subregion_stderr" \
             | jq -r 'select(.message) | .message' 2>/dev/null | tail -1)
-        warn "[$ds] datalad slurm-schedule (subregions) failed${subregion_reason:+: $subregion_reason}"
+        warn "[$ds] datalad slurm-schedule (subregions) failed${batch_label}${subregion_reason:+: $subregion_reason}"
         return 1
     fi
 
@@ -451,10 +545,10 @@ submit_subregion_segmentation() {
         | jq -r 'select(.action=="slurm-schedule") | .slurm_run_info.slurm_job_id // empty' \
         | tail -1)
     if [[ -z "$subregion_job_id" ]]; then
-        warn "[$ds] Could not determine SLURM job id from subregion slurm-schedule output"
+        warn "[$ds] Could not determine SLURM job id from subregion slurm-schedule output${batch_label}"
         return 1
     fi
-    log "[$ds] Scheduled subregion segmentation array job ${subregion_job_id} (${n_timepoints} timepoints, ${dependency_desc})"
+    log "[$ds] Scheduled subregion segmentation array job ${subregion_job_id}${batch_label} (${n_timepoints} timepoints, ${dependency_desc})"
 
     # Concatenate per-timepoint volume outputs into cohort-wide CSVs
     # (https://surfer.nmr.mgh.harvard.edu/fswiki/ConcatenateSubregionsResults)
@@ -472,10 +566,10 @@ submit_subregion_segmentation() {
     # writes within it). Writes into output_clone/subregion_results/, kept
     # in the dataset next to the raw per-subject output.
     local results_dir="${output_clone}/subregion_results"
-    local concat_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}_concat.sh"
+    local concat_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}${job_name_suffix}_concat.sh"
     cat > "$concat_script" <<EOF
 #!/bin/bash
-#SBATCH --job-name=concat_${ds}_subregions
+#SBATCH --job-name=concat_${ds}_subregions${job_name_suffix}
 #SBATCH --dependency=afterany:${subregion_job_id}
 #SBATCH --partition=$(cfg '.hpc.partition')
 #SBATCH --time=00:30:00
@@ -495,8 +589,8 @@ EOF
 
     local concat_job_id
     concat_job_id=$(sbatch "$concat_script" 2>&1 | grep -oP '\d+$') \
-        || { warn "[$ds] Failed to submit dependent concat job"; return 1; }
-    log "[$ds] Submitted subregion concat job ${concat_job_id} (runs after ${subregion_job_id} completes, writes to ${results_dir})"
+        || { warn "[$ds] Failed to submit dependent concat job${batch_label}"; return 1; }
+    log "[$ds] Submitted subregion concat job ${concat_job_id}${batch_label} (runs after ${subregion_job_id} completes, writes to ${results_dir})"
 
     # Chain a finish job for the subregion output -- same pattern as the
     # main finish job in cmd_submit (one commit + push covering the whole
@@ -516,10 +610,22 @@ EOF
     finish_node="$(pick_idle_node "$(cfg '.hpc.partition')")"
     [[ -n "$finish_node" ]] && finish_node_line="#SBATCH --nodelist=${finish_node}"
 
-    local subregion_finish_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}_finish.sh"
+    local continue_block=""
+    if $has_next; then
+        continue_block="
+# This subregion batch's outputs are committed and pushed above -- its DB
+# entry is now closed, so the next subregion batch's slurm-schedule can go
+# ahead. Chained from here rather than pre-scheduled up front; see
+# schedule_one_batch()'s header comment in submit_bids_cohort.sh for why.
+bash \"${REPO_DIR}/scripts/submit_bids_cohort.sh\" _continue-subregion-batch \\
+    --config \"${CONFIG}\" -d \"${ds}\" --batch-idx $((batch_idx + 1)) \\
+    --submission-log \"${submission_log}\" --commit-prefix \"${commit_prefix}\""
+    fi
+
+    local subregion_finish_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}${job_name_suffix}_finish.sh"
     cat > "$subregion_finish_script" <<EOF
 #!/bin/bash
-#SBATCH --job-name=finish_${ds}_subregions
+#SBATCH --job-name=finish_${ds}_subregions${job_name_suffix}
 #SBATCH --dependency=afterany:${concat_job_id}
 #SBATCH --partition=$(cfg '.hpc.partition')
 ${finish_node_line}
@@ -528,7 +634,9 @@ ${finish_node_line}
 # staged but uncommitted (see the datalad-slurm known-bug comment below).
 #SBATCH --time=12:00:00
 #SBATCH --mem=2G
-#SBATCH --cpus-per-task=1
+# 4, not 1: incremental_datalad_save.sh below runs annex hashing with -J 4
+# parallel jobs, so the finish job needs the cpus for that to actually help.
+#SBATCH --cpus-per-task=4
 #SBATCH --output=${LOG_DIR_BASE}/${ds}/finish-subregions-%j.out
 #SBATCH --error=${LOG_DIR_BASE}/${ds}/finish-subregions-%j.err
 ${mail_lines}
@@ -537,42 +645,44 @@ ${module_load_line}
 # See the matching comment on the main finish job template in cmd_submit
 # for what this best-effort ntfy push covers and why it's non-fatal.
 _notify_failure() {
-    echo "subregion finish job for ${ds} failed at line \$LINENO" >&2
+    echo "subregion finish job for ${ds}${batch_label} failed at line \$LINENO" >&2
     "${REPO_DIR}/scripts/notify_ntfy.sh" "Cohort finish FAILED: ${ds} (subregions)" \
-        "subregion finish job \$SLURM_JOB_ID for ${ds} (concat job ${concat_job_id}) failed at line \$LINENO on \$(hostname) -- see ${LOG_DIR_BASE}/${ds}/finish-subregions-\$SLURM_JOB_ID.err" \
+        "subregion finish job \$SLURM_JOB_ID for ${ds}${batch_label} (concat job ${concat_job_id}) failed at line \$LINENO on \$(hostname) -- see ${LOG_DIR_BASE}/${ds}/finish-subregions-\$SLURM_JOB_ID.err" \
         high x >/dev/null 2>&1 || true
 }
 trap _notify_failure ERR
 export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
 DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
-"\$DATALAD_BIN" slurm-finish --slurm-job-id "${subregion_job_id}" -m "${commit_prefix}Finish subregion segmentation job ${subregion_job_id} for ${ds}"
+# Commit + push per timepoint BEFORE slurm-finish -- see the matching
+# comment on the main finish job template in cmd_submit for why the
+# monolithic slurm-finish Save call is the failure mode this avoids.
+"${REPO_DIR}/scripts/incremental_datalad_save.sh" -d "${output_clone}" -s "${timepoint_list}" -J 4 --push-every 10
+# --commit-failed-jobs (not --close-failed-jobs): see the matching comment
+# on the main finish job template in cmd_submit for why that distinction
+# is what actually keeps a TIMEOUT'd concat job's real output from being
+# silently abandoned as untracked. The incremental save above already
+# committed everything, so this is normally a no-op save + DB close.
+"\$DATALAD_BIN" slurm-finish --commit-failed-jobs --slurm-job-id "${subregion_job_id}" -m "${commit_prefix}Finish subregion segmentation job ${subregion_job_id} for ${ds}${batch_label}"
 # See the matching comment on the main finish job template in cmd_submit for
 # why this push forces DATALAD_SSH_MULTIPLEX__CONNECTIONS=false (stale
 # cross-node SSH control socket under the NFS-shared ~/.cache/datalad/sockets/).
 DATALAD_SSH_MULTIPLEX__CONNECTIONS=false "\$DATALAD_BIN" push --to origin
 
-# Verify a real commit actually happened -- see the matching comment on the
-# main finish job template in cmd_submit for the datalad-slurm bug this
-# guards against (premature open-job DB removal on an interrupted finish).
-uncommitted=\$(git status --porcelain | wc -l)
-if [[ "\$uncommitted" -gt 0 ]]; then
-    echo "ERROR: \${uncommitted} uncommitted change(s) remain after slurm-finish -- the real commit likely never happened (see datalad-slurm's known premature-DB-removal issue). Uncommitted paths:" >&2
-    git status --short | head -30 >&2
-    exit 1
-fi
+$(uncommitted_check_block)
 
 $(push_verification_block)
+${continue_block}
 EOF
     chmod +x "$subregion_finish_script"
 
     local subregion_finish_job_id
     subregion_finish_job_id=$(sbatch "$subregion_finish_script" 2>&1 | grep -oP '\d+$') \
-        || { warn "[$ds] Failed to submit dependent subregion finish job"; return 1; }
+        || { warn "[$ds] Failed to submit dependent subregion finish job${batch_label}"; return 1; }
 
-    mkdir -p "$(dirname "$SUBREGION_SUBMISSION_LOG")"
-    echo "${ds} ${subregion_job_id} ${n_timepoints} ${subregion_finish_job_id}" >> "$SUBREGION_SUBMISSION_LOG"
-    log "[$ds] Submitted subregion finish job ${subregion_finish_job_id} (runs after ${concat_job_id} completes)"
+    mkdir -p "$(dirname "$submission_log")"
+    echo "${ds} ${subregion_job_id} ${n_timepoints} ${subregion_finish_job_id} ${batch_idx:--}" >> "$submission_log"
+    log "[$ds] Submitted subregion finish job ${subregion_finish_job_id}${batch_label} (runs after ${concat_job_id} completes)"
 }
 
 # ── Phase 1: setup ────────────────────────────────────────────────────────────
@@ -860,6 +970,13 @@ _batch_subj_list() {
     echo "${SUBJ_LISTS_DIR}/${ds}_subjects${subj_list_suffix}_batch$(printf '%02d' "$batch_idx").txt"
 }
 
+# Same idea as _batch_subj_list, for subregion segmentation timepoint lists
+# (see schedule_one_subregion_batch below).
+_subregion_batch_timepoint_list() {
+    local ds="$1" batch_idx="$2"
+    echo "${SUBJ_LISTS_DIR}/${ds}_subregion_timepoints_${SUBREGION_MODE}_batch$(printf '%02d' "$batch_idx").txt"
+}
+
 # Schedule one array+finish job pair for a batch of subjects (or, when
 # batch_idx is empty, today's single whole-cohort array -- everything below
 # reduces to the pre-batching behavior byte-for-byte in that case, same
@@ -1021,7 +1138,9 @@ ${finish_node_line}
 # staged but uncommitted (see the datalad-slurm known-bug comment below).
 #SBATCH --time=12:00:00
 #SBATCH --mem=2G
-#SBATCH --cpus-per-task=1
+# 4, not 1: incremental_datalad_save.sh below runs annex hashing with -J 4
+# parallel jobs, so the finish job needs the cpus for that to actually help.
+#SBATCH --cpus-per-task=4
 #SBATCH --output=${LOG_DIR_BASE}/${ds}/finish-%j.out
 #SBATCH --error=${LOG_DIR_BASE}/${ds}/finish-%j.err
 ${mail_lines}
@@ -1058,7 +1177,35 @@ cd "${output_clone}"
 # jobs it then tried to finish -- including this one -- ended up committed,
 # tripping the uncommitted-check below. Scoping to this array's own job_id
 # keeps a finish job's blast radius limited to the array it was dispatched for.
-"\$DATALAD_BIN" slurm-finish --slurm-job-id "${job_id}" -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${ds}${batch_label}"
+#
+# Commit + push the array's real output per-subject BEFORE slurm-finish ever
+# touches it. Every incident this codebase's comments document traces back
+# to the same thing: slurm-finish's own Save call trying to commit the
+# WHOLE dataset in one atomic step. That step is the single point of
+# failure -- interrupted mid-save (job 5505212), tripped by
+# --close-failed-jobs's early return, or (project 134, 2026-08-13) simply
+# never running after a downstream step failed, leaving slurm-schedule's
+# `-o .` unlock of the entire dataset with no matching re-lock for three
+# weeks. incremental_datalad_save.sh commits per subject, checkpointed and
+# resumable, so an interruption here costs at most one subject, not the
+# cohort. By the time slurm-finish runs below, the tree is already clean,
+# so its own Save call is a fast no-op -- it only has to do what it's
+# actually good for: the provenance commit and closing the datalad-slurm
+# DB entry (keeping slurm-schedule's conflicting-outputs guard working).
+"${REPO_DIR}/scripts/incremental_datalad_save.sh" -d "${output_clone}" -s "${subj_list}" -J 4 --push-every 10
+#
+# --commit-failed-jobs must be here too, not just on the GUI's manual
+# close_open_jobs route: this finish job is dependency-chained with
+# `afterany` (not `afterok`), so it runs even when some array elements
+# TIMEOUT'd rather than COMPLETED. Without it, datalad_slurm's finish_cmd()
+# removes the job's DB entry and returns without ever calling Save on the
+# declared outputs -- any real output a timed-out element produced is then
+# silently abandoned as untracked. Confirmed real incident (2026-09-01,
+# megastudy_openneuro mriqc): see gui_cohort_routes.py's close_open_jobs
+# docstring for the incident this same flag fixes on the manual-close path.
+# The incremental save above already committed everything, so this is
+# normally a no-op save + DB close, not a repeat of the heavy lifting.
+"\$DATALAD_BIN" slurm-finish --commit-failed-jobs --slurm-job-id "${job_id}" -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${ds}${batch_label}"
 # Disable datalad's SSH connection multiplexing for this push. Finish jobs
 # land on whichever compute node the scheduler/pick_idle_node picks, but
 # \$HOME (and its datalad control-socket cache under ~/.cache/datalad/sockets/)
@@ -1071,24 +1218,7 @@ cd "${output_clone}"
 # SSH connection instead, sidestepping the shared/stale-socket risk entirely.
 DATALAD_SSH_MULTIPLEX__CONNECTIONS=false "\$DATALAD_BIN" push --to origin
 
-# Verify a real commit actually happened. datalad-slurm's finish_cmd()
-# removes the open-job bookkeeping entry BEFORE performing the actual
-# save/commit (see .datalad-slurm-venv's datalad_slurm/finish.py) -- if
-# THIS finish job gets interrupted (wallclock timeout, manual scancel)
-# between those two steps, a later resubmit finds nothing left in its job
-# database and silently no-ops straight to an empty-looking "successful"
-# push, having never actually committed the array's output. Confirmed real
-# incident: two separate "COMPLETED" finish jobs for a 150-subject
-# FreeSurfer cohort never committed anything at all. Reported upstream:
-# https://github.com/knuedd/datalad-slurm/issues/97. Fail loudly here
-# instead of reporting false success, so normal job-failure monitoring
-# (email, cmd_status) catches it rather than it going unnoticed.
-uncommitted=\$(git status --porcelain | wc -l)
-if [[ "\$uncommitted" -gt 0 ]]; then
-    echo "ERROR: \${uncommitted} uncommitted change(s) remain after slurm-finish -- the real commit likely never happened (see datalad-slurm's known premature-DB-removal issue). Uncommitted paths:" >&2
-    git status --short | head -30 >&2
-    exit 1
-fi
+$(uncommitted_check_block)
 
 $(push_verification_block)
 
@@ -1269,7 +1399,7 @@ cmd_submit_subregions() {
         || die "Config .subregion_segmentation.structures is empty in ${CONFIG} -- nothing to submit."
 
     local scripts_dir="$(dirname "$(realpath "$CONFIG")")/generated"
-    mkdir -p "$scripts_dir"
+    mkdir -p "$scripts_dir" "$SUBJ_LISTS_DIR"
     local submission_log_prefix="submission"
     $PILOT && submission_log_prefix="pilot_submission"
     SUBREGION_SUBMISSION_LOG="${REPO_DIR}/logs/subregions_${submission_log_prefix}_$(date '+%Y%m%d_%H%M%S').log"
@@ -1378,10 +1508,11 @@ cmd_status() {
         echo ""
         log "Reading: ${subregion_log_file}"
         echo ""
-        printf "%-20s %-12s %-10s %-10s %-40s %s\n" "DATASET" "SUBREGION_JOB" "TIMEPTS" "PROGRESS" "ARRAY_STATUS" "FINISH_STATUS"
-        printf "%-20s %-12s %-10s %-10s %-40s %s\n" "-------" "-------------" "-------" "--------" "------------" "-------------"
-        while read -r ds job_id n_timepoints finish_job_id; do
+        printf "%-20s %-6s %-14s %-10s %-10s %-40s %s\n" "DATASET" "BATCH" "SUBREGION_JOB" "TIMEPTS" "PROGRESS" "ARRAY_STATUS" "FINISH_STATUS"
+        printf "%-20s %-6s %-14s %-10s %-10s %-40s %s\n" "-------" "-----" "-------------" "-------" "--------" "------------" "-------------"
+        while read -r ds job_id n_timepoints finish_job_id batch_info; do
             local status progress finish_status terminal_count
+            [[ -z "$batch_info" ]] && batch_info="-"
             status=$(sacct -j "$job_id" --noheader --format=JobID,State --parsable2 2>/dev/null \
                 | awk -F'|' -v jid="$job_id" '$1 ~ ("^" jid "_[0-9]+$") {print $2}' \
                 | sort | uniq -c | awk '{printf "%s:%s ", $2, $1}' | sed 's/ $//')
@@ -1399,7 +1530,7 @@ cmd_status() {
                 [[ -z "$finish_status" ]] && finish_status="UNKNOWN"
             fi
 
-            printf "%-20s %-12s %-10s %-10s %-40s %s\n" "$ds" "$job_id" "$n_timepoints" "$progress" "$status" "$finish_status"
+            printf "%-20s %-6s %-14s %-10s %-10s %-40s %s\n" "$ds" "$batch_info" "$job_id" "$n_timepoints" "$progress" "$status" "$finish_status"
         done < "$subregion_log_file"
     fi
 }
@@ -1439,6 +1570,33 @@ cmd_continue_batch() {
         "$CONTINUE_COMMIT_PREFIX" "$CONTINUE_BATCH_IDX" "$next_subj_list" "$CONTINUE_SUBMISSION_LOG"
 }
 
+# ── Internal: continue a batched subregion segmentation chain ─────────────────
+# Not a user-facing command (undocumented in cmd_help) -- invoked only by a
+# subregion batch's own finish job once it has committed+pushed, to schedule
+# the next subregion batch. See schedule_one_batch's header comment for why
+# this can't just be pre-scheduled up front with SBATCH --dependency.
+cmd_continue_subregion_batch() {
+    [[ -n "$CONTINUE_BATCH_IDX" ]] || die "_continue-subregion-batch requires --batch-idx"
+    [[ -n "$CONTINUE_SUBMISSION_LOG" ]] || die "_continue-subregion-batch requires --submission-log"
+    [[ ${#FILTER_DATASETS[@]} -eq 1 ]] || die "_continue-subregion-batch requires exactly one -d DATASET_ID"
+
+    resolve_config
+    local ds="${DATASETS[0]}"
+    resolve_output_clone "$ds"
+    local output_clone="$OUTPUT_CLONE"
+
+    local timepoint_list
+    timepoint_list=$(_subregion_batch_timepoint_list "$ds" "$CONTINUE_BATCH_IDX")
+    [[ -f "$timepoint_list" ]] || die "[$ds] Subregion batch ${CONTINUE_BATCH_IDX} timepoint list not found: ${timepoint_list}"
+
+    local next_timepoint_list
+    next_timepoint_list=$(_subregion_batch_timepoint_list "$ds" $((CONTINUE_BATCH_IDX + 1)))
+    [[ -f "$next_timepoint_list" ]] || next_timepoint_list=""
+
+    schedule_one_subregion_batch "$ds" "$output_clone" "$timepoint_list" "" \
+        "$CONTINUE_COMMIT_PREFIX" "$CONTINUE_BATCH_IDX" "$next_timepoint_list" "$CONTINUE_SUBMISSION_LOG"
+}
+
 cmd_help() {
     sed -n '2,/^# Edit/p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
 }
@@ -1450,6 +1608,7 @@ case "$COMMAND" in
     submit-subregions) cmd_submit_subregions ;;
     status)            cmd_status            ;;
     _continue-batch)   cmd_continue_batch    ;;
+    _continue-subregion-batch) cmd_continue_subregion_batch ;;
     help|-h|--help)    cmd_help              ;;
     *) die "Unknown command: $COMMAND  (use setup | submit | submit-subregions | status)" ;;
 esac

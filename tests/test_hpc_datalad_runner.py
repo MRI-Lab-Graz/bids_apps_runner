@@ -413,6 +413,12 @@ def _mega_study_config():
     config["datasets"] = [
         "ds001",
         {"id": "ds002", "options_extra": ["--use-syn-sdc"]},
+        {"id": "ds003", "hpc_overrides": {"time": "48:00:00"}},
+        {
+            "id": "ds004",
+            "options_extra": ["--bids-filter-file", "/opt/bids_filter.json"],
+            "apptainer_args_extra": ["-B /host/filter.json:/opt/bids_filter.json:ro"],
+        },
     ]
     return config
 
@@ -428,6 +434,47 @@ def test_apply_dataset_options_override_leaves_other_datasets_untouched():
     original_options = list(config["bids_app"]["options"])
     hpc_datalad_runner._apply_dataset_options_override(config, "ds001")
     assert config["bids_app"]["options"] == original_options
+
+
+def test_apply_dataset_hpc_override_replaces_matching_key():
+    """Regression test: megastudy_openneuro_mriqc.json's flat 8h walltime
+    was too short for datasets with an unusually dense per-subject protocol
+    (12-19 sessions, dozens of DWI runs) -- every subject in 4 such datasets
+    hit the wall-clock limit mid-workflow. hpc_overrides lets one dataset in
+    a shared mega-study config get a longer --time without bumping it for
+    every other (fast) dataset sharing the same config."""
+    config = _mega_study_config()
+    original_time = config["hpc"]["time"]
+    hpc_datalad_runner._apply_dataset_options_override(config, "ds003")
+    assert config["hpc"]["time"] == "48:00:00"
+    assert original_time != "48:00:00"
+
+
+def test_apply_dataset_hpc_override_leaves_other_datasets_untouched():
+    config = _mega_study_config()
+    original_time = config["hpc"]["time"]
+    hpc_datalad_runner._apply_dataset_options_override(config, "ds001")
+    assert config["hpc"]["time"] == original_time
+
+
+def test_apply_dataset_apptainer_args_override_merges_matching_dataset():
+    """Regression test: a --bids-filter-file flag is useless unless the file
+    it points to is actually bind-mounted into the container -- confirmed
+    real need: ds003823's acq-lc T1w scans (a small-FOV locus-coeruleus
+    sequence MRIQC's structural workflow can't assess) had to be filtered
+    out via --bids-filter-file, which needed its own explicit bind since
+    none of _run_participant()'s existing binds (BIDS_DIR/OUT_DIR/TMP_DIR)
+    cover an arbitrary repo-config path."""
+    config = _mega_study_config()
+    hpc_datalad_runner._apply_dataset_options_override(config, "ds004")
+    assert config["bids_app"]["apptainer_args"][-1] == "-B /host/filter.json:/opt/bids_filter.json:ro"
+    assert config["bids_app"]["options"][-2:] == ["--bids-filter-file", "/opt/bids_filter.json"]
+
+
+def test_apply_dataset_apptainer_args_override_leaves_other_datasets_untouched():
+    config = _mega_study_config()
+    hpc_datalad_runner._apply_dataset_options_override(config, "ds001")
+    assert "apptainer_args" not in config["bids_app"]
 
 
 def test_generate_array_script_applies_dataset_options_override(tmp_path):
@@ -446,6 +493,24 @@ def test_generate_array_script_applies_dataset_options_override(tmp_path):
         str(config_path), "ds001", subj_list
     )
     assert "--use-syn-sdc" not in script_ds001
+
+
+def test_generate_array_script_applies_dataset_hpc_override(tmp_path):
+    import json
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(_mega_study_config()))
+    subj_list = _write_subject_list(tmp_path, ["sub-01"])
+
+    script_ds003 = hpc_datalad_runner.generate_array_script(
+        str(config_path), "ds003", subj_list
+    )
+    assert "#SBATCH --time=48:00:00" in script_ds003
+
+    script_ds001 = hpc_datalad_runner.generate_array_script(
+        str(config_path), "ds001", subj_list
+    )
+    assert "#SBATCH --time=48:00:00" not in script_ds001
 
 
 def test_subregion_generator_notifies_on_both_error_and_timeout(tmp_path):
