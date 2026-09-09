@@ -41,6 +41,19 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# jq lives at ~/.local/bin/jq (user-local install), absent from cron's
+# minimal PATH -- confirmed real incident (2026-09-08): this script's own
+# `jq`-based scratch_dir discovery silently found nothing under cron for a
+# full month (Aug 8 - Sep 8, every 03:15 run logged "No scratch_dir values
+# found ... nothing to do"), while ~3TB of orphaned per-task scratch piled
+# up across openneuro's mriqc datasets undetected. Same failure shape as
+# lib_clone_check.sh's matching git-annex-PATH fix: fails closed, silently,
+# instead of erroring loudly.
+if [[ -x "${HOME}/.local/bin/jq" ]]; then
+    PATH="${HOME}/.local/bin:${PATH}"
+fi
+
 MIN_AGE_DAYS=7
 LIVE=false
 SCOPE_PREFIXES=()

@@ -21,8 +21,10 @@
 #     runs once, sequentially, before scheduling
 #   • Generates a plain SLURM array job script per dataset (via
 #     hpc_datalad_runner.py) -- the script itself contains no datalad/git calls
-#   • `datalad slurm-schedule`s the array job (declares one -o per subject,
-#     submits via sbatch itself); records job IDs in submission.log
+#   • `datalad slurm-schedule`s the array job (-o . -- the whole output
+#     dataset, not per-subject; see schedule_one_batch's own comment on
+#     output_flags for why), submits via sbatch itself); records job IDs
+#     in submission.log
 #   • Chains a dependent finish job (--dependency=afterany) that runs
 #     `datalad slurm-finish` (one commit covering the whole array) + push,
 #     once the array completes
@@ -40,6 +42,24 @@
 #   fresh recon-all array, no dependency to wait on. Use this instead of
 #   `submit` to add subregion segmentation to a cohort that already
 #   completed; `submit` always schedules a full recon-all array too.
+#
+#   IMPORTANT -- run `submit`/`submit-subregions` somewhere that survives a
+#   dropped connection: nohup ./scripts/submit_bids_cohort.sh submit ... \
+#     > submit.log 2>&1 & disown   (or a tmux/screen session). The
+#   `datalad slurm-schedule -o .` call this script makes runs synchronously,
+#   in this process, and unlocks the ENTIRE output dataset before it submits
+#   anything -- confirmed real incident (2026-09-02, 134_subregions): an
+#   interactive `submit-subregions` got killed when the login-node session
+#   ended, mid-`slurm-schedule`, before it had dispatched any array or
+#   finish job. That left 142,592 files unlocked (symlink -> regular file,
+#   content unchanged) with no finish job in existence to ever re-lock
+#   them -- recovered with `git annex lock .` (safe: same content either
+#   way), but only after the wall-clock time to notice and re-diagnose it.
+#   This is a DIFFERENT failure window than the one incremental_datalad_save.sh
+#   (see schedule_one_batch's finish-job template) already protects against:
+#   that one covers interruption once the finish job is running/re-locking
+#   per subject; a plain nohup/tmux is what covers the scheduling call itself,
+#   before any job exists to do the re-locking.
 #
 # Options
 #   -c CONFIG      Path to config JSON  (default: configs/cohort_hpc_example.json)
@@ -524,11 +544,36 @@ schedule_one_subregion_batch() {
 
     mkdir -p "${LOG_DIR_BASE}/${ds}" "${output_clone}/.slurm_logs/${ds}"
 
+    # Scope -o to just this batch's own timepoints (plus subregion_results/,
+    # the concat job's cross-subject output dir -- see this function's own
+    # header comment on why that needs covering too) instead of the whole
+    # dataset. Unlike the main BIDS-app array (schedule_one_batch,
+    # output_flags=(-o .)), segment_subregions itself writes only inside
+    # each timepoint's own SUBJECTS_DIR entry (confirmed against
+    # hpc_datalad_runner.py's SubregionSegmentationScriptGenerator: no
+    # dataset-root report files the way mriqc/fMRIPrep write) -- there's no
+    # "loose files elsewhere" case forcing -o . the way there is for that
+    # array. Unlocking ~10 directories instead of the whole ~142K-file tree
+    # turns the vulnerable "unlocked with no job to re-lock it if this gets
+    # killed" window from hours into seconds -- confirmed real incident
+    # (2026-09-07/08, 134_subregions): three separate `-o .` attempts here
+    # each failed differently (dropped session, stale SSH hang, then the
+    # recovery lock job itself timing out at 8h) before ever reaching sbatch.
+    local -a subregion_output_flags=(-o "subregion_results") subregion_timepoints
+    mapfile -t subregion_timepoints < "$timepoint_list"
+    local tp
+    for tp in "${subregion_timepoints[@]}"; do
+        [[ -n "$tp" ]] && subregion_output_flags+=(-o "$tp")
+    done
+
     local subregion_stdout subregion_exit subregion_job_id subregion_stderr_file
     subregion_stderr_file=$(mktemp)
     subregion_exit=0
-    subregion_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
-        -o . \
+    # DATALAD_SSH_MULTIPLEX__CONNECTIONS=false: same rationale as the push
+    # call sites below (stale cross-node SSH control socket under the
+    # NFS-shared ~/.cache/datalad/sockets/ hanging instead of failing fast).
+    subregion_stdout=$(DATALAD_SSH_MULTIPLEX__CONNECTIONS=false datalad -C "$output_clone" -f json slurm-schedule \
+        "${subregion_output_flags[@]}" \
         -m "${commit_prefix}Subregion segmentation (${SUBREGION_STRUCTURES[*]}, ${SUBREGION_MODE}) for ${ds}${batch_label}" \
         sbatch "$subregion_array_script" 2>"$subregion_stderr_file") || subregion_exit=$?
     local subregion_stderr
@@ -1056,6 +1101,10 @@ schedule_one_batch() {
     # wildcard glob like "-o sub-*"). Per-subject -o flags only cover each
     # subject's own subdirectory -- BIDS apps commonly also write loose
     # report files at the dataset root, which per-subject flags would miss.
+    # This call unlocks the WHOLE dataset synchronously, right here, before
+    # anything is submitted -- see this file's own header comment ("run
+    # somewhere that survives a dropped connection") for why an interrupted
+    # caller can leave that unlock stuck with no job left to re-lock it.
     local -a output_flags=(-o .)
 
     if $DRY_RUN; then
@@ -1080,7 +1129,10 @@ schedule_one_batch() {
     local schedule_stdout schedule_stderr schedule_exit job_id schedule_stderr_file
     schedule_stderr_file=$(mktemp)
     schedule_exit=0
-    schedule_stdout=$(datalad -C "$output_clone" -f json slurm-schedule \
+    # DATALAD_SSH_MULTIPLEX__CONNECTIONS=false -- see the matching comment on
+    # schedule_one_subregion_batch's own slurm-schedule call (same rationale,
+    # same confirmed incident).
+    schedule_stdout=$(DATALAD_SSH_MULTIPLEX__CONNECTIONS=false datalad -C "$output_clone" -f json slurm-schedule \
         "${output_flags[@]}" \
         -m "${commit_prefix}${APP_NAME} array for ${ds}${batch_label} (${n_subjects} subjects)" \
         sbatch "$array_script" 2>"$schedule_stderr_file") || schedule_exit=$?
@@ -1192,7 +1244,11 @@ cd "${output_clone}"
 # `-o .` unlock of the entire dataset with no matching re-lock for three
 # weeks. incremental_datalad_save.sh commits per subject, checkpointed and
 # resumable, so an interruption here costs at most one subject, not the
-# cohort. By the time slurm-finish runs below, the tree is already clean,
+# cohort. Note this covers interruption once the finish job is running --
+# a DIFFERENT, still-open window is the scheduling call itself (this file's
+# own output_flags=(-o .) comment above / this file's header comment), which
+# hasn't dispatched a finish job yet for incremental save to even run in.
+# By the time slurm-finish runs below, the tree is already clean,
 # so its own Save call only has to do what it's actually good for: closing
 # the datalad-slurm DB entry (keeping slurm-schedule's conflicting-outputs
 # guard working).

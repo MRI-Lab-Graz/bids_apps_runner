@@ -40,6 +40,9 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECTS_DIR="${REPO_ROOT}/projects"
 
+# shellcheck source=lib_clone_check.sh
+source "${REPO_ROOT}/scripts/lib_clone_check.sh"
+
 # Same venv-pinned datalad binary the finish-job scripts use (see
 # submit_bids_cohort.sh) -- a plain `datalad` on PATH may be a different
 # install without the datalad-slurm extension enabled at all.
@@ -87,28 +90,19 @@ check_clone() {
     SEEN["$path"]=1
     checked=$((checked + 1))
 
-    # Capture git's stderr rather than discarding it: a `.git` dir that
-    # exists but is broken/incomplete (seen in the wild -- a stub with no
-    # refs/objects) makes `git status` itself fail, and silently
-    # discarding that failure reads as "0 uncommitted changes", the worst
-    # possible false negative for a script whose whole job is catching
-    # desync.
-    local status_out
-    if ! status_out=$(git -C "$path" status --porcelain 2>&1); then
+    # clone_assess (lib_clone_check.sh) does the actual git-status/ahead-count
+    # work, shared with cleanup_output_data.sh's "safe to drop?" precondition.
+    clone_assess "$path"
+    if [[ "$CLONE_BROKEN" -eq 1 ]]; then
         problems=$((problems + 1))
         echo "PROBLEM: $path"
-        echo "  broken or unreadable git repository: $(printf '%s' "$status_out" | head -1)"
+        echo "  broken or unreadable git repository: $CLONE_BROKEN_MSG"
         echo
         return 0
     fi
 
-    local uncommitted branch unpushed=0
-    uncommitted=$(printf '%s\n' "$status_out" | grep -c '.' || true)
-    branch=$(git -C "$path" symbolic-ref --short -q HEAD 2>/dev/null || echo "(detached)")
-
-    if git -C "$path" rev-parse --verify -q "refs/remotes/origin/${branch}" >/dev/null 2>&1; then
-        unpushed=$(git -C "$path" rev-list --count "origin/${branch}..HEAD" 2>/dev/null || echo 0)
-    fi
+    local uncommitted="$CLONE_UNCOMMITTED" branch="$CLONE_BRANCH" unpushed="$CLONE_UNPUSHED"
+    local status_out="$CLONE_STATUS_OUT"
 
     if [[ "$uncommitted" -gt 0 || "$unpushed" -gt 0 ]]; then
         local job_status=""
