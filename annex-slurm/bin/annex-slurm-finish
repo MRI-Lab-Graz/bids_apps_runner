@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# annex-slurm-finish -- commit + push explicit output paths via raw
+# git/git-annex plumbing. Never git status/diff/add/fsck/read-tree HEAD/
+# datalad-anything/git-annex-copy: all proven to hang on a repo with
+# git-annex keys-DB reconciliation drift, regardless of scope. See
+# docs/superpowers/specs/2026-09-09-annex-slurm-design.md.
+# Usage: annex-slurm-finish -m MESSAGE PATH...
+set -euo pipefail
+
+[[ "${1:-}" == "-m" ]] || { echo "usage: annex-slurm-finish -m MESSAGE PATH..." >&2; exit 1; }
+message="$2"; shift 2
+paths=("$@")
+[[ ${#paths[@]} -gt 0 ]] || { echo "annex-slurm-finish: need at least one PATH" >&2; exit 1; }
+
+remote=$(git remote | head -1)
+remote_url=$(git remote get-url "$remote")
+remote_uuid=$(git config --get "remote.${remote}.annex-uuid")
+case "$remote_url" in
+    ssh://*)
+        remote_host="${remote_url#ssh://}"; remote_host="${remote_host%%/*}"
+        remote_path="/${remote_url#ssh://*/}"
+        rsync_dest="${remote_host}:${remote_path}/"
+        stat_remote() { ssh "$remote_host" "stat -c%s '$1'"; }
+        ;;
+    *)
+        remote_path="$remote_url"
+        rsync_dest="${remote_path}/"
+        stat_remote() { stat -c%s "$1"; }
+        ;;
+esac
+
+tmpidx=$(mktemp); objfile=$(mktemp)
+trap 'rm -f "$tmpidx" "$objfile"' EXIT
+
+# 1) setkey each path, size captured BEFORE the call: setkey moves content
+#    into the object store rather than copying it, so checking size after
+#    (in a later pass) finds nothing at the original path and wrongly fails
+#    every file -- this bit us for real, cost a ~2.5h recompute once.
+keys=()
+for p in "${paths[@]}"; do
+    key=$(git annex calckey -- "$p")
+    size=$(stat -c%s -- "$p")
+    timeout 30 git annex setkey "$key" -- "$p" >/dev/null 2>&1 || true
+    actual=$(git annex contentlocation "$key" | xargs stat -c%s)
+    [[ "$actual" == "$size" ]] || { echo "SIZE MISMATCH after setkey: $p" >&2; exit 1; }
+    keys+=("$key")
+done
+
+# 2) build the commit from a temp index seeded from HEAD's tree plus only
+#    these paths -- never the real index, which can carry unrelated drift.
+GIT_INDEX_FILE="$tmpidx" git read-tree "$(git rev-parse HEAD^{tree})"
+for i in "${!paths[@]}"; do
+    GIT_INDEX_FILE="$tmpidx" git annex fromkey "${keys[$i]}" -- "${paths[$i]}"
+done
+tree=$(GIT_INDEX_FILE="$tmpidx" git write-tree)
+commit=$(git commit-tree "$tree" -p HEAD -m "$message")
+branch=$(git symbolic-ref --short HEAD)
+git update-ref "refs/heads/$branch" "$commit"
+git push origin "$branch"
+[[ "$(git ls-remote origin "refs/heads/$branch" | cut -f1)" == "$commit" ]] \
+    || { echo "push did not land" >&2; exit 1; }
+
+# The real index never learns about paths committed via the temp index
+# above -- confirmed real gap: a later `git annex unlock` on such a path
+# fails with "did not match any file(s) known to git". Sync it too. Tried
+# `git annex fromkey --force` first -- it no-ops silently (reports "ok")
+# because the working-tree symlink already matches, so it never touches the
+# index. Read each path's already-computed tree entry straight out of the
+# tree object instead (pure object-graph read) and stage it directly.
+git ls-tree -r "$tree" -- "${paths[@]}" | git update-index --index-info
+
+# 3) push content via rsync, not `git annex copy`: copy's P2P protocol reads
+#    local content to stream it, re-triggering the same reconciliation hang
+#    this tool exists to avoid -- proven even scoped to a single --key.
+# Resolve via realpath, not literal "../../"-stripping: the symlink depth
+# varies with the path's own nesting (proven wrong for a 1-level-deep path
+# after being validated only against 134's uniformly-2-level-deep layout).
+repo_root=$(git rev-parse --show-toplevel)
+for p in "${paths[@]}"; do
+    realpath --relative-to="$repo_root" "$(readlink -f -- "$p")"
+done > "$objfile"
+rsync -aR --files-from="$objfile" . "$rsync_dest"
+while IFS= read -r obj; do
+    local_size=$(stat -c%s -- "$obj")
+    remote_size=$(stat_remote "${remote_path}/${obj}") || remote_size=""
+    [[ -n "$local_size" && "$local_size" == "$remote_size" ]] \
+        || { echo "SIZE MISMATCH after rsync: $obj (local=$local_size remote=$remote_size)" >&2; exit 1; }
+done < "$objfile"
+for k in "${keys[@]}"; do echo "$k $remote_uuid 1"; done | git annex setpresentkey --batch
+
+echo "OK: $(git rev-parse --short "$commit") pushed, ${#paths[@]} object(s) content-verified on $remote."

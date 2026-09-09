@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# annex-slurm-schedule -- unlock existing tracked paths, then sbatch.
+# No datalad, no bookkeeping DB, no -o wildcard: paths are always explicit,
+# SLURM's own squeue/sacct is the only "what's running" state.
+# Usage: annex-slurm-schedule [-o PATH]... -- sbatch-args...
+set -euo pipefail
+
+paths=()
+while [[ "${1:-}" == "-o" ]]; do
+    paths+=("$2"); shift 2
+done
+[[ "${1:-}" == "--" ]] && shift
+
+for p in "${paths[@]}"; do
+    # New output paths -- not yet on disk, or on disk but never annexed
+    # (confirmed real case: a path that exists but was never tracked, e.g.
+    # a previous partial run) -- have nothing to unlock; not an error.
+    [[ -e "$p" ]] && git annex unlock -- "$p" 2>/dev/null || true
+done
+
+exec sbatch "$@"
