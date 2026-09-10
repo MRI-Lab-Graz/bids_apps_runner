@@ -36,11 +36,27 @@ trap 'rm -f "$tmpidx" "$objfile"' EXIT
 #    into the object store rather than copying it, so checking size after
 #    (in a later pass) finds nothing at the original path and wrongly fails
 #    every file -- this bit us for real, cost a ~2.5h recompute once.
+#    --kill-after: confirmed real incident (2026-09-10, 130-file real-data
+#    run) -- setkey's trailing finalize step (symlink+index-stage) can block
+#    indefinitely on a lock contended by an unrelated process (e.g. a stray
+#    `git-annex filter-process`, see lib_clone_check.sh), and plain SIGTERM
+#    from `timeout` alone does not reliably kill it (confirmed: the process
+#    was still alive, zero CPU growth, minutes past its 30s deadline). If
+#    setkey doesn't leave a symlink behind (killed mid-finalize, or just
+#    slow), the content has still already landed -- confirmed via
+#    contentlocation -- so `fromkey` recreates the symlink from the already-
+#    known key without needing setkey to ever finish cleanly.
 keys=()
 for p in "${paths[@]}"; do
     key=$(git annex calckey -- "$p")
-    size=$(stat -c%s -- "$p")
-    timeout 30 git annex setkey "$key" -- "$p" >/dev/null 2>&1 || true
+    # -L: confirmed real incident (2026-09-10) -- if $p is already a symlink
+    # into the annex store (e.g. a prior partial run recovered it, or it was
+    # already annexed), plain `stat` reports the symlink's own size (the
+    # target-path string length), not the real content size, and wrongly
+    # fails the size check below against contentlocation's real size.
+    size=$(stat -L -c%s -- "$p")
+    timeout --kill-after=10 30 git annex setkey "$key" -- "$p" >/dev/null 2>&1 || true
+    [[ -L "$p" ]] || git annex fromkey "$key" -- "$p"
     actual=$(git annex contentlocation "$key" | xargs stat -c%s)
     [[ "$actual" == "$size" ]] || { echo "SIZE MISMATCH after setkey: $p" >&2; exit 1; }
     keys+=("$key")

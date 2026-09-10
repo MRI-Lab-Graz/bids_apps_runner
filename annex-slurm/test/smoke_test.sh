@@ -31,6 +31,15 @@ key=$(basename "$(readlink sub1/result.txt)")
 git annex whereis --key "$key" | grep -q '\[origin\]' \
     || { echo "FAIL: content not recorded present on remote" >&2; exit 1; }
 
+# Re-run finish on a path that is ALREADY a symlink into the annex store
+# (idempotent re-run, or a batch mixing already-tracked + new paths).
+# Confirmed real incident (2026-09-10): `stat` without -L reports a
+# symlink's own size (the target-path string length), not the real content
+# size, so this used to fail the size check against contentlocation's real
+# size on every already-annexed path.
+"$BIN/annex-slurm-finish" -m "re-run on already-symlinked path" sub1/result.txt
+[[ -L sub1/result.txt ]] || { echo "FAIL: re-run left path not a symlink" >&2; exit 1; }
+
 # schedule: unlock-if-exists on an already-annexed path, no-op on a new one.
 # Shim sbatch -- real dispatch is SLURM's job, not this test's.
 mkdir sub2; touch sub2/new.txt  # never annexed -- should be silently skipped

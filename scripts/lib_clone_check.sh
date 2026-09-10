@@ -72,14 +72,32 @@ clone_assess() {
     CLONE_BRANCH=""
     CLONE_STATUS_OUT=""
 
+    # Repos managed by annex-slurm (see docs/superpowers/specs/2026-09-09-
+    # annex-slurm-design.md) are known to hang `git status` indefinitely due
+    # to git-annex keys-DB reconciliation drift -- confirmed real incident
+    # (2026-09-10): dataset 134's derivatives repo, hit by this exact cron
+    # call, left an orphaned `git-annex filter-process` behind almost every
+    # hourly run (the timeout below kills the `git status` it started, but
+    # not that detached helper -- git-annex intentionally runs it in its own
+    # session so it survives parent death). Orphans accumulated for over a
+    # day and their held lock then blocked unrelated annex-slurm-finish
+    # calls on the same repo. Skip the hang-prone call entirely rather than
+    # trying to out-signal a subprocess that's designed to detach; fails
+    # closed exactly like a timeout would (never causes an incorrect drop).
+    if [[ -f "$path/.annex-slurm-managed" ]]; then
+        CLONE_BROKEN=1
+        CLONE_BROKEN_MSG="skipped: annex-slurm-managed repo, git status known to hang (see .annex-slurm-managed)"
+        return 0
+    fi
+
     # Capture git's stderr rather than discarding it: a `.git` dir that
     # exists but is broken/incomplete (a stub with no refs/objects) makes
     # `git status` itself fail, and silently discarding that failure reads
     # as "0 uncommitted changes" -- the worst possible false negative for
     # code deciding whether it's safe to drop local content.
-    CLONE_STATUS_OUT=$(timeout "$CLONE_CHECK_TIMEOUT_SECS" git -C "$path" status --porcelain 2>&1)
+    CLONE_STATUS_OUT=$(timeout --kill-after=10 "$CLONE_CHECK_TIMEOUT_SECS" git -C "$path" status --porcelain 2>&1)
     rc=$?
-    if [[ "$rc" -eq 124 ]]; then
+    if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
         CLONE_BROKEN=1
         CLONE_BROKEN_MSG="git status timed out after ${CLONE_CHECK_TIMEOUT_SECS}s (large/slow repo?)"
         return 0
