@@ -213,3 +213,48 @@ class TestCloseOpenJobs:
         assert data["ok"] is False
         assert "job 111 (FAILED)" in data["output"]
         assert "job 222 (ok)" in data["output"]
+
+
+class TestAnnexSlurmManagedSkip:
+    """Datasets carrying a `.annex-slurm-managed` marker have no datalad-slurm
+    bookkeeping DB. Both open-jobs routes must short-circuit *without* shelling
+    out to `datalad slurm-finish --list-open-jobs` -- that call hangs the same
+    way `git status` does on these repos and, even bounded by its timeout,
+    leaves an orphaned git-annex filter-process behind (real incident,
+    2026-09-10)."""
+
+    def _blow_up_on_subprocess(self, monkeypatch):
+        def fake_run(*args, **kwargs):
+            raise AssertionError("subprocess.run must not be called for an annex-slurm-managed dataset")
+
+        monkeypatch.setattr(gui_cohort_routes.subprocess, "run", fake_run)
+
+    def test_close_route_short_circuits(self, client, disposable_project, tmp_path, monkeypatch):
+        output_dir = tmp_path / "output"
+        (output_dir / ".datalad").mkdir(parents=True)
+        (output_dir / ".annex-slurm-managed").write_text("marker")
+        _save_runnable_project(disposable_project, tmp_path, output_dir)
+        self._blow_up_on_subprocess(monkeypatch)
+
+        resp = client.post(
+            "/cohort/close_open_jobs",
+            json={"project_id": disposable_project, "pipeline_id": "default"},
+        )
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert "annex-slurm-managed" in data["output"]
+
+    def test_check_route_short_circuits(self, client, disposable_project, tmp_path, monkeypatch):
+        output_dir = tmp_path / "output"
+        (output_dir / ".datalad").mkdir(parents=True)
+        (output_dir / ".annex-slurm-managed").write_text("marker")
+        _save_runnable_project(disposable_project, tmp_path, output_dir)
+        self._blow_up_on_subprocess(monkeypatch)
+
+        resp = client.get(
+            "/cohort/check_open_jobs",
+            query_string={"project_id": disposable_project, "pipeline_id": "default"},
+        )
+        data = resp.get_json()
+        assert data["open_jobs"] == []
+        assert "annex-slurm-managed" in (data["error"] or "")

@@ -457,6 +457,21 @@ def register_cohort_routes(
             result["error"] = "Output dataset not cloned yet -- run Setup first."
             return jsonify(result)
 
+        # annex-slurm-managed datasets (see annex-slurm/README, docs/
+        # superpowers/specs/2026-09-09-annex-slurm-design.md) keep no
+        # bookkeeping DB -- SLURM's own squeue/sacct is the only "what's
+        # running" state. Calling `datalad slurm-finish --list-open-jobs`
+        # here would hang the same way `git status` does on these repos
+        # (see lib_clone_check.sh's matching marker check) and, even bounded
+        # by the timeout below, leaves an orphaned git-annex filter-process
+        # behind -- confirmed real incident, 2026-09-10.
+        if (Path(output_dir) / ".annex-slurm-managed").is_file():
+            result["error"] = (
+                "annex-slurm-managed dataset: no bookkeeping DB to list. "
+                "Check job status directly via squeue/sacct."
+            )
+            return jsonify(result)
+
         try:
             proc = subprocess.run(
                 ["datalad", "slurm-finish", "--list-open-jobs"],
@@ -529,6 +544,15 @@ def register_cohort_routes(
                 jsonify({"ok": False, "error": "Output dataset not cloned yet -- run Setup first."}),
                 400,
             )
+
+        # See the matching check in cohort_check_open_jobs -- annex-slurm-
+        # managed datasets have no bookkeeping DB and nothing to close.
+        if (Path(output_dir) / ".annex-slurm-managed").is_file():
+            return jsonify({
+                "ok": True,
+                "output": "annex-slurm-managed dataset: no bookkeeping DB, nothing to close. "
+                          "Check job status directly via squeue/sacct.",
+            })
 
         try:
             list_proc = subprocess.run(
