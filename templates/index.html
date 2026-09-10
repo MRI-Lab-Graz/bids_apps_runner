@@ -1299,7 +1299,8 @@
                         <div id="cohortPanelBody" class="card-body" style="display:none;">
                             <p class="text-muted small mb-3">
                                 Runs this project's BIDS app as a SLURM array job (one task per subject) using
-                                <code>datalad-slurm</code> for git-safe parallel execution. Container, flags,
+                                <code>datalad-slurm</code> (or <code>annex-slurm</code> for datasets opted into it)
+                                for git-safe parallel execution. Container, flags,
                                 folders, and SLURM resources are the <strong>same settings</strong> as Local/single-job
                                 execution above — nothing is configured twice. Edit them there, then Setup → Submit here.
                             </p>
