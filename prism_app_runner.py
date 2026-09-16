@@ -1917,6 +1917,7 @@ register_misc_routes(
     ensure_logs_dir=_ensure_logs_dir,
     log_dir=LOG_DIR,
     base_dir=BASE_DIR,
+    machine_settings_provider=_get_effective_machine_settings,
 )
 
 register_cohort_routes(

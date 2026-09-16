@@ -1350,12 +1350,22 @@ cmd_submit() {
         local subj_list_suffix=""
         $PILOT && subj_list_suffix="_pilot"
         local subj_list="${SUBJ_LISTS_DIR}/${DS}_subjects${subj_list_suffix}.txt"
-        local array_script="${scripts_dir}/${DS}_bids_array${subj_list_suffix}.sh"
+        # ${APP_NAME} in the script filenames (not in $subj_list -- subject
+        # lists are deliberately shared across apps run on the same dataset)
+        # keeps two different apps' generated array/finish scripts for the
+        # same dataset+batch from colliding. Without it, --resume's "script
+        # already exists, skip generation" would silently reuse one app's
+        # script (container, options, everything) for a different app's
+        # submission -- confirmed real incident (2026-09-15, megastudy
+        # openneuro fmriprep): 5 datasets' "fmriprep" array jobs actually ran
+        # the mriqc container because their scripts already existed from an
+        # earlier mriqc cohort run against the same dataset+batch numbers.
+        local array_script="${scripts_dir}/${DS}_${APP_NAME}_bids_array${subj_list_suffix}.sh"
         resolve_input_clone "$DS"
         local input_clone="$INPUT_CLONE"
         resolve_output_clone "$DS"
         local output_clone="$OUTPUT_CLONE"
-        local finish_script="${scripts_dir}/${DS}_bids_finish${subj_list_suffix}.sh"
+        local finish_script="${scripts_dir}/${DS}_${APP_NAME}_bids_finish${subj_list_suffix}.sh"
 
         log "[$DS] --- submit ---"
         $PILOT && log "[$DS] PILOT MODE: will submit only 1 randomly-chosen subject"
@@ -1435,8 +1445,8 @@ cmd_submit() {
             [[ -f "$next_batch_file" ]] || next_batch_file=""
 
             schedule_one_batch "$DS" "$output_clone" "$batch01_file" \
-                "${scripts_dir}/${DS}_bids_array_batch01.sh" \
-                "${scripts_dir}/${DS}_bids_finish_batch01.sh" \
+                "${scripts_dir}/${DS}_${APP_NAME}_bids_array_batch01.sh" \
+                "${scripts_dir}/${DS}_${APP_NAME}_bids_finish_batch01.sh" \
                 "$commit_prefix" 1 "$next_batch_file" "$submission_log" \
                 || { failed=$((failed + 1)); continue; }
         else
@@ -1634,8 +1644,8 @@ cmd_continue_batch() {
 
     local padded_idx
     padded_idx="$(printf '%02d' "$CONTINUE_BATCH_IDX")"
-    local array_script="${scripts_dir}/${ds}_bids_array_batch${padded_idx}.sh"
-    local finish_script="${scripts_dir}/${ds}_bids_finish_batch${padded_idx}.sh"
+    local array_script="${scripts_dir}/${ds}_${APP_NAME}_bids_array_batch${padded_idx}.sh"
+    local finish_script="${scripts_dir}/${ds}_${APP_NAME}_bids_finish_batch${padded_idx}.sh"
 
     local next_subj_list
     next_subj_list=$(_batch_subj_list "$ds" "" $((CONTINUE_BATCH_IDX + 1)))

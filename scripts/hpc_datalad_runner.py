@@ -704,7 +704,6 @@ echo "run.py finished for sub-${{SUBJECT_LABEL}}"
         else:
             apptainer_args_gpu_eddy = []
 
-        extra_env = ""
         if profile.get("supports_nipreps_resource_flags"):
             cpus = int(self.hpc.get("cpus", 8))
             mem_gb = _mem_to_gb(self.hpc.get("mem", "32G"))
@@ -734,8 +733,6 @@ echo "run.py finished for sub-${{SUBJECT_LABEL}}"
                     "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS",
                 )
             )
-        if env_pairs:
-            extra_env = f"    --env {_shell_quote(','.join(env_pairs))} \\\n"
         for auto_opt in profile.get("auto_options") or []:
             if auto_opt not in options:
                 options.append(auto_opt)
@@ -758,9 +755,24 @@ echo "run.py finished for sub-${{SUBJECT_LABEL}}"
         tf = (self.paths.get("templateflow_dir") or "").strip()
         if tf:
             extra_binds += f"    -B {_shell_quote(tf)}:/templateflow:ro \\\n"
+            env_pairs.append("TEMPLATEFLOW_HOME=/templateflow")
         fs = (self.paths.get("fs_license") or "").strip()
         if fs:
             extra_binds += f"    -B {_shell_quote(fs)}:/fs/license.txt:ro \\\n"
+            env_pairs.append("FS_LICENSE=/fs/license.txt")
+
+        # Built after every env_pairs.append() above (GPU/CUDA, nipreps
+        # resource flags, templateflow, fs_license) -- a bind mount without
+        # the matching env var pointing at it inside the container is a
+        # no-op, e.g. fmriprep's own "a valid license file is required"
+        # error despite /fs/license.txt being correctly bound (confirmed
+        # real incident, 2026-09-16: the whole 7-dataset openneuro megastudy
+        # got this far before failing, past the earlier --skip-bids-validation
+        # fix, because extra_env used to be built here before these two
+        # binds/env vars were ever added).
+        extra_env = ""
+        if env_pairs:
+            extra_env = f"    --env {_shell_quote(','.join(env_pairs))} \\\n"
 
         extra_flags = ""
         for opt in options:

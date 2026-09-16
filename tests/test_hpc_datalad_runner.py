@@ -369,6 +369,27 @@ def test_array_generator_quotes_shell_values():
     assert "--output-spaces \\\n    MNI152NLin6Asym" in script
 
 
+def test_array_generator_passes_templateflow_and_fs_license_into_container_env():
+    """Regression test: a bind mount alone does nothing for the containerized
+    process -- `--cleanenv` strips the host's `export TEMPLATEFLOW_HOME=...`
+    (see _module_and_env) before it ever reaches the container, so the app
+    only finds /templateflow or /fs/license.txt if the SAME `--env` flag
+    passed to `apptainer/singularity run` also names them. Confirmed real
+    incident (2026-09-16): fmriprep ran for real (well past the earlier
+    --skip-bids-validation fix, well into real nipype workflow stages) then
+    hard-failed with "a valid license file is required for FreeSurfer" even
+    though /fs/license.txt was correctly bound -- the container's own `--env`
+    flag never mentioned it.
+    """
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _base_config(), "ds001", "/tmp/subjects.txt", 1
+    ).generate_script()
+
+    env_line = next(line for line in script.splitlines() if line.strip().startswith("--env "))
+    assert "TEMPLATEFLOW_HOME=/templateflow" in env_line
+    assert "FS_LICENSE=/fs/license.txt" in env_line
+
+
 def test_array_generator_rejects_unsafe_sbatch_value():
     config = _base_config()
     config["hpc"]["sbatch_qos"] = "normal; touch /tmp/pwned"

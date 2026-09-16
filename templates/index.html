@@ -522,7 +522,8 @@
                                                 <div class="col-md-6">
                                                     <label class="form-label">Select Local Image</label>
                                                     <div class="input-group" id="container_select_group" style="display:flex;">
-                                                        <select id="container_select" class="form-select" onchange="checkAppVersion(); updateFetchHelpBtnVisibility();"></select>
+                                                        <select id="container_select" class="form-select" onchange="checkAppVersion(); updateFetchHelpBtnVisibility(); updateContainerDownloadBtnVisibility();"></select>
+                                                        <button type="button" id="containerDownloadBtn" class="btn btn-outline-primary" style="display:none;" onclick="downloadSelectedContainer()" title="Not yet downloaded from the DataLad server -- fetch it">Download</button>
                                                         <button type="button" id="fetchHelpBtn" class="btn btn-accent" style="display:none;" onclick="fetchAppOptions()">Load Options</button>
                                                     </div>
                                                 </div>

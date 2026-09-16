@@ -3,6 +3,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,11 @@ from flask import jsonify, render_template, request
 # In-memory registry of async TemplateFlow download jobs
 _tf_jobs: dict[str, dict] = {}
 _tf_jobs_lock = threading.Lock()
+
+# In-memory registry of async container-fetch (rsync from the DataLad
+# server's container catalog) jobs -- same pattern as _tf_jobs above.
+_container_jobs: dict[str, dict] = {}
+_container_jobs_lock = threading.Lock()
 
 CURATED_TEMPLATES = [
     "MNI152NLin2009cAsym",
@@ -36,6 +42,7 @@ def register_misc_routes(
     ensure_logs_dir: Callable[[], None],
     log_dir: Path,
     base_dir: Path,
+    machine_settings_provider: Callable[[], dict],
 ):
     @app.route("/list_reports", methods=["POST"])
     def list_reports():
@@ -732,6 +739,13 @@ def register_misc_routes(
 
     @app.route("/list_containers", methods=["POST"])
     def list_containers():
+        """List apptainer images under ``folder`` (recursively, e.g.
+        ``mriqc/mriqc_24.0.2.sif``), merged with the DataLad server's
+        container catalog when ``folder`` is the machine's configured
+        container root -- so containers that exist remotely but haven't
+        been fetched to this host yet still show up (``local: false``),
+        and the GUI can offer to fetch one on demand (``/fetch_container``).
+        """
         payload = request.get_json(silent=True) or {}
         folder = payload.get("folder")
         if not folder:
@@ -739,10 +753,137 @@ def register_misc_routes(
 
         try:
             folder_path = os.path.expanduser(folder)
-            containers = glob.glob(os.path.join(folder_path, "*.sif")) + glob.glob(
-                os.path.join(folder_path, "*.simg")
+            local_paths = glob.glob(
+                os.path.join(folder_path, "**", "*.sif"), recursive=True
+            ) + glob.glob(os.path.join(folder_path, "**", "*.simg"), recursive=True)
+            containers = {
+                os.path.relpath(p, folder_path): True for p in local_paths
+            }
+
+            effective = machine_settings_provider()
+            remote_container_path = str(effective.get("remote_container_path") or "").strip()
+            local_root = os.path.expanduser(
+                str(effective.get("default_apptainer_folder") or "")
             )
-            containers = [os.path.basename(container) for container in containers]
-            return jsonify({"containers": sorted(containers)})
+            remote_error = None
+            # ponytail: only merges when `folder` is the configured root, not
+            # an arbitrary subfolder -- extend to prefix-match subfolders too
+            # if per-app browsing of the remote catalog is ever needed.
+            if (
+                remote_container_path
+                and local_root
+                and os.path.normpath(folder_path) == os.path.normpath(local_root)
+            ):
+                ssh_host, _, remote_root = remote_container_path.partition(":")
+                if ssh_host and remote_root:
+                    import prism_datalad  # lazy -- scripts/ is on sys.path at runtime
+
+                    try:
+                        script = (
+                            "find "
+                            + shlex.quote(remote_root)
+                            + r" -type f \( -name '*.sif' -o -name '*.simg' \) -printf '%P\n' | sort"
+                        )
+                        remote_out = prism_datalad.run_remote_script(
+                            ssh_host, script, timeout=15
+                        )
+                        for name in remote_out.splitlines():
+                            name = name.strip()
+                            if name and name not in containers:
+                                containers[name] = False
+                    except RuntimeError as exc:
+                        remote_error = str(exc)
+
+            result = {
+                "containers": [
+                    {"name": name, "local": is_local}
+                    for name, is_local in sorted(containers.items())
+                ]
+            }
+            if remote_error:
+                result["remote_error"] = remote_error
+            return jsonify(result)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
+
+    @app.route("/fetch_container", methods=["POST"])
+    def fetch_container():
+        """Start an async rsync of one container from the DataLad server's
+        catalog (``remote_container_path``) down to ``folder``.
+
+        Request body:
+          folder – local apptainer images root (destination)
+          name   – container path relative to the catalog root, as returned
+                   by ``/list_containers`` (e.g. "mriqc/mriqc_24.0.2.sif")
+
+        Response:
+          job_id – poll /fetch_container_status?job_id=<id> for progress
+        """
+        payload = request.get_json(silent=True) or {}
+        folder = str(payload.get("folder") or "").strip()
+        name = str(payload.get("name") or "").strip()
+        if not folder or not name:
+            return jsonify({"error": "folder and name are required"}), 400
+        if name.startswith("/") or ".." in Path(name).parts:
+            return jsonify({"error": "Invalid container name"}), 400
+
+        effective = machine_settings_provider()
+        remote_container_path = str(effective.get("remote_container_path") or "").strip()
+        ssh_host, _, remote_root = remote_container_path.partition(":")
+        if not ssh_host or not remote_root:
+            return jsonify({"error": "remote_container_path is not configured"}), 400
+
+        folder_path = os.path.expanduser(folder)
+        dest = os.path.join(folder_path, name)
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        remote_src = f"{ssh_host}:{remote_root.rstrip('/')}/{name}"
+
+        job_id = str(uuid.uuid4())
+        with _container_jobs_lock:
+            _container_jobs[job_id] = {"status": "running", "log": [], "error": ""}
+
+        def _run():
+            log_lines = []
+            try:
+                proc = subprocess.Popen(
+                    ["rsync", "-a", remote_src, dest],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                for line in proc.stdout:
+                    log_lines.append(line.rstrip())
+                    with _container_jobs_lock:
+                        _container_jobs[job_id]["log"] = list(log_lines)
+                proc.wait()
+                status = "completed" if proc.returncode == 0 else "failed"
+                error = (
+                    ""
+                    if proc.returncode == 0
+                    else f"rsync exited with code {proc.returncode}"
+                )
+            except Exception as exc:
+                status = "failed"
+                error = str(exc)
+            with _container_jobs_lock:
+                _container_jobs[job_id]["status"] = status
+                _container_jobs[job_id]["error"] = error
+                _container_jobs[job_id]["log"] = log_lines
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({"job_id": job_id})
+
+    @app.route("/fetch_container_status", methods=["GET"])
+    def fetch_container_status():
+        job_id = request.args.get("job_id", "")
+        with _container_jobs_lock:
+            job = _container_jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Unknown job_id"}), 404
+        return jsonify(
+            {
+                "status": job["status"],
+                "log_tail": "\n".join(job["log"][-100:]),
+                "error": job["error"],
+            }
+        )

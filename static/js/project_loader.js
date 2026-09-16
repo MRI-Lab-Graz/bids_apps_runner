@@ -1386,6 +1386,7 @@ async function restoreProjectLoadDetails(cfg, common, loadToken) {
             // re-deriving it again here was observed re-showing a
             // banner it shouldn't have.
             _updateFetchHelpBtnOnly();
+            updateContainerDownloadBtnVisibility();
         }
     } catch (e) {
         console.warn('Background project restore failed:', e);
@@ -1486,6 +1487,18 @@ function toggleEngineFields() {
     scheduleRunnerPreflightRefresh();
 }
 
+// Pure: turns a /list_containers response's `containers` array (each
+// { name, local }) into <select> option entries, marking ones that only
+// exist on the DataLad server (not yet fetched to this host) so the GUI
+// can offer to download them (see downloadSelectedContainer()).
+function buildContainerOptionEntries(containers) {
+    return (containers || []).map((c) => ({
+        value: c.name,
+        label: c.local ? c.name : `${c.name} (not downloaded)`,
+        local: !!c.local,
+    }));
+}
+
 async function scanContainers(loadToken = null, options = {}) {
     const silent = !!options.silent;
     applyVersionedOutputPaths({ source: 'machine-settings' });
@@ -1512,7 +1525,11 @@ async function scanContainers(loadToken = null, options = {}) {
         const s = document.getElementById('container_select');
         s.innerHTML = '';
         if (data.containers && data.containers.length > 0) {
-            data.containers.forEach((c) => s.add(new Option(c, c)));
+            buildContainerOptionEntries(data.containers).forEach((entry) => {
+                const opt = new Option(entry.label, entry.value);
+                opt.dataset.local = entry.local ? '1' : '0';
+                s.add(opt);
+            });
             await checkAppVersion(loadToken);
             applyVersionedOutputPaths({ source: 'scan-containers' });
             // Skip during a project/pipeline load restore (loadToken set): the
@@ -1521,7 +1538,13 @@ async function scanContainers(loadToken = null, options = {}) {
             // container the user never picked. The caller immediately corrects
             // the selection and calls fetchAppOptions(), which settles the
             // banner against the real, final container.
-            if (loadToken === null) updateFetchHelpBtnVisibility();
+            if (loadToken === null) {
+                updateFetchHelpBtnVisibility();
+                updateContainerDownloadBtnVisibility();
+            }
+            if (data.remote_error && !silent) {
+                showStatus(`Local containers listed; couldn't reach the DataLad server: ${data.remote_error}`, true);
+            }
             scheduleRunnerPreflightRefresh();
             return true;
         } else {
@@ -1709,6 +1732,82 @@ function updateFetchHelpBtnVisibility() {
     const hasRenderedOptions =
         document.getElementById('dynamicOptionsSection').style.display !== 'none';
     if (staleNotice) staleNotice.style.display = !usable && hasRenderedOptions ? 'flex' : 'none';
+}
+
+// Shows the "Download" button next to container_select when the current
+// selection is only on the DataLad server's catalog (buildContainerOptionEntries
+// marks these with dataset.local = '0') -- mirrors _updateFetchHelpBtnOnly's
+// button-visibility pattern above. Call after scanContainers() and on
+// container_select's onchange.
+function updateContainerDownloadBtnVisibility() {
+    const btn = document.getElementById('containerDownloadBtn');
+    if (!btn) return;
+    const s = document.getElementById('container_select');
+    const selected = s && s.selectedOptions[0];
+    btn.style.display = selected && selected.dataset.local === '0' ? 'block' : 'none';
+}
+
+// Fetches the currently selected (remote-only) container from the DataLad
+// server's catalog into container_folder via /fetch_container, then polls
+// /fetch_container_status (same job-id pattern as the TemplateFlow
+// downloader in templates/index.html) until it completes or fails.
+async function downloadSelectedContainer() {
+    const folder = (document.getElementById('container_folder').value || '').trim();
+    const name = document.getElementById('container_select').value;
+    if (!folder || !name) return;
+
+    const btn = document.getElementById('containerDownloadBtn');
+    if (btn) btn.disabled = true;
+    showStatus(`Downloading ${name} from the DataLad server...`);
+
+    try {
+        const resp = await fetch('/fetch_container', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder, name }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) {
+            showStatus(data.error || 'Failed to start download.', true);
+            if (btn) btn.disabled = false;
+            return;
+        }
+        await _pollContainerFetch(data.job_id, name);
+    } catch (e) {
+        showStatus('Failed to start download: ' + e, true);
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function _pollContainerFetch(jobId, name) {
+    const btn = document.getElementById('containerDownloadBtn');
+    for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        let data;
+        try {
+            const resp = await fetch(`/fetch_container_status?job_id=${encodeURIComponent(jobId)}`);
+            data = await resp.json();
+        } catch (e) {
+            showStatus('Status check failed: ' + e, true);
+            if (btn) btn.disabled = false;
+            return;
+        }
+        if (data.status === 'completed') {
+            showStatus(`Downloaded ${name}.`);
+            if (btn) btn.disabled = false;
+            await scanContainers(null, { silent: true });
+            const s = document.getElementById('container_select');
+            if (s) s.value = name;
+            updateFetchHelpBtnVisibility();
+            updateContainerDownloadBtnVisibility();
+            return;
+        }
+        if (data.status === 'failed') {
+            showStatus(data.error || 'Download failed.', true);
+            if (btn) btn.disabled = false;
+            return;
+        }
+    }
 }
 
 // Unconditionally hides the stale-options banner -- used right after

@@ -120,6 +120,51 @@ class TestFinishJobsGuaranteeAProvenanceCommit:
         )
 
 
+class TestGeneratedScriptPathsAreAppNamespaced:
+    """Regression test for the cross-app script-collision bug (2026-09-15,
+    megastudy_openneuro fmriprep): configs/generated/'s array/finish script
+    filenames were keyed only by dataset+batch, with no app name in them.
+    Since MRIQC and fmriprep share the same configs/ dir (so the same
+    "generated" scripts_dir) and can be pointed at the same dataset, a
+    fmriprep submission's --resume saw MRIQC's already-generated
+    ${ds}_bids_array_batch01.sh sitting at that path and silently reused it
+    -- 5 array jobs ran the mriqc container, mislabeled as fmriprep, before
+    being caught and cancelled. Including ${APP_NAME} in every generated
+    array/finish script filename makes that collision structurally
+    impossible: two different apps now always write to different paths.
+    Deliberately NOT applied to subject-list filenames (_batch_subj_list,
+    ${SUBJ_LISTS_DIR}/${DS}_subjects*.txt) -- unlike the scripts, sharing a
+    subject list across apps run on the same dataset is normal/intended.
+    """
+
+    def test_cmd_submit_unbatched_paths_include_app_name(self):
+        source = _source()
+        assert 'local array_script="${scripts_dir}/${DS}_${APP_NAME}_bids_array${subj_list_suffix}.sh"' in source
+        assert 'local finish_script="${scripts_dir}/${DS}_${APP_NAME}_bids_finish${subj_list_suffix}.sh"' in source
+
+    def test_cmd_submit_batch01_paths_include_app_name(self):
+        source = _source()
+        assert '"${scripts_dir}/${DS}_${APP_NAME}_bids_array_batch01.sh"' in source
+        assert '"${scripts_dir}/${DS}_${APP_NAME}_bids_finish_batch01.sh"' in source
+
+    def test_continue_batch_paths_include_app_name(self):
+        source = _source()
+        region = source[source.find("cmd_continue_batch() {") :]
+        assert 'local array_script="${scripts_dir}/${ds}_${APP_NAME}_bids_array_batch${padded_idx}.sh"' in region
+        assert 'local finish_script="${scripts_dir}/${ds}_${APP_NAME}_bids_finish_batch${padded_idx}.sh"' in region
+
+    def test_continue_batch_resolves_config_before_using_app_name(self):
+        # APP_NAME is set by resolve_config -- cmd_continue_batch must call
+        # it before building paths that reference ${APP_NAME}, or the
+        # variable would be empty/stale.
+        source = _source()
+        region = source[source.find("cmd_continue_batch() {") :]
+        resolve_pos = region.find("resolve_config")
+        array_script_pos = region.find("local array_script=")
+        assert resolve_pos != -1 and array_script_pos != -1
+        assert resolve_pos < array_script_pos
+
+
 class TestUncommittedCheckIsShared:
     """The post-finish 'uncommitted change(s) remain' check was hand-copied
     verbatim into both the array-finish and subregion-finish heredocs.
