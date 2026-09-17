@@ -9,6 +9,12 @@ omit =
     scripts/prism_local.py
     scripts/run_bids_apps.py
     scripts/fix_dwi_fov_headers.py
+    # Needs nibabel, which isn't installed into the shared system Python on
+    # this HPC box (deliberately not pip-installing into it -- see CLAUDE.md
+    # "we are guests on this system"). Its own tests still run and pass when
+    # invoked with nibabel available: uv run --with nibabel --with pytest
+    # --with pytest-cov python3 -m pytest tests/test_check_fmriprep_complete.py --no-cov
+    scripts/check_fmriprep_complete.py
     scripts/archive/*
     scripts/tests/*
 
