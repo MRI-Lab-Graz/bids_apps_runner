@@ -678,7 +678,9 @@ ${finish_node_line}
 # mid-\`datalad save\` with no output at all, leaving the array's outputs
 # staged but uncommitted (see the datalad-slurm known-bug comment below).
 #SBATCH --time=12:00:00
-#SBATCH --mem=2G
+# 2G was not enough either -- see the matching comment on the main finish
+# job template in cmd_submit (job 5692339, real OOM kill, 2026-09-16).
+#SBATCH --mem=8G
 # 4, not 1: incremental_datalad_save.sh below runs annex hashing with -J 4
 # parallel jobs, so the finish job needs the cpus for that to actually help.
 #SBATCH --cpus-per-task=4
@@ -1193,7 +1195,12 @@ ${finish_node_line}
 # mid-\`datalad save\` with no output at all, leaving the array's outputs
 # staged but uncommitted (see the datalad-slurm known-bug comment below).
 #SBATCH --time=12:00:00
-#SBATCH --mem=2G
+# 2G was not enough either: job 5692339 (ds007522 mriqc finish) was OOM-killed
+# at 4.7G RSS mid-save/push, silently (no error text, just a truncated log) --
+# confirmed real incident, 2026-09-16, discovered 2026-09-21 while diagnosing
+# a stalled cohort. git-annex hashing a large batch's worth of MRIQC/fMRIPrep
+# output easily exceeds 2G; 8G gives real headroom without over-requesting.
+#SBATCH --mem=8G
 # 4, not 1: incremental_datalad_save.sh below runs annex hashing with -J 4
 # parallel jobs, so the finish job needs the cpus for that to actually help.
 #SBATCH --cpus-per-task=4
