@@ -1259,7 +1259,7 @@ cd "${output_clone}"
 # failure -- interrupted mid-save (job 5505212), tripped by
 # --close-failed-jobs's early return, or (project 134, 2026-08-13) simply
 # never running after a downstream step failed, leaving slurm-schedule's
-# `-o .` unlock of the entire dataset with no matching re-lock for three
+# "-o ." unlock of the entire dataset with no matching re-lock for three
 # weeks. incremental_datalad_save.sh commits per subject, checkpointed and
 # resumable, so an interruption here costs at most one subject, not the
 # cohort. Note this covers interruption once the finish job is running --
@@ -1288,7 +1288,7 @@ echo "${job_id} \$(date -Iseconds)" > ".slurm_logs/${ds}/finish-marker-${job_id}
 #
 # --commit-failed-jobs must be here too, not just on the GUI's manual
 # close_open_jobs route: this finish job is dependency-chained with
-# `afterany` (not `afterok`), so it runs even when some array elements
+# "afterany" (not "afterok"), so it runs even when some array elements
 # TIMEOUT'd rather than COMPLETED. Without it, datalad_slurm's finish_cmd()
 # removes the job's DB entry and returns without ever calling Save on the
 # declared outputs -- any real output a timed-out element produced is then
