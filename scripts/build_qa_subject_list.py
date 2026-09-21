@@ -7,13 +7,16 @@ run once per dataset, after that dataset's MRIQC run is complete, to decide
 which subjects' resting-state BOLD data is QA-valid and write the subject
 list fmriprep's cohort submit should use.
 
-QA rule (2026-09-15 decision): a subject is QA-valid if it has at least one
-resting-state BOLD run with an MRIQC IQM file, AND every such run has
-fd_mean <= --fd-threshold (default 0.5mm, mean framewise displacement).
-A subject with zero matching resting-state runs, or where MRIQC itself
-failed to produce IQMs for a run, is excluded -- so is a subject where any
-matching run exceeds the threshold (conservative: one noisy run is enough
-to keep the whole subject out of fmriprep for this study).
+QA rule (2026-09-21 decision, supersedes the 2026-09-15 "all runs must
+pass" rule): this study looks at CROSS-SECTIONAL correlations between
+resting-state connectivity and weather metrics, so each subject
+contributes exactly ONE scan, not every session/run they happen to have.
+A subject is QA-valid if it has at least one resting-state BOLD run with
+an MRIQC IQM file, and the SINGLE BEST one (lowest fd_mean) has
+fd_mean <= --fd-threshold (default 0.5mm). That best run is recorded as
+the subject's `selected` run -- downstream (hpc_datalad_runner.py) uses
+it to write a per-subject BIDS filter file so fmriprep only ever processes
+that one session/run, not the whole multi-session subject directory.
 
 "Resting-state" is matched by BIDS task label, not simply presence of any
 func/ file -- these datasets carry other tasks too. The per-dataset task
@@ -24,8 +27,9 @@ are the ones both scripts agree on; datasets not listed there default to
 """
 import argparse
 import json
+import re
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Mirrors scripts/remove_non_rest_data.sh's per-dataset task decisions.
 TASK_LABELS_BY_DATASET: Dict[str, List[str]] = {
@@ -37,9 +41,19 @@ TASK_LABELS_BY_DATASET: Dict[str, List[str]] = {
 }
 DEFAULT_TASK_LABELS = ["rest"]
 
+_ENTITY_RE = {
+    "session": re.compile(r"_ses-([a-zA-Z0-9]+)"),
+    "run": re.compile(r"_run-([a-zA-Z0-9]+)"),
+    "task": re.compile(r"_task-([a-zA-Z0-9]+)"),
+}
+
 
 def task_labels_for(dataset_id: str) -> List[str]:
     return TASK_LABELS_BY_DATASET.get(dataset_id, DEFAULT_TASK_LABELS)
+
+
+def _parse_entities(filename: str) -> Dict[str, Optional[str]]:
+    return {key: (m.group(1) if (m := rx.search(filename)) else None) for key, rx in _ENTITY_RE.items()}
 
 
 def build_qa_report(
@@ -53,51 +67,42 @@ def build_qa_report(
     for subject_dir in sorted(root.glob("sub-*")):
         if not subject_dir.is_dir():
             continue
-        runs = []
+        candidates = []
         for task in task_labels:
             for iqm_file in sorted(
                 subject_dir.glob(f"**/func/*task-{task}*_bold.json")
             ):
                 try:
                     iqm = json.loads(iqm_file.read_text())
-                except (OSError, json.JSONDecodeError) as exc:
-                    runs.append(
-                        {
-                            "file": str(iqm_file.relative_to(root)),
-                            "fd_mean": None,
-                            "passed": False,
-                            "reason": f"unreadable IQM file: {exc}",
-                        }
-                    )
-                    continue
-                fd_mean = iqm.get("fd_mean")
-                passed = fd_mean is not None and fd_mean <= fd_threshold
-                runs.append(
+                    fd_mean = iqm.get("fd_mean")
+                except (OSError, json.JSONDecodeError):
+                    fd_mean = None
+                candidates.append(
                     {
                         "file": str(iqm_file.relative_to(root)),
                         "fd_mean": fd_mean,
-                        "passed": passed,
-                        "reason": None
-                        if passed
-                        else (
-                            "fd_mean missing from IQM file"
-                            if fd_mean is None
-                            else f"fd_mean {fd_mean:.3f} > {fd_threshold}"
-                        ),
+                        **_parse_entities(iqm_file.name),
                     }
                 )
 
-        qa_valid = bool(runs) and all(r["passed"] for r in runs)
+        scored = [c for c in candidates if c["fd_mean"] is not None]
+        selected = min(scored, key=lambda c: c["fd_mean"]) if scored else None
+        qa_valid = selected is not None and selected["fd_mean"] <= fd_threshold
+
+        if qa_valid:
+            reason = None
+        elif not candidates:
+            reason = f"no resting-state IQM found for task(s) {task_labels}"
+        elif selected is None:
+            reason = "no candidate run had a readable fd_mean"
+        else:
+            reason = f"best run's fd_mean {selected['fd_mean']:.3f} > {fd_threshold} ({len(candidates)} candidate(s))"
+
         results[subject_dir.name] = {
             "qa_valid": qa_valid,
-            "runs": runs,
-            "reason": None
-            if qa_valid
-            else (
-                f"no resting-state IQM found for task(s) {task_labels}"
-                if not runs
-                else "at least one resting-state run failed QA"
-            ),
+            "selected": selected,
+            "n_candidates": len(candidates),
+            "reason": reason,
         }
 
     return results
@@ -107,10 +112,13 @@ def summarize(results: Dict[str, Dict]) -> str:
     total = len(results)
     valid = sorted(s for s, v in results.items() if v["qa_valid"])
     invalid = sorted(s for s, v in results.items() if not v["qa_valid"])
+    multi = sorted(s for s, v in results.items() if v["qa_valid"] and v["n_candidates"] > 1)
 
     lines = [f"Subjects: {total}"]
     lines.append(f"  QA-valid:   {len(valid)}")
     lines.append(f"  excluded:   {len(invalid)}")
+    if multi:
+        lines.append(f"  QA-valid with >1 candidate run (best one selected): {len(multi)}")
     if invalid:
         lines.append("")
         lines.append("Excluded:")
@@ -138,7 +146,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--report-json",
-        help="Write the full per-subject/per-run QA report to this path.",
+        help="Write the full per-subject QA report (including each subject's "
+        "selected run) to this path.",
+    )
+    parser.add_argument(
+        "--bids-filters-out",
+        help="Write per-subject BIDS filter JSON files (fmriprep --bids-filter-file "
+        "format) into this directory, one per subject that has a session or run "
+        "entity to pin -- so fmriprep only ever processes the single selected "
+        "scan, not every session/run a multi-session subject happens to have.",
     )
     args = parser.parse_args()
 
@@ -152,6 +168,25 @@ def main() -> None:
         valid = sorted(s for s, v in results.items() if v["qa_valid"])
         Path(args.out).write_text("\n".join(valid) + ("\n" if valid else ""))
         print(f"\nWrote {len(valid)} QA-valid subject(s) to {args.out}")
+
+    if args.bids_filters_out:
+        out_dir = Path(args.bids_filters_out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        written = 0
+        for subject, v in results.items():
+            if not v["qa_valid"]:
+                continue
+            if v["n_candidates"] <= 1:
+                continue  # only one candidate scan -- nothing to disambiguate, fmriprep's default is already correct
+            sel = v["selected"]
+            bold_filter = {"task": sel["task"]}
+            if sel["session"] is not None:
+                bold_filter["session"] = sel["session"]
+            if sel["run"] is not None:
+                bold_filter["run"] = sel["run"]
+            (out_dir / f"{subject}.json").write_text(json.dumps({"bold": bold_filter}, indent=2))
+            written += 1
+        print(f"Wrote {written} per-subject BIDS filter file(s) to {out_dir}")
 
 
 if __name__ == "__main__":

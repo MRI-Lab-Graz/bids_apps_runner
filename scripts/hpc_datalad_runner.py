@@ -350,6 +350,16 @@ class BidsAppComputeScriptGenerator:
 
     def _resolve_subject(self) -> str:
         quoted_list = _shell_quote(self.subject_list_path)
+        # Cross-sectional study design (2026-09-21): a subject contributes
+        # exactly one scan, but the BIDS dir on disk may still have several
+        # sessions/runs. build_qa_subject_list.py's --bids-filters-out writes
+        # one <ds>_bids_filters/sub-X.json per multi-candidate subject (the
+        # QA-selected session/run to actually process); this array script
+        # only needs to know where that directory lives -- a subject with no
+        # such file (the common single-scan case) gets no filter at all, so
+        # this is a no-op for every dataset that predates this mechanism.
+        filters_dir = Path(self.subject_list_path).parent / f"{self.dataset_id}_bids_filters"
+        quoted_filters_dir = _shell_quote(str(filters_dir))
         return f"""
 # Resolve subject from list file
 SUBJECT_LIST={quoted_list}
@@ -359,6 +369,18 @@ if [[ -z "$SUBJECT" ]]; then
     exit 1
 fi
 SUBJECT_LABEL="${{SUBJECT#sub-}}"
+
+# See build_qa_subject_list.py's --bids-filters-out: restricts this subject
+# to the single QA-selected session/run when one was pinned for them, so a
+# multi-session subject doesn't get every session processed for a
+# cross-sectional study that only wants one scan per subject.
+BIDS_FILTER_FILE={quoted_filters_dir}/sub-${{SUBJECT_LABEL}}.json
+APPTAINER_FILTER_BIND=()
+BIDS_FILTER_CLI_ARGS=()
+if [[ -f "$BIDS_FILTER_FILE" ]]; then
+    APPTAINER_FILTER_BIND=(-B "${{BIDS_FILTER_FILE}}:/bids_filter.json:ro")
+    BIDS_FILTER_CLI_ARGS=(--bids-filter-file /bids_filter.json)
+fi
 """
 
     def _notify_script_path(self) -> str:
@@ -786,9 +808,11 @@ echo "--- Running {app_name} for sub-${{SUBJECT_LABEL}} ---"
 {extra_apptainer_args}{extra_env}    -B "${{BIDS_DIR}}":/bids:ro \\
     -B "${{OUT_DIR}}":/output \\
 {extra_binds}    -B "${{TMP_DIR}}":/tmp \\
+    "${{APPTAINER_FILTER_BIND[@]}}" \\
     {container} \\
     /bids /output {_shell_quote(analysis_level)} \\
     --participant-label "${{SUBJECT_LABEL}}"{extra_flags} \\
+    "${{BIDS_FILTER_CLI_ARGS[@]}}" \\
     -w /tmp/wdir
 
 echo "{app_name} finished for sub-${{SUBJECT_LABEL}}"

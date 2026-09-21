@@ -390,6 +390,31 @@ def test_array_generator_passes_templateflow_and_fs_license_into_container_env()
     assert "FS_LICENSE=/fs/license.txt" in env_line
 
 
+def test_array_generator_wires_per_subject_bids_filter_file():
+    """Cross-sectional study design (2026-09-21): a subject contributes one
+    scan, but a multi-session subject's raw BIDS dir still has several --
+    without a --bids-filter-file, fmriprep processes every session it finds
+    regardless of what build_qa_subject_list.py actually selected. The array
+    script must look up <subject_lists_dir>/<ds>_bids_filters/sub-X.json at
+    runtime (per-subject, since one array script serves the whole batch) and
+    only pass --bids-filter-file when that subject actually has one -- a
+    single-scan subject (the common case) must get neither the bind nor the
+    CLI flag, matching build_qa_subject_list.py only writing filter files for
+    multi-candidate subjects.
+    """
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _base_config(), "ds001", "/tmp/subject_lists/ds001_subjects.txt", 1
+    ).generate_script()
+
+    assert "BIDS_FILTER_FILE=/tmp/subject_lists/ds001_bids_filters/sub-${SUBJECT_LABEL}.json" in script
+    assert '-B "${BIDS_FILTER_FILE}:/bids_filter.json:ro"' in script
+    assert "APPTAINER_FILTER_BIND[@]" in script
+    assert "BIDS_FILTER_CLI_ARGS[@]" in script
+    # unconditionally initialized (empty arrays), never left unset under set -u
+    assert "APPTAINER_FILTER_BIND=()" in script
+    assert "BIDS_FILTER_CLI_ARGS=()" in script
+
+
 def test_array_generator_rejects_unsafe_sbatch_value():
     config = _base_config()
     config["hpc"]["sbatch_qos"] = "normal; touch /tmp/pwned"
