@@ -48,7 +48,19 @@ if ! command -v curl >/dev/null 2>&1; then
     exit 0
 fi
 
-curl -fsS --max-time 10 \
+# -4 + --retry: ntfy.sh round-robins across several backend IPs, at least
+# one of which is routinely unreachable from this HPC (confirmed real
+# incident, 2026-09-21: a bare `curl --max-time 10` with no retry hit a
+# dead IPv4 backend, timed out at ~7.7s, and gave up -- reported as "failed
+# to reach ntfy.sh" even though the service itself was fine; a plain
+# `curl -v` to the same URL immediately afterward succeeded). IPv6 is
+# unreachable from this host entirely ("Network is unreachable"), so -4
+# skips that dead branch instead of wasting a connection attempt on it.
+# One retry against a *different* re-resolved IP is what actually recovers
+# from the routine bad-backend case; --max-time is the overall budget across
+# both attempts, so a caller relying on this being "best-effort and fast"
+# still gets a hard ceiling.
+curl -4 -fsS --connect-timeout 10 --max-time 25 --retry 1 --retry-max-time 15 \
     -H "Title: ${TITLE}" \
     -H "Priority: ${PRIORITY}" \
     ${TAGS:+-H "Tags: ${TAGS}"} \

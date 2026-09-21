@@ -1183,6 +1183,17 @@ schedule_one_batch() {
 bash \"${REPO_DIR}/scripts/submit_bids_cohort.sh\" _continue-batch \\
     --config \"${CONFIG}\" -d \"${ds}\" --batch-idx $((batch_idx + 1)) \\
     --submission-log \"${submission_log}\" --commit-prefix \"${commit_prefix}\""
+    else
+        # No next batch -- this cohort is actually done, not just one more
+        # batch in the chain. Distinct from the per-batch "Cohort finish OK"
+        # above (2026-09-21: the per-batch notification alone made it look
+        # like nothing ever really finished, since every batch's message
+        # reads the same regardless of whether more are coming).
+        continue_block="
+TOTAL_SUBJECTS=\$(wc -l < \"${SUBJ_LISTS_DIR}/${ds}_subjects.txt\" 2>/dev/null | tr -d ' ')
+\"${REPO_DIR}/scripts/notify_ntfy.sh\" \"Dataset COMPLETE: ${ds}\" \\
+    \"${ds}: all batches finished -- \${TOTAL_SUBJECTS:-?} subject(s) committed + pushed (${APP_NAME}).\" \\
+    default tada >/dev/null 2>&1 || true"
     fi
 
     cat > "$finish_script" <<EOF

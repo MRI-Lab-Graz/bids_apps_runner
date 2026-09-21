@@ -185,3 +185,38 @@ class TestUncommittedCheckIsShared:
     def test_both_templates_reference_the_shared_block(self):
         source = _source()
         assert source.count("$(uncommitted_check_block)") == 2
+
+
+class TestWholeDatasetCompleteNotification:
+    """2026-09-21: notify_ntfy.sh's transport was fixed (a routinely
+    unreachable ntfy.sh backend IP with no retry was silently swallowing
+    every notification), which surfaced that "whole dataset done" had no
+    signal of its own -- every batch's finish job fires the same generic
+    "Cohort finish OK" message whether or not more batches are still
+    coming, so completion looked identical to any other batch. The
+    no-next-batch branch of continue_block must fire a visibly distinct
+    notification instead.
+    """
+
+    def test_final_batch_fires_a_distinct_completion_notification(self):
+        source = _source()
+        assert "Dataset COMPLETE:" in source
+
+    def test_completion_notification_only_in_the_no_next_batch_branch(self):
+        source = _source()
+        # the main (non-subregion) continue_block -- the second of the two
+        # `local continue_block=""` declarations in this file
+        region = source[source.find("local continue_block=\"\"", source.find("local continue_block=\"\"") + 1):]
+        if_has_next_pos = region.find("if $has_next; then")
+        else_pos = region.find("\n    else\n")
+        complete_pos = region.find("Dataset COMPLETE:")
+        assert if_has_next_pos != -1 and else_pos != -1 and complete_pos != -1
+        # chaining call sits in the `if $has_next` branch, completion notice
+        # sits after the `else` (no-next-batch) branch
+        assert if_has_next_pos < else_pos < complete_pos
+
+    def test_completion_notification_reports_a_real_subject_count(self):
+        source = _source()
+        region = source[source.find("Dataset COMPLETE:") - 200 : source.find("Dataset COMPLETE:") + 50]
+        assert "TOTAL_SUBJECTS=" in region
+        assert "wc -l" in region
