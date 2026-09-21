@@ -444,6 +444,16 @@ else
     echo "ERROR: neither apptainer nor singularity found on this node" >&2
     exit 1
 fi
+# Cheap, permanent diagnostic: confirmed real incident (study 134
+# subregion segmentation, 2026-08-13) where all 117 array tasks failed
+# with "executable file not found in $PATH" inside the container -- root
+# cause never confirmed directly since nothing logged which runtime/
+# version actually ran, only reproduced five weeks later by process of
+# elimination (apptainer is no longer installed anywhere on this cluster,
+# so today's fallback to singularity can't hit whatever broke then). This
+# line means the next time behavior differs between apptainer and
+# singularity, the log says which one ran without any investigation.
+echo "Container runtime: ${APPTAINER_BIN} ($(command -v "${APPTAINER_BIN}")), $(${APPTAINER_BIN} --version 2>&1 | head -1)"
 """
         ).replace("NOTIFY_CMD_PLACEHOLDER", notify_cmd)
 
@@ -1002,6 +1012,16 @@ else
     echo "ERROR: neither apptainer nor singularity found on this node" >&2
     exit 1
 fi
+# Cheap, permanent diagnostic: confirmed real incident (study 134
+# subregion segmentation, 2026-08-13) where all 117 array tasks failed
+# with "executable file not found in $PATH" inside the container -- root
+# cause never confirmed directly since nothing logged which runtime/
+# version actually ran, only reproduced five weeks later by process of
+# elimination (apptainer is no longer installed anywhere on this cluster,
+# so today's fallback to singularity can't hit whatever broke then). This
+# line means the next time behavior differs between apptainer and
+# singularity, the log says which one ran without any investigation.
+echo "Container runtime: ${APPTAINER_BIN} ($(command -v "${APPTAINER_BIN}")), $(${APPTAINER_BIN} --version 2>&1 | head -1)"
 """
 
     def _workdirs(self) -> str:
