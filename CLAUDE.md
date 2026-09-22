@@ -107,6 +107,47 @@ running while someone's using it" is exactly what was believed about the
 process has been up** (`ps -o lstart= -p <pid>`) against when the guard
 landed (`git log -S <symbol>`). A stale process is not a broken guard.
 
+### ⚠️ "Read-only" git/git-annex checks are not exempt either -- there is no guard for this yet
+
+Third incident (2026-09-22), same day as the one above, different cause: an
+interactive investigation (Claude, diagnosing the study-134 subregion-
+segmentation data-loss incident) ran plain `git status`, `git diff-tree`, and
+`find` directly on `IT010128` against
+`/cl_tmp/mrilab/134/derivatives/freesurfer` -- a git-annex dataset with
+~300k files -- to check whether specific commits actually changed any
+content. These are read-only and touch no container and no network, so they
+are **not** the kind of thing `execute_local()` or
+`incremental_datalad_save.sh`'s own login-node guard look for (both only
+gate container runs and `datalad`/`git annex` get/push/hashing). Nothing in
+code stopped this.
+
+Result: `git status` alone ran at ~17% CPU for 5+ minutes before being
+killed, and spawned several `git-annex cat-file --batch` / `diff` helper
+subprocesses that **outlived the killed parent** and had to be killed
+individually by PID -- the same orphaned-process pattern as the 62-day-GUI
+incident above, just produced by an interactive investigation instead of a
+stale daemon. Separately, `incremental_datalad_save.sh --dry-run` -- which
+is explicitly exempted from that script's own guard on the theory that a
+dry run is cheap -- still timed out after 100s across only 112 subjects on
+this filesystem. "Read-only" and "explicitly marked cheap" both turned out
+not to mean "actually cheap" here; NFS latency and git-annex's per-object
+bookkeeping dominate regardless of whether anything is being written.
+
+**Lesson, until this gets an actual code guard**: any git/git-annex
+operation that walks history or diffs against a large annex working tree --
+unscoped `git status`, `git diff-tree`, `git log -p`, `find` over an annex
+checkout, etc. -- must be treated as real work and run via `sbatch` or
+under `salloc`/`srun`, never bare on the login node, *even when it's
+read-only and even when a tool says its dry-run/status-check mode is
+exempt*. If you're investigating a dataset this size, scope every git
+command to the narrowest path you can (a single subject's subtree, a single
+commit) and prefer submitting a small diagnostic script over running the
+check interactively -- see `scripts/audit_subregion_commits.sh` for the
+pattern this incident led to. Flagging as a first-order problem: a proper
+fix would extend the `execute_local()`-style chokepoint to cover heavy
+read-only git-annex operations too, not just container/data-movement calls,
+since right now this category is policy-only with no enforcement.
+
 ## Chip away at the monoliths
 
 `templates/index.html` (~7100 lines, most of it one inline `<script>` block)
