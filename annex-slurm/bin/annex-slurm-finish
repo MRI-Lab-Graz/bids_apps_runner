@@ -65,10 +65,41 @@ done
 # 2) build the commit from a temp index seeded from HEAD's tree plus only
 #    these paths -- never the real index, which can carry unrelated drift.
 GIT_INDEX_FILE="$tmpidx" git read-tree "$(git rev-parse HEAD^{tree})"
-for i in "${!paths[@]}"; do
-    GIT_INDEX_FILE="$tmpidx" git annex fromkey "${keys[$i]}" -- "${paths[$i]}"
+# Stage with update-index, NOT `git annex fromkey`: fromkey no-ops silently
+# (still reporting "ok") whenever the working-tree symlink already matches the
+# key -- which is ALWAYS true by this point, because setkey/fromkey above just
+# created it. The temp index therefore stayed at HEAD's tree, write-tree
+# returned that same tree, and commit-tree produced an EMPTY commit. Confirmed
+# real incident (2026-09-22, study 134): 132 consecutive empty commits over 4
+# days, 7721 real output files left staged in the real index and unreachable
+# from any clone, while every check below passed and this tool reported
+# "content-verified" for every one of them. The same fromkey no-op is already
+# documented at the real-index sync further down. A locked annexed file IS a
+# symlink object, so hash its target and stage mode 120000 directly --
+# update-index cannot silently do nothing.
+blobs=()
+for p in "${paths[@]}"; do
+    # $(...) strips the newline readlink adds: a symlink blob is exactly the
+    # target with no trailing newline, or the blob hash comes out wrong.
+    blob=$(printf '%s' "$(readlink -- "$p")" | git hash-object -w --stdin)
+    blobs+=("$blob")
+    GIT_INDEX_FILE="$tmpidx" git update-index --add --cacheinfo "120000,${blob},${p}"
 done
 tree=$(GIT_INDEX_FILE="$tmpidx" git write-tree)
+
+# Gate: the tree MUST record exactly the entries just staged. The absence of
+# this check is what let the incident above run for 4 days -- a staging step
+# that silently does nothing is otherwise indistinguishable from success here.
+expected=$(for i in "${!paths[@]}"; do
+    printf '120000 blob %s\t%s\n' "${blobs[$i]}" "${paths[$i]}"
+done | LC_ALL=C sort)
+actual=$(git -c core.quotePath=false ls-tree -r "$tree" -- "${paths[@]}" | LC_ALL=C sort)
+[[ "$expected" == "$actual" ]] || {
+    echo "annex-slurm-finish: refusing to commit -- tree does not record the staged paths" >&2
+    diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") >&2 || true
+    exit 1
+}
+
 commit=$(git commit-tree "$tree" -p HEAD -m "$message")
 branch=$(git symbolic-ref --short HEAD)
 git update-ref "refs/heads/$branch" "$commit"

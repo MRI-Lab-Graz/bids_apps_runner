@@ -31,6 +31,19 @@ key=$(basename "$(readlink sub1/result.txt)")
 git annex whereis --key "$key" | grep -q '\[origin\]' \
     || { echo "FAIL: content not recorded present on remote" >&2; exit 1; }
 
+# The commit must actually CONTAIN the path -- every other check above
+# passes on an EMPTY commit. Confirmed real incident (2026-09-22, study
+# 134): `git annex fromkey` no-ops silently whenever the working-tree
+# symlink already matches the key, which is always true right after setkey,
+# so staging into the temp index did nothing, write-tree returned HEAD's own
+# tree, and 132 consecutive commits were empty -- while 7721 real output
+# files sat staged in the index, unreachable from any clone, and this tool
+# reported "OK: ... content-verified" for every one of them.
+git ls-tree -r --name-only HEAD | grep -qx 'sub1/result.txt' \
+    || { echo "FAIL: committed tree does not contain the path" >&2; exit 1; }
+git diff-tree -r --name-only HEAD^ HEAD | grep -qx 'sub1/result.txt' \
+    || { echo "FAIL: commit is EMPTY -- the path was not added by it" >&2; exit 1; }
+
 # Re-run finish on a path that is ALREADY a symlink into the annex store
 # (idempotent re-run, or a batch mixing already-tracked + new paths).
 # Confirmed real incident (2026-09-10): `stat` without -L reports a
