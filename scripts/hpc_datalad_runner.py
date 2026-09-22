@@ -374,12 +374,29 @@ SUBJECT_LABEL="${{SUBJECT#sub-}}"
 # to the single QA-selected session/run when one was pinned for them, so a
 # multi-session subject doesn't get every session processed for a
 # cross-sectional study that only wants one scan per subject.
+#
+# 2026-09-21 postmortem: a filter file alone isn't enough. fmriprep's own
+# config._create_processing_groups() discovers ALL of a subject's raw
+# sessions (ignoring --bids-filter-file entirely) and passes that full list
+# into niworkflows.utils.bids.collect_data as the "reserved" session_id.
+# collect_data then hard-fails with 'Conflicting entities for "session"
+# found: <filtered> // <all-raw-sessions>' the moment any bids_filters entry
+# narrows an acquisition's session below that full list -- confirmed via
+# ds004592 (100% of its array) and ds005339 (about half). --no-track-sessions
+# makes fmriprep pass session_id=None instead of the raw session list, which
+# collect_data treats as "unrestricted" and defers entirely to
+# --bids-filter-file -- verified against the real niworkflows/fmriprep code
+# in the container with a synthetic multi-session subject. Only applied
+# alongside an actual filter file: it also fits this study's cross-sectional
+# design (one scan per subject -- session-tracked outputs/FreeSurfer IDs
+# were never wanted here anyway), but subjects with no filter file (the
+# common single-scan case) get fmriprep's normal default, unchanged.
 BIDS_FILTER_FILE={quoted_filters_dir}/sub-${{SUBJECT_LABEL}}.json
 APPTAINER_FILTER_BIND=()
 BIDS_FILTER_CLI_ARGS=()
 if [[ -f "$BIDS_FILTER_FILE" ]]; then
     APPTAINER_FILTER_BIND=(-B "${{BIDS_FILTER_FILE}}:/bids_filter.json:ro")
-    BIDS_FILTER_CLI_ARGS=(--bids-filter-file /bids_filter.json)
+    BIDS_FILTER_CLI_ARGS=(--bids-filter-file /bids_filter.json --no-track-sessions)
 fi
 """
 

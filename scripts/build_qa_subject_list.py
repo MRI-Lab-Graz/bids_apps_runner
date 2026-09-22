@@ -24,6 +24,21 @@ label map below mirrors the "keep" decisions already made in
 scripts/remove_non_rest_data.sh (2026-09-10) so the same resting-state runs
 are the ones both scripts agree on; datasets not listed there default to
 ["rest"].
+
+2026-09-21 postmortem: the first version of --bids-filters-out only pinned
+the "bold" filter's session, leaving the anat (T1w/T2w) query unfiltered.
+For a multi-session subject whose selected resting-state run lives in a
+different session than their T1w (e.g. anat only acquired at ses-01, QA
+picked a ses-02 rest run), fmriprep's niworkflows.utils.bids.collect_data
+then sees two different session sets across datatypes for the same subject
+and hard-fails with "Conflicting entities for session found" before any
+processing starts -- this hit every subject with such a filter file in
+ds004592 (100% of its array) and several in ds005339. Fix: --bids-dir (the
+raw BIDS input, not MRIQC output) is now required alongside
+--bids-filters-out so the anat session can be looked up and pinned
+explicitly too, preferring the BOLD run's own session when the subject has
+an anat there, falling back to whichever session the anat actually exists
+in otherwise.
 """
 import argparse
 import json
@@ -54,6 +69,38 @@ def task_labels_for(dataset_id: str) -> List[str]:
 
 def _parse_entities(filename: str) -> Dict[str, Optional[str]]:
     return {key: (m.group(1) if (m := rx.search(filename)) else None) for key, rx in _ENTITY_RE.items()}
+
+
+_ANAT_SUFFIXES = ("T1w", "T2w")
+
+
+def _anat_sessions(bids_dir: Path, subject: str, suffix: str) -> List[str]:
+    """Sessions (in filename order) that have the given anat suffix for a subject."""
+    sessions = []
+    for f in sorted(bids_dir.glob(f"{subject}/ses-*/anat/{subject}_*_{suffix}.nii*")):
+        m = _ENTITY_RE["session"].search(f.name)
+        if m:
+            sessions.append(m.group(1))
+    return sessions
+
+
+def anat_filters(bids_dir: Path, subject: str, preferred_session: Optional[str]) -> Dict[str, Dict]:
+    """Build {"t1w": {"session": ...}} (and "t2w" likewise, if present).
+
+    Prefers preferred_session (the selected BOLD run's session) when the
+    subject has that suffix there, otherwise falls back to whichever
+    session it does exist in -- always pinning explicitly so fmriprep never
+    sees a different session set for anat vs. bold. See module docstring's
+    2026-09-21 postmortem.
+    """
+    filters: Dict[str, Dict] = {}
+    for suffix in _ANAT_SUFFIXES:
+        sessions = _anat_sessions(bids_dir, subject, suffix)
+        if not sessions:
+            continue
+        chosen = preferred_session if preferred_session in sessions else sessions[0]
+        filters[suffix.lower()] = {"session": chosen}
+    return filters
 
 
 def build_qa_report(
@@ -154,9 +201,20 @@ def main() -> None:
         help="Write per-subject BIDS filter JSON files (fmriprep --bids-filter-file "
         "format) into this directory, one per subject that has a session or run "
         "entity to pin -- so fmriprep only ever processes the single selected "
-        "scan, not every session/run a multi-session subject happens to have.",
+        "scan, not every session/run a multi-session subject happens to have. "
+        "Requires --bids-dir.",
+    )
+    parser.add_argument(
+        "--bids-dir",
+        help="Path to the dataset's raw BIDS input directory (not the MRIQC "
+        "output). Required with --bids-filters-out to also pin the anat "
+        "(T1w/T2w) session alongside the selected BOLD session -- see module "
+        "docstring's 2026-09-21 postmortem.",
     )
     args = parser.parse_args()
+
+    if args.bids_filters_out and not args.bids_dir:
+        parser.error("--bids-filters-out requires --bids-dir")
 
     results = build_qa_report(args.mriqc_dir, args.dataset_id, args.fd_threshold)
     print(summarize(results))
@@ -170,6 +228,7 @@ def main() -> None:
         print(f"\nWrote {len(valid)} QA-valid subject(s) to {args.out}")
 
     if args.bids_filters_out:
+        bids_dir = Path(args.bids_dir)
         out_dir = Path(args.bids_filters_out)
         out_dir.mkdir(parents=True, exist_ok=True)
         written = 0
@@ -184,7 +243,9 @@ def main() -> None:
                 bold_filter["session"] = sel["session"]
             if sel["run"] is not None:
                 bold_filter["run"] = sel["run"]
-            (out_dir / f"{subject}.json").write_text(json.dumps({"bold": bold_filter}, indent=2))
+            bids_filter = {"bold": bold_filter}
+            bids_filter.update(anat_filters(bids_dir, subject, sel["session"]))
+            (out_dir / f"{subject}.json").write_text(json.dumps(bids_filter, indent=2))
             written += 1
         print(f"Wrote {written} per-subject BIDS filter file(s) to {out_dir}")
 

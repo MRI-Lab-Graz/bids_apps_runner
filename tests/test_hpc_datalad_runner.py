@@ -415,6 +415,32 @@ def test_array_generator_wires_per_subject_bids_filter_file():
     assert "BIDS_FILTER_CLI_ARGS=()" in script
 
 
+def test_array_generator_pairs_bids_filter_file_with_no_track_sessions():
+    """2026-09-21 postmortem: a --bids-filter-file alone isn't enough --
+    fmriprep's own config._create_processing_groups() discovers ALL of a
+    subject's raw sessions regardless of the filter file and passes that
+    full list into niworkflows.utils.bids.collect_data as the "reserved"
+    session_id, which then hard-fails with 'Conflicting entities for
+    "session" found' the moment the filter narrows any acquisition's
+    session below that full list -- confirmed via ds004592 (100% of its
+    array) and ds005339 (about half), and verified against the real
+    niworkflows/fmriprep source in the container with a synthetic
+    multi-session subject. --no-track-sessions makes fmriprep pass
+    session_id=None instead, which collect_data treats as unrestricted and
+    defers entirely to --bids-filter-file. It must ride along in the same
+    conditional as --bids-filter-file -- a single-scan subject (no filter
+    file) must not get it.
+    """
+    script = hpc_datalad_runner.BidsAppComputeScriptGenerator(
+        _base_config(), "ds001", "/tmp/subject_lists/ds001_subjects.txt", 1
+    ).generate_script()
+
+    filter_block = script[script.index("BIDS_FILTER_FILE=") : script.index("BIDS_FILTER_FILE=") + 600]
+    assert "--no-track-sessions" in filter_block
+    # same conditional as --bids-filter-file, not a separate always-on flag
+    assert "BIDS_FILTER_CLI_ARGS=(--bids-filter-file /bids_filter.json --no-track-sessions)" in script
+
+
 def test_array_generator_rejects_unsafe_sbatch_value():
     config = _base_config()
     config["hpc"]["sbatch_qos"] = "normal; touch /tmp/pwned"
