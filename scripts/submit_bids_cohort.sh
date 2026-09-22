@@ -99,6 +99,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Dispatches the cohort prefetch to a compute node when run from a login
+# node -- see CLAUDE.md and tests/test_lib_prefetch.py.
+# shellcheck source=lib_prefetch.sh
+source "${SCRIPT_DIR}/lib_prefetch.sh"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -912,6 +917,12 @@ prefetch_cohort_subjects() {
         mapfile -t datatypes < <(python3 "${SCRIPT_DIR}/app_profiles.py" --required-datatypes "$app_name" 2>/dev/null)
     fi
 
+    # Where run_prefetch's dispatched job writes its SBATCH --output. Must
+    # live under /cl_tmp with the rest of the cohort logs, never /usr/people
+    # (CLAUDE.md: the home filesystem has no quota for this).
+    PREFETCH_LOG_DIR="${LOG_DIR_BASE}/${ds}"
+    mkdir -p "$PREFETCH_LOG_DIR" 2>/dev/null || true
+
     local subj_targets=""
     local s
     for s in "${subj_ids[@]}"; do
@@ -997,7 +1008,14 @@ prefetch_cohort_subjects() {
         # naive single-quote wrapping used elsewhere in this file) since
         # targets_arr entries came from real filesystem paths, not
         # hand-built literals.
-        if run bash -c "cd '${input_clone}' && datalad get $(printf '%q ' "${targets_arr[@]}") 2>/dev/null"; then
+        # Routed through run_prefetch: this is the transfer that actually
+        # moves file content (40 GB for ds004592, 52 GB for ds005339, with
+        # git-annex checksumming every byte). On a login node it dispatches
+        # to a compute node via `sbatch --wait`, which keeps the ordering
+        # guarantee -- content is present before the array is scheduled.
+        # The `-n` subdataset install above stays inline deliberately: it
+        # transfers no file content, only subdataset metadata.
+        if run run_prefetch "${ds}" "cd '${input_clone}' && '$(prefetch_datalad_bin)' get $(printf '%q ' "${targets_arr[@]}")"; then
             prefetch_ok=true
             break
         fi
