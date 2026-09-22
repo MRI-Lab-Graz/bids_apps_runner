@@ -10,9 +10,7 @@ import time
 import signal
 import gzip
 import struct
-import smtplib
 import ssl
-from email.message import EmailMessage
 
 # Check for GUI dependencies
 try:
@@ -65,6 +63,8 @@ from version import __version__
 # Add scripts directory to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 
+import login_node_hygiene
+import prism_notify
 from check_app_output import BIDSOutputValidator
 
 try:
@@ -615,6 +615,10 @@ def log_request_info():
             f"[GUI] {request.method} {request.path} from {request.remote_addr}",
             flush=True,
         )
+    # Feeds the login-node idle cap (see _should_shut_down_now). Timer-driven
+    # status polls deliberately do not count as use.
+    if _is_user_activity(request.path):
+        _note_request_activity()
 
 
 # Common BIDS Apps mapping to Docker Hub repos
@@ -829,6 +833,8 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50, batch_
             "batch_size": 10 if batch_size in (None, "") else int(batch_size),
             "modules": hpc.get("modules") or [],
             "environment": hpc.get("environment") or {},
+            # Feeds "#SBATCH --mail-user" in submit_bids_cohort.sh -- that is
+            # SLURM's own mail, unrelated to the GUI SMTP path replaced by ntfy.
             "notify_email": hpc.get("notify_email") or "",
             **sbatch_directives,
         },
@@ -1257,6 +1263,98 @@ PILOT_JOBS: dict[str, dict[str, Any]] = {}
 PILOT_JOBS_LOCK = threading.Lock()
 
 
+# ── idle self-exit on a login node ──────────────────────────────────────────
+#
+# A GUI daemon sat on login node IT010128 for 62 days and got this account
+# flagged by the HPC admin. It had started a week before the login-node
+# execution guard was written, and a running process keeps the code it
+# loaded at startup -- so the daemon meant to enforce the policy predated
+# it entirely. Bounding the process's lifetime is what stops that class of
+# bug, which is why this is a safety control and not just tidiness.
+#
+# Jobs are handed to SLURM at submission time and report back via
+# notify_ntfy.sh from inside the generated sbatch scripts, so nothing here
+# needs to survive a submission.
+
+_LAST_REQUEST_AT = time.time()
+_IDLE_CHECK_INTERVAL_SECONDS = 5 * 60
+
+
+def _is_user_activity(path):
+    """Whether a request path represents a person actually using the GUI.
+
+    The status endpoints in SILENT_ENDPOINTS are polled on a timer by
+    templates/index.html. A tab left open on a forgotten laptop would
+    otherwise refresh the idle clock indefinitely -- which is how a GUI
+    ends up resident for 62 days. Work that is genuinely still running
+    keeps the process alive through _job_registries() instead.
+    """
+    return path not in SILENT_ENDPOINTS
+
+
+def _note_request_activity():
+    """Mark the GUI as in use. Called for every real user request."""
+    global _LAST_REQUEST_AT
+    _LAST_REQUEST_AT = time.time()
+
+
+def _job_registries():
+    """Every background-job registry this GUI owns.
+
+    `datalad clone` and container pulls run for a long time and must never
+    be abandoned halfway, so the idle timer yields to any of these.
+    """
+    import gui.gui_cohort_routes as _cohort
+    import gui.gui_misc_routes as _misc
+    import gui.gui_utility_routes as _utility
+
+    return [
+        RUN_JOBS,
+        PILOT_JOBS,
+        _cohort._cohort_jobs,
+        _utility._clone_jobs,
+        _misc._tf_jobs,
+        _misc._container_jobs,
+    ]
+
+
+def _should_shut_down_now():
+    """Whether the idle cap applies right now."""
+    return login_node_hygiene.should_exit_idle(
+        idle_seconds=time.time() - _LAST_REQUEST_AT,
+        jobs_active=login_node_hygiene.any_jobs_active(_job_registries()),
+        on_login_node=login_node_hygiene.on_bare_slurm_login_node(),
+    )
+
+
+def _idle_watchdog_loop():
+    while True:
+        time.sleep(_IDLE_CHECK_INTERVAL_SECONDS)
+        try:
+            if not _should_shut_down_now():
+                continue
+        except Exception as exc:  # never let the watchdog kill the GUI by accident
+            print(f"[GUI] idle watchdog check failed, staying up: {exc}", flush=True)
+            continue
+        idle_minutes = (time.time() - _LAST_REQUEST_AT) / 60
+        print(
+            f"[GUI] Idle {idle_minutes:.0f} min on a SLURM login node with no "
+            f"background jobs -- shutting down to keep the login node clear "
+            f"(see CLAUDE.md). Restart with: python prism_app_runner.py",
+            flush=True,
+        )
+        os._exit(0)
+
+
+def _start_idle_watchdog():
+    """Start the idle cap. No-op off a login node, so a collaborator's Mac
+    (install_macos.sh) and any real SLURM allocation are unaffected."""
+    if not login_node_hygiene.on_bare_slurm_login_node():
+        return False
+    threading.Thread(target=_idle_watchdog_loop, daemon=True).start()
+    return True
+
+
 def _get_active_tracked_run_jobs():
     """Return active run jobs launched by this GUI session and prune finished ones."""
     active_jobs = []
@@ -1302,44 +1400,16 @@ register_project_config_handlers(
 )
 
 
-def _terminate_pid_group(pid):
-    """Terminate a process group first, then process as fallback."""
-    try:
-        pgid = os.getpgid(pid)
-        os.killpg(pgid, signal.SIGTERM)
-        return True
-    except OSError:
-        pass
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-        return True
-    except OSError:
-        return False
-
-
-def _iter_proc_pids():
-    """Yield numeric process IDs from /proc."""
-    proc_root = Path("/proc")
-    try:
-        for entry in proc_root.iterdir():
-            if entry.name.isdigit():
-                yield int(entry.name)
-    except Exception:
-        return
-
-
-def _read_proc_cmdline(pid):
-    """Read process command line as a single lowercased string."""
-    try:
-        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
-        if not raw:
-            return ""
-        return (
-            raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip().lower()
-        )
-    except Exception:
-        return ""
+# /proc inspection and process termination live in
+# scripts/login_node_hygiene.py, which the hourly cron reaper also uses --
+# one implementation, so the GUI's "stale sessions" banner and the reaper
+# can never disagree about what counts as stale. These aliases keep the
+# long-standing private names working for the rest of this module and for
+# the route injection below.
+_terminate_pid_group = login_node_hygiene._terminate_pid_group
+_terminate_pid_groups = login_node_hygiene.terminate_pid_groups
+_iter_proc_pids = login_node_hygiene.iter_proc_pids
+_read_proc_cmdline = login_node_hygiene.read_proc_cmdline
 
 
 def _is_marked_app_process(pid):
@@ -1372,140 +1442,16 @@ def _find_app_related_pids(include_marked=True):
     return pids
 
 
-def _terminate_pid_groups(pids):
-    """Terminate each unique process group represented by the given PID collection."""
-    terminated = 0
-    signaled_groups = set()
-
-    for pid in sorted(set(pids)):
-        try:
-            pgid = os.getpgid(pid)
-        except OSError:
-            continue
-
-        if pgid in signaled_groups:
-            continue
-
-        if _terminate_pid_group(pid):
-            signaled_groups.add(pgid)
-            terminated += 1
-
-    return terminated
-
-
-_VSCODE_SERVER_STACK_RE = re.compile(r"\.vscode-server/cli/servers/stable-([a-f0-9]+)/")
-# Threshold above which a VS Code Remote-SSH server stack is flagged as
-# "stale" rather than just "running" -- see CLAUDE.md's HPC login node
-# policy. Not a hard cutoff for anything destructive: nothing auto-kills a
-# stale stack, this only decides what the GUI's banner surfaces to a human.
-_VSCODE_STALE_THRESHOLD_SECONDS = 12 * 60 * 60
-
-_boot_time_cache = None
-
-
-def _boot_time():
-    """System boot time as a Unix epoch timestamp, or None if unreadable."""
-    global _boot_time_cache
-    if _boot_time_cache is not None:
-        return _boot_time_cache
-    try:
-        with open("/proc/stat", "r") as f:
-            for line in f:
-                if line.startswith("btime"):
-                    _boot_time_cache = float(line.split()[1])
-                    return _boot_time_cache
-    except Exception:
-        pass
-    return None
-
-
-def _process_start_epoch(pid):
-    """Wall-clock epoch timestamp a process started, or None if unavailable."""
-    boot = _boot_time()
-    if boot is None:
-        return None
-    try:
-        raw = Path(f"/proc/{pid}/stat").read_text(errors="ignore")
-        # comm (field 2) is parenthesized and may itself contain ")", so
-        # split on the LAST ")" to reliably find where the numeric fields
-        # begin -- fields after that point, 0-indexed, put starttime (the
-        # overall field 22) at index 19.
-        after_comm = raw.rsplit(")", 1)[1].split()
-        starttime_ticks = float(after_comm[19])
-    except Exception:
-        return None
-    try:
-        clk_tck = os.sysconf("SC_CLK_TCK")
-    except (AttributeError, ValueError):
-        clk_tck = 100
-    return boot + starttime_ticks / clk_tck
-
-
-def _process_rss_bytes(pid):
-    """Resident memory of a process in bytes, or 0 if unavailable."""
-    try:
-        with open(f"/proc/{pid}/status", "r") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) * 1024
-    except Exception:
-        pass
-    return 0
-
-
-def _find_vscode_remote_ssh_stacks():
-    """Group this OS user's own VS Code Remote-SSH server processes by
-    version stack (one "Stable-<hash>" directory per spun-up server, which
-    in practice tracks roughly one per distinct connected window/session --
-    see CLAUDE.md's HPC login node policy on why leftover stacks matter on
-    a shared login node). Only ever inspects processes this OS user
-    actually owns (checked via /proc/<pid> ownership) -- this GUI can be
-    reached by multiple people on a shared login node, and must never
-    surface or touch another user's processes.
-
-    Returns a list of dicts, oldest stack first:
-        {"hash", "pids", "started_at" (epoch|None), "age_seconds" (float|None),
-         "rss_bytes", "stale" (bool)}
-    """
-    my_uid = os.getuid()
-    stacks = {}
-    for pid in _iter_proc_pids():
-        cmdline = _read_proc_cmdline(pid)
-        if not cmdline or ".vscode-server/cli/servers/stable-" not in cmdline:
-            continue
-        try:
-            if os.stat(f"/proc/{pid}").st_uid != my_uid:
-                continue
-        except OSError:
-            continue
-
-        match = _VSCODE_SERVER_STACK_RE.search(cmdline)
-        if not match:
-            continue
-        stacks.setdefault(match.group(1), []).append(pid)
-
-    now = time.time()
-    results = []
-    for stack_hash, pids in stacks.items():
-        starts = [t for t in (_process_start_epoch(p) for p in pids) if t is not None]
-        started_at = min(starts) if starts else None
-        age_seconds = (now - started_at) if started_at is not None else None
-        results.append(
-            {
-                "hash": stack_hash,
-                "pids": sorted(pids),
-                "started_at": started_at,
-                "age_seconds": age_seconds,
-                "rss_bytes": sum(_process_rss_bytes(p) for p in pids),
-                "stale": bool(
-                    age_seconds is not None
-                    and age_seconds >= _VSCODE_STALE_THRESHOLD_SECONDS
-                ),
-            }
-        )
-
-    results.sort(key=lambda s: (s["age_seconds"] is None, -(s["age_seconds"] or 0)))
-    return results
+# Re-exported from scripts/login_node_hygiene.py so the GUI banner and the
+# cron reaper share one definition of "stale VS Code stack". The reaper
+# additionally requires a stack to have no live children before touching
+# it -- see find_stale_vscode_stacks() there.
+_VSCODE_SERVER_STACK_RE = login_node_hygiene.VSCODE_SERVER_STACK_RE
+_VSCODE_STALE_THRESHOLD_SECONDS = login_node_hygiene.VSCODE_STALE_THRESHOLD_SECONDS
+_boot_time = login_node_hygiene.boot_time
+_process_start_epoch = login_node_hygiene.process_start_epoch
+_process_rss_bytes = login_node_hygiene.process_rss_bytes
+_find_vscode_remote_ssh_stacks = login_node_hygiene.find_vscode_remote_ssh_stacks
 
 
 def _terminate_tracked_run(state):
@@ -1554,98 +1500,6 @@ def _normalize_runner_args(runner_args):
     return normalized
 
 
-def _get_smtp_settings():
-    """Load SMTP settings from DATA_DIR/configs/smtp_settings.json with env overrides."""
-    file_settings = {}
-    smtp_config_path = DATA_DIR / "configs" / "smtp_settings.json"
-    try:
-        if smtp_config_path.exists():
-            with open(smtp_config_path, "r", encoding="utf-8") as f:
-                file_settings = json.load(f) or {}
-            if not isinstance(file_settings, dict):
-                file_settings = {}
-    except Exception as exc:
-        print(
-            f"[GUI] Failed to read SMTP config file {smtp_config_path}: {exc}",
-            flush=True,
-        )
-        file_settings = {}
-
-    host = (
-        os.environ.get("BIDS_RUNNER_SMTP_HOST") or file_settings.get("host") or ""
-    ).strip()
-    sender = (
-        os.environ.get("BIDS_RUNNER_SMTP_SENDER") or file_settings.get("sender") or ""
-    ).strip()
-    username = (
-        os.environ.get("BIDS_RUNNER_SMTP_USERNAME")
-        or file_settings.get("username")
-        or ""
-    ).strip()
-    password = os.environ.get("BIDS_RUNNER_SMTP_PASSWORD")
-    if password is None:
-        password = file_settings.get("password") or ""
-
-    port_source = os.environ.get("BIDS_RUNNER_SMTP_PORT")
-    if port_source is None:
-        port_source = file_settings.get("port", 587)
-
-    use_tls_source = os.environ.get("BIDS_RUNNER_SMTP_USE_TLS")
-    if use_tls_source is None:
-        use_tls_source = file_settings.get("use_tls", True)
-
-    if not host:
-        return None
-
-    try:
-        port = int(str(port_source).strip())
-    except ValueError:
-        port = 587
-
-    if isinstance(use_tls_source, bool):
-        use_tls = use_tls_source
-    else:
-        use_tls = str(use_tls_source).strip().lower() not in {"0", "false", "no", "off"}
-
-    if not sender:
-        sender = username
-
-    if not sender:
-        return None
-
-    return {
-        "host": host,
-        "port": port,
-        "sender": sender,
-        "username": username,
-        "password": password,
-        "use_tls": use_tls,
-    }
-
-
-def _send_run_completion_email(recipient, subject, body):
-    settings = _get_smtp_settings()
-    if not settings:
-        return False, "SMTP not configured"
-
-    message = EmailMessage()
-    message["From"] = settings["sender"]
-    message["To"] = recipient
-    message["Subject"] = subject
-    message.set_content(body)
-
-    try:
-        with smtplib.SMTP(settings["host"], settings["port"], timeout=30) as server:
-            if settings["use_tls"]:
-                server.starttls(context=ssl.create_default_context())
-            if settings["username"]:
-                server.login(settings["username"], settings["password"])
-            server.send_message(message)
-        return True, "sent"
-    except Exception as exc:
-        return False, str(exc)
-
-
 def _read_log_last_lines(log_path, max_lines=30, max_bytes=131072):
     """Read the last N lines from a log file efficiently."""
     text = _read_log_tail(log_path, max_bytes=max_bytes)
@@ -1686,80 +1540,6 @@ def _extract_failure_summary(log_excerpt, max_items=6):
     return "\n".join(f"- {line}" for line in selected)
 
 
-def _run_smtp_diagnostics():
-    settings = _get_smtp_settings()
-    if not settings:
-        return {
-            "configured": False,
-            "error": "SMTP not configured",
-        }
-
-    result = {
-        "configured": True,
-        "host": settings.get("host"),
-        "port": settings.get("port"),
-        "use_tls": bool(settings.get("use_tls")),
-        "sender": settings.get("sender"),
-        "username_set": bool(settings.get("username")),
-        "password_set": bool(settings.get("password")),
-        "connected": False,
-        "ehlo_ok": False,
-        "starttls_advertised": False,
-        "starttls_ok": False,
-        "auth_methods": [],
-        "login_ok": None,
-    }
-
-    try:
-        with smtplib.SMTP(settings["host"], settings["port"], timeout=20) as server:
-            result["connected"] = True
-
-            ehlo_code, ehlo_msg = server.ehlo()
-            result["ehlo_ok"] = 200 <= ehlo_code < 300
-            result["ehlo_code"] = ehlo_code
-            result["ehlo_message"] = (
-                ehlo_msg.decode("utf-8", errors="replace")
-                if isinstance(ehlo_msg, (bytes, bytearray))
-                else str(ehlo_msg)
-            )
-
-            features = dict(server.esmtp_features or {})
-            result["starttls_advertised"] = "starttls" in features
-            auth_raw = features.get("auth", "")
-            auth_methods = [m.strip().upper() for m in auth_raw.split() if m.strip()]
-            result["auth_methods"] = sorted(list(set(auth_methods)))
-
-            if settings.get("use_tls"):
-                if result["starttls_advertised"]:
-                    server.starttls(context=ssl.create_default_context())
-                    result["starttls_ok"] = True
-                    server.ehlo()
-                    features = dict(server.esmtp_features or {})
-                    auth_raw = features.get("auth", "")
-                    auth_methods = [
-                        m.strip().upper() for m in auth_raw.split() if m.strip()
-                    ]
-                    result["auth_methods"] = sorted(list(set(auth_methods)))
-                else:
-                    result["starttls_error"] = (
-                        "TLS requested but STARTTLS not advertised"
-                    )
-
-            username = settings.get("username")
-            if username:
-                try:
-                    server.login(username, settings.get("password", ""))
-                    result["login_ok"] = True
-                except Exception as exc:
-                    result["login_ok"] = False
-                    result["login_error"] = str(exc)
-
-    except Exception as exc:
-        result["error"] = str(exc)
-
-    return result
-
-
 register_system_routes(
     app,
     version=__version__,
@@ -1776,8 +1556,6 @@ register_system_routes(
     sanitize_machine_settings=_sanitize_machine_settings,
     get_effective_machine_settings=_get_effective_machine_settings,
     global_settings_path=GLOBAL_SETTINGS_PATH,
-    run_smtp_diagnostics=_run_smtp_diagnostics,
-    send_run_completion_email=_send_run_completion_email,
 )
 
 
@@ -1804,7 +1582,6 @@ def _monitor_run_job(run_id):
         state["process"] = None
 
         stop_requested = bool(state.get("stop_requested"))
-        notify_email = (state.get("notify_email") or "").strip()
         project_id = state.get("project_id")
         log_file = state.get("log_file")
         cmd = state.get("cmd") or []
@@ -1819,9 +1596,6 @@ def _monitor_run_job(run_id):
     else:
         status_label = "Failed"
         result_label = "FAILED"
-
-    if not notify_email:
-        return
 
     duration_seconds = max(0, int(time.time() - started_at))
     host_name = platform.node() or "unknown-host"
@@ -1843,46 +1617,37 @@ def _monitor_run_job(run_id):
         log_excerpt = "<No log excerpt available>"
     failure_summary = _extract_failure_summary(log_excerpt)
 
-    subject = f"BIDS App Runner {status_label}: {run_id}"
-    failure_summary_block = ""
-    if result_label != "SUCCESS":
-        if failure_summary:
-            failure_summary_block = f"\nFailure summary:\n{failure_summary}\n"
-        else:
-            failure_summary_block = "\nFailure summary:\n- No explicit ERROR/Traceback lines found in the last 30 log lines.\n"
+    detail_lines = [
+        f"Result: {result_label} (rc={return_code})",
+        f"Project: {project_name}",
+        f"Duration: {duration_seconds}s on {host_name}",
+    ]
+    if failure_summary:
+        detail_lines.append(f"Failure: {failure_summary}")
+    if log_file:
+        detail_lines.append(f"Log: {log_file}")
 
-    body = (
-        (
-            f"Run ID: {run_id}\n"
-            f"Result: {result_label}\n"
-            f"Status: {status_label}\n"
-            f"Return code: {return_code}\n"
-            f"Start time: {started_iso}\n"
-            f"End time: {finished_iso}\n"
-            f"Duration (seconds): {duration_seconds}\n"
-            f"Host: {host_name}\n"
-            f"Project: {project_name}\n"
-            f"Project ID: {project_id or 'N/A'}\n"
-            f"Log file: {log_file or 'N/A'}\n"
-            f"\nCommand:\n{command_text}\n"
-        )
-        + failure_summary_block
-        + f"\nLast 30 log lines:\n{log_excerpt}\n"
+    succeeded = return_code == 0 and not stop_requested
+    sent = prism_notify.notify_run_completion(
+        run_label=f"{project_name} ({run_id})",
+        success=succeeded,
+        detail="\n".join(detail_lines),
     )
 
-    sent, details = _send_run_completion_email(notify_email, subject, body)
     with RUN_JOBS_LOCK:
         state = RUN_JOBS.get(run_id)
         if not state:
             return
-        state["email_notified"] = bool(sent)
-        state["email_details"] = details
+        state["notified"] = bool(sent)
 
     if sent:
-        print(f"[GUI] Completion email sent to {notify_email} for {run_id}", flush=True)
+        print(f"[GUI] ntfy notification sent for {run_id}", flush=True)
     else:
+        # Best-effort by design: an unconfigured or unreachable ntfy must
+        # never make a finished run look like a failed one.
         print(
-            f"[GUI] Failed to send completion email to {notify_email} for {run_id}: {details}",
+            f"[GUI] ntfy notification not sent for {run_id} "
+            f"(see configs/ntfy.conf; this does not affect the run)",
             flush=True,
         )
 
@@ -2040,5 +1805,14 @@ if __name__ == "__main__":
     if _is_loopback_host(host):
         url = f"http://{display_host}:{port}"
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+
+    if _start_idle_watchdog():
+        cap_minutes = login_node_hygiene.GUI_IDLE_EXIT_SECONDS // 60
+        print(
+            f"🧹 SLURM login node detected: this GUI will shut itself down "
+            f"after {cap_minutes} min idle (in-flight clones/pulls always win). "
+            f"See CLAUDE.md.",
+            flush=True,
+        )
 
     serve(app, host=host, port=port, threads=4)

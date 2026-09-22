@@ -25,8 +25,6 @@ def register_system_routes(
     sanitize_machine_settings: Callable[[dict[str, Any]], dict[str, Any]],
     get_effective_machine_settings: Callable[..., dict[str, Any]],
     global_settings_path: Path,
-    run_smtp_diagnostics: Callable[[], dict[str, Any]],
-    send_run_completion_email: Callable[[str, str, str], tuple[bool, Any]],
 ):
     @app.route("/health")
     def health():
@@ -248,31 +246,3 @@ def register_system_routes(
             200,
         )
 
-    @app.route("/smtp_diagnostics", methods=["POST"])
-    def smtp_diagnostics():
-        data = request.get_json(silent=True) or {}
-        send_test = bool(data.get("send_test", False))
-        recipient = str(data.get("recipient") or "").strip()
-
-        diagnostics = run_smtp_diagnostics()
-        response = {"diagnostics": diagnostics}
-        if send_test:
-            if not recipient:
-                return (
-                    jsonify({"error": "recipient is required when send_test=true"}),
-                    400,
-                )
-
-            subject = "BIDS App Runner SMTP diagnostic test"
-            body = (
-                "This is a diagnostic test email from BIDS App Runner.\n"
-                f"Time: {datetime.now().isoformat()}\n"
-            )
-            sent, details = send_run_completion_email(recipient, subject, body)
-            response["test_email"] = {
-                "recipient": recipient,
-                "sent": bool(sent),
-                "details": details,
-            }
-
-        return jsonify(response), 200

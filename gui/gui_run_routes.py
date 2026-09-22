@@ -210,13 +210,17 @@ def register_run_routes(
                 detail="Found." if os.path.exists(fs_license_file) else f"Path does not exist: {fs_license_file}",
             )
 
+        # Validates the address SLURM itself will mail via
+        # "#SBATCH --mail-user" (see submit_bids_cohort.sh). The GUI's own
+        # SMTP path is gone; completion now goes out over ntfy.
         notify_email = str(common.get("notify_email", "")).strip()
         if notify_email:
+            valid = bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", notify_email))
             add(
                 "notify_email",
-                "Notification Email format",
-                bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", notify_email)),
-                detail="Valid." if re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", notify_email) else "Invalid email format.",
+                "SLURM notification email format",
+                valid,
+                detail="Valid." if valid else "Invalid email format.",
             )
 
         # Surfaces which execution adapter will actually be used and how it
@@ -274,7 +278,6 @@ def register_run_routes(
         runner_args = normalize_runner_args(data.get("runner_args", []))
         max_usage_enabled = bool(data.get("max_usage_enabled", False))
         max_usage_percent = data.get("max_usage_percent", 100)
-        notify_email = (data.get("notify_email") or "").strip()
         if not config_path_raw:
             return jsonify({"error": "No config path provided"}), 400
 
@@ -289,13 +292,6 @@ def register_run_routes(
             )
 
             common = runtime_cfg.get("common", {})
-            if not notify_email:
-                notify_email = str(common.get("notify_email", "")).strip()
-
-            if notify_email and not re.match(
-                r"^[^@\s]+@[^@\s]+\.[^@\s]+$", notify_email
-            ):
-                return jsonify({"error": "Notification email format is invalid."}), 400
 
             engine = common.get("container_engine", "apptainer")
 
@@ -566,7 +562,6 @@ def register_run_routes(
                     "log_file": str(log_file_path),
                     "started_at": time.time(),
                     "cmd": cmd,
-                    "notify_email": notify_email,
                     "stop_requested": False,
                     "returncode": None,
                     "finished_at": None,
@@ -589,11 +584,7 @@ def register_run_routes(
                     "message": (
                         f"BIDS App Runner started in background. Command: {' '.join(cmd)}"
                         + runtime_note
-                        + (
-                            f". Completion email will be sent to {notify_email}."
-                            if notify_email
-                            else ""
-                        )
+                        + " Completion will be pushed via ntfy."
                     ),
                     "run_id": run_id,
                 }

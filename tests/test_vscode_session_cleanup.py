@@ -5,11 +5,20 @@ from pathlib import Path
 import pytest
 from flask import Flask
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+import login_node_hygiene
 import prism_app_runner
 import gui.gui_system_routes as gui_system_routes
 
 
-# ── _find_vscode_remote_ssh_stacks() unit tests ─────────────────────────────
+# ── find_vscode_remote_ssh_stacks() unit tests ──────────────────────────────
+#
+# The /proc logic moved to scripts/login_node_hygiene.py so the cron reaper
+# and this GUI banner share one definition of "stale". prism_app_runner
+# re-exports it, so these patch the module that actually owns it.
 
 
 def test_process_start_epoch_matches_real_process():
@@ -29,24 +38,22 @@ def test_find_vscode_remote_ssh_stacks_groups_by_hash_and_flags_stale(monkeypatc
         201: "/x/.vscode-server/cli/servers/stable-bbbb2222/server/node server-main.js",
         999: "/usr/bin/some-unrelated-process",
     }
-    monkeypatch.setattr(prism_app_runner, "_iter_proc_pids", lambda: list(fake_cmdlines))
+    monkeypatch.setattr(login_node_hygiene, "iter_proc_pids", lambda: list(fake_cmdlines))
     monkeypatch.setattr(
-        prism_app_runner, "_read_proc_cmdline", lambda pid: fake_cmdlines[pid]
+        login_node_hygiene, "read_proc_cmdline", lambda pid: fake_cmdlines[pid]
     )
-    monkeypatch.setattr(prism_app_runner.os, "getuid", lambda: 4242)
-    monkeypatch.setattr(
-        prism_app_runner.os, "stat", lambda path: type("S", (), {"st_uid": 4242})()
-    )
+    monkeypatch.setattr(login_node_hygiene.os, "getuid", lambda: 4242)
+    monkeypatch.setattr(login_node_hygiene, "process_owner_uid", lambda pid: 4242)
 
     now = 1_000_000.0
-    monkeypatch.setattr(prism_app_runner.time, "time", lambda: now)
+    monkeypatch.setattr(login_node_hygiene.time, "time", lambda: now)
     starts = {101: now - 20 * 3600, 102: now - 19 * 3600, 201: now - 60}
     monkeypatch.setattr(
-        prism_app_runner, "_process_start_epoch", lambda pid: starts[pid]
+        login_node_hygiene, "process_start_epoch", lambda pid: starts[pid]
     )
-    monkeypatch.setattr(prism_app_runner, "_process_rss_bytes", lambda pid: 100)
+    monkeypatch.setattr(login_node_hygiene, "process_rss_bytes", lambda pid: 100)
 
-    stacks = prism_app_runner._find_vscode_remote_ssh_stacks()
+    stacks = login_node_hygiene.find_vscode_remote_ssh_stacks()
 
     by_hash = {s["hash"]: s for s in stacks}
     assert set(by_hash) == {"aaaa1111", "bbbb2222"}
@@ -64,20 +71,18 @@ def test_find_vscode_remote_ssh_stacks_ignores_other_users(monkeypatch):
         2: "/x/.vscode-server/cli/servers/stable-bbbb1111/server/node server-main.js",
     }
     uid_by_pid = {1: 111, 2: 222}
-    monkeypatch.setattr(prism_app_runner, "_iter_proc_pids", lambda: list(fake_cmdlines))
+    monkeypatch.setattr(login_node_hygiene, "iter_proc_pids", lambda: list(fake_cmdlines))
     monkeypatch.setattr(
-        prism_app_runner, "_read_proc_cmdline", lambda pid: fake_cmdlines[pid]
+        login_node_hygiene, "read_proc_cmdline", lambda pid: fake_cmdlines[pid]
     )
-    monkeypatch.setattr(prism_app_runner.os, "getuid", lambda: 111)
+    monkeypatch.setattr(login_node_hygiene.os, "getuid", lambda: 111)
     monkeypatch.setattr(
-        prism_app_runner.os,
-        "stat",
-        lambda path: type("S", (), {"st_uid": uid_by_pid[int(path.split("/")[2])]})(),
+        login_node_hygiene, "process_owner_uid", lambda pid: uid_by_pid[pid]
     )
-    monkeypatch.setattr(prism_app_runner, "_process_start_epoch", lambda pid: None)
-    monkeypatch.setattr(prism_app_runner, "_process_rss_bytes", lambda pid: 0)
+    monkeypatch.setattr(login_node_hygiene, "process_start_epoch", lambda pid: None)
+    monkeypatch.setattr(login_node_hygiene, "process_rss_bytes", lambda pid: 0)
 
-    stacks = prism_app_runner._find_vscode_remote_ssh_stacks()
+    stacks = login_node_hygiene.find_vscode_remote_ssh_stacks()
 
     assert [s["hash"] for s in stacks] == ["aaaa0000"]
 
@@ -103,8 +108,6 @@ def _make_app(find_stacks=None, terminate=None):
         sanitize_machine_settings=lambda s: s,
         get_effective_machine_settings=lambda **kw: {},
         global_settings_path=Path("/tmp/does-not-matter.json"),
-        run_smtp_diagnostics=lambda: {},
-        send_run_completion_email=lambda *a: (True, {}),
     )
     app.config["TESTING"] = True
     return app

@@ -66,6 +66,47 @@ If you're adding a *new* code path that shells out to a container engine
 equivalent one) -- don't reintroduce a login-node execution path by adding
 a new entry point that bypasses `execute_local()`.
 
+### ⚠️ A guard only protects processes started *after* it landed
+
+Second incident (2026-09-22, another admin warning). A
+`prism_app_runner.py` GUI daemon was found still running on `IT010128`
+after **62 days**. It had started 2026-07-22; the login-node guard above
+landed 2026-07-29 in `c5edee6`. A running Python process keeps the code it
+loaded at startup, so **that daemon never had the guard at all** -- for its
+whole life its "Run" button would have executed containers straight onto
+the login node. The policy was fixed in git and still violated in memory.
+
+Alongside it: orphaned `tail -f`/`grep` watchers from Claude Code sessions
+that had exited 48 days earlier, and VS Code server stacks 41 and 91 days
+old. None of this is *compute*, so none of it was the sort of thing
+`execute_local()` looks for.
+
+Two rules follow, and both are enforced in code:
+
+- **Long-lived processes get a bounded lifetime.** The GUI now shuts
+  itself down after 30 min idle on a bare login node
+  (`_should_shut_down_now()` in `prism_app_runner.py`, decided by
+  `login_node_hygiene.should_exit_idle()`). In-flight `datalad clone`s and
+  container pulls always win -- see `_job_registries()`. Timer-driven
+  status polls deliberately do **not** count as activity, or a forgotten
+  browser tab would keep it alive forever. The cap is inert off a login
+  node, so `install_macos.sh` collaborators are unaffected.
+- **Residue gets reaped, not just reported.** `scripts/login_node_hygiene.py`
+  runs hourly from cron. It only ever touches this user's own UID, and
+  `is_protected()` vetoes anything with living children, a `SLURM_JOB_ID`,
+  or in the reaper's own lineage. Age alone is never sufficient: in the
+  real incident one 20-day-old VS Code stack was the live session and two
+  older ones were abandoned, and only the child check told them apart.
+
+When you add a new daemon, background thread, or watcher that can outlive
+a single request, give it a lifetime bound or a reap rule. "It's only
+running while someone's using it" is exactly what was believed about the
+62-day GUI.
+
+**Before debugging a guard that "should" have fired, check how long the
+process has been up** (`ps -o lstart= -p <pid>`) against when the guard
+landed (`git log -S <symbol>`). A stale process is not a broken guard.
+
 ## Chip away at the monoliths
 
 `templates/index.html` (~7100 lines, most of it one inline `<script>` block)

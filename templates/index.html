@@ -918,7 +918,8 @@
                             <input type="text" class="form-control" id="config_name" placeholder="config.json">
                         </div>
                         <div class="col-md-3 mb-4">
-                            <label class="form-label">Notification Email</label>
+                            <label class="form-label">SLURM Notification Email</label>
+                            <div class="form-text">Used for <code>#SBATCH --mail-user</code>. Run completion is pushed via ntfy (see <code>configs/ntfy.conf</code>).</div>
                             <input type="email" class="form-control" id="notify_email" placeholder="name@example.org">
                         </div>
                     </div>
