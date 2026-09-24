@@ -130,23 +130,40 @@ stale daemon. Separately, `incremental_datalad_save.sh --dry-run` -- which
 is explicitly exempted from that script's own guard on the theory that a
 dry run is cheap -- still timed out after 100s across only 112 subjects on
 this filesystem. "Read-only" and "explicitly marked cheap" both turned out
-not to mean "actually cheap" here; NFS latency and git-annex's per-object
-bookkeeping dominate regardless of whether anything is being written.
+not to mean "actually cheap" here.
 
-**Lesson, until this gets an actual code guard**: any git/git-annex
-operation that walks history or diffs against a large annex working tree --
-unscoped `git status`, `git diff-tree`, `git log -p`, `find` over an annex
-checkout, etc. -- must be treated as real work and run via `sbatch` or
-under `salloc`/`srun`, never bare on the login node, *even when it's
-read-only and even when a tool says its dry-run/status-check mode is
-exempt*. If you're investigating a dataset this size, scope every git
-command to the narrowest path you can (a single subject's subtree, a single
-commit) and prefer submitting a small diagnostic script over running the
-check interactively -- see `scripts/audit_subregion_commits.sh` for the
-pattern this incident led to. Flagging as a first-order problem: a proper
-fix would extend the `execute_local()`-style chokepoint to cover heavy
-read-only git-annex operations too, not just container/data-movement calls,
-since right now this category is policy-only with no enforcement.
+**The reason is already documented, and it is not slowness -- it is a
+hang.** `docs/superpowers/specs/2026-09-09-annex-slurm-design.md` explains
+that dataset `134` carries git-annex **keys-DB reconciliation drift**
+(accumulated from weeks of interrupted write operations), and that *every
+command needing to COMPARE something* hangs on it, "regardless of scope":
+`git status`, `git diff`, `git add`, `git fsck`, `git read-tree HEAD`,
+`datalad unlock`/`status`/`save`, `git annex copy`, and -- confirmed
+2026-09-23, 43 minutes at **0% CPU with unreaped zombie children** --
+`git annex lock`. Commands that only read or write *already-known* state
+stay fast at any repo size: `git ls-tree`, `write-tree`, `commit-tree`,
+`update-ref`, `git annex calckey`/`setkey`/`fromkey`/`contentlocation`/
+`setpresentkey`, ref-level `git push`, `rsync`. That table is the whole
+reason `annex-slurm` exists.
+
+**So the rule is about which column a command sits in, not how "heavy" it
+looks.** Do not reach for `git status`/`diff`/`add` on `134` at all -- not
+scoped, not in a job, not "just to check": they do not finish. Use the
+object-graph and known-state commands instead (`git ls-tree`,
+`git diff-tree`, `git diff-index --cached`, `git ls-files`), which return
+in seconds -- `scripts/audit_subregion_commits.sh` and
+`scripts/commit_staged_subregions.sh` are both built only from those.
+Anything that does real compute or data movement still goes through
+`sbatch`/`salloc`, never the login node.
+
+This is now **enforced**, not just documented:
+`scripts/hooks/block_unscheduled_heavy_cmds.sh` (wired as a `PreToolUse`
+Bash hook in `.claude/settings.json`, tested by
+`scripts/hooks/test_block_unscheduled_heavy_cmds.sh`) hard-refuses the
+comparison and data-movement commands against `/cl_tmp` or `/datalad`
+unless they are wrapped in `srun`/`sbatch`/`salloc`, while deliberately
+leaving the fast object-graph reads and SLURM status commands alone. It
+inspects only the command string, so it is a guardrail, not a sandbox.
 
 ## Chip away at the monoliths
 

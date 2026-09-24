@@ -21,13 +21,14 @@
 # A plain `git commit` won't do, because the index ALSO carries 95302 `T`
 # (typechange) and 182 `D` divergences of unrelated//pre-existing origin that
 # must NOT be committed; and `git commit -- <pathspec>` would re-read those
-# paths from the WORKING TREE, re-invoking git-annex's smudge/clean filters.
-# On this dataset that never finishes: a plain `git status` scoped to ONE
-# subject sat at 0% CPU for 4+ hours. Most likely cause is not a deadlock but
-# sheer cost -- ~95300 annexed files are sitting unlocked, so the clean filter
-# has to hash tens of GB of .mgz over NFS to decide whether content changed
-# (0% CPU is I/O wait, not a stall). scripts/relock_unlocked_annex.sh tests
-# that explanation directly by re-locking and re-running the same check.
+# paths from the WORKING TREE, i.e. ask git to COMPARE -- which on this dataset
+# never finishes. That is not news: dataset 134 carries git-annex keys-DB
+# reconciliation drift, and every comparison-requiring command (`git status`,
+# `git diff`, `git add`, `git fsck`, `git read-tree HEAD`, `datalad status`,
+# `git annex copy`, and -- confirmed 2026-09-23 -- `git annex lock`) hangs on
+# it regardless of scope. See docs/superpowers/specs/2026-09-09-annex-slurm-design.md;
+# avoiding those commands is the whole reason annex-slurm exists. This script
+# stays in the "fast" column: it only reads and writes already-known state.
 #
 # So the commit is built purely from git objects, via plumbing:
 #   temp index <- HEAD, apply ONLY the staged subregion additions,

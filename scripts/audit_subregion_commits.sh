@@ -69,8 +69,12 @@ printf '%s\n' "${nonempty_subjects[@]}"
 echo
 echo "=== Cross-check: files currently tracked in HEAD's tree matching subfield outputs ==="
 git ls-tree -r HEAD --name-only | grep -c 'hippoAmygLabels\.long\.mgz$'
-echo "(compare this to 121 subjects x up to 3 sessions = up to 363 possible; each real"
-echo " longitudinal timepoint contributes one lh.hippoAmygLabels.long.mgz if truly saved)"
+echo "(each real longitudinal timepoint contributes one lh.hippoAmygLabels.long.mgz"
+echo " if truly saved. NOTE the cohort is 117 subjects, not 121: sub-134053, -134061,"
+echo " -134069 and -134081 do not exist in the dataset at all -- absent from the raw"
+echo " superdataset's tree, absent from disk, absent from participants.tsv, which has"
+echo " 117 rows. 121 is merely the highest subject ID, so '121 - 117 = 4 missing' reads"
+echo " a gap in the numbering as missing data. Full coverage is 117.)"
 
 echo
 echo "Finished:   $(date)"

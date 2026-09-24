@@ -44,7 +44,7 @@ stayed fast regardless of repo size or accumulated drift:
 | `git ls-tree`, `git write-tree`, `git commit-tree`, `git update-ref` | `git read-tree HEAD` (no explicit tree target) |
 | `git push` (ref-level) | `datalad unlock` / `status` / `save` / `slurm-schedule` / `slurm-finish` |
 | `git annex setpresentkey` | `git annex copy --to <remote>` (its P2P protocol needs to *read* local content for transfer, which re-triggers the same local reconciliation) |
-| `rsync` (raw object transfer) | |
+| `rsync` (raw object transfer) | `git annex lock` (added 2026-09-23: it must verify working-tree content against the recorded key to decide whether locking is safe, i.e. compare. Hung 43 min at 0% CPU with four unreaped zombie `git` children, having locked 0 of 500 paths, before being cancelled. Note `git annex unlock` is in the fast column -- it materializes content from a known key and compares nothing.) |
 
 `annex-slurm` is built entirely from the left column. It has no
 dependency on datalad's CLI or Python API, and it never asks git or
@@ -192,5 +192,14 @@ this cluster, not a toy repo:
 
 Branch `annex-slurm` in this repo for now; the goal is a separate,
 standalone public repository once the design is validated further at
-production scale (currently validated at 3-subject scale; `134`'s full
-121-subject, 117-timepoint cohort is the next real test, not yet run).
+production scale. Updated 2026-09-23: `134`'s full cohort HAS now run
+through it -- 117 subjects (not 121; `sub-134053`, `-134061`, `-134069` and
+`-134081` are gaps in the ID numbering and exist nowhere in the dataset,
+and `participants.tsv` has 117 rows), 306 longitudinal timepoints, 7903
+subregion files. It surfaced one real bug in `annex-slurm-finish`: staging
+into the temp index via `git annex fromkey` silently no-ops when the
+working-tree symlink already matches the key, so 132 consecutive commits
+were EMPTY while every check in the tool passed. Fixed by staging with
+`git update-index --cacheinfo` plus a gate that refuses to commit unless
+the tree records exactly the staged paths; regression test in
+`annex-slurm/test/smoke_test.sh`.

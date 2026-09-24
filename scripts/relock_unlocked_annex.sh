@@ -37,8 +37,14 @@
 # a separate decision, deliberately out of scope here.
 #
 # Usage:
-#   sbatch scripts/relock_unlocked_annex.sh           # REPORT ONLY (default)
-#   sbatch scripts/relock_unlocked_annex.sh --lock    # actually re-lock
+#   sbatch scripts/relock_unlocked_annex.sh                      # REPORT ONLY
+#   sbatch scripts/relock_unlocked_annex.sh --lock --limit 500   # prove it small
+#   sbatch scripts/relock_unlocked_annex.sh --lock               # all of them
+#
+# Verifying it worked needs no git plumbing: a LOCKED annexed file is a symlink
+# into .git/annex/objects, an UNLOCKED one is a regular file. The script prints
+# `ls -ld` for a few paths before and after, then counts how many of the paths
+# it attempted are symlinks now -- that count IS the result.
 
 set -uo pipefail
 
@@ -48,7 +54,14 @@ BATCH="${BATCH:-500}"
 VERIFY_SUBJECT="${VERIFY_SUBJECT:-sub-134006}"
 
 DO_LOCK=false
-[[ "${1:-}" == "--lock" ]] && DO_LOCK=true
+LIMIT=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --lock)  DO_LOCK=true; shift ;;
+        --limit) LIMIT="${2:-0}"; shift 2 ;;
+        *)       echo "[ERROR] unknown option: $1" >&2; exit 1 ;;
+    esac
+done
 
 die() { echo "[ERROR] $*" >&2; exit 1; }
 
@@ -91,13 +104,29 @@ git -c core.quotePath=false diff-index --cached --raw HEAD > "${WORK}/raw"
 # those 287 behind.
 awk -F'\t' '$1 ~ /^:120000 10(0644|0755)/ && $1 ~ /T$/ {print $2}' "${WORK}/raw" > "$UNLOCKED"
 awk -F'\t' '$1 ~ /D$/ {print $2}' "${WORK}/raw" > "$DELETED"
-N_UNLOCKED=$(wc -l < "$UNLOCKED")
 N_DELETED=$(wc -l < "$DELETED")
 N_RAW=$(wc -l < "${WORK}/raw")
+N_FOUND=$(wc -l < "$UNLOCKED")
+
+# --limit: prove the lock path on a small slice before committing to all ~95k.
+# The lock code path is the part that actually writes, so it gets exercised
+# small first -- running an unexercised write path at full scale is how this
+# cohort lost 4 days already.
+#
+# shuf, NOT head: the list is alphabetical, so its first few hundred entries are
+# all tiny .slurm_logs/*.err text files. Locking those would exercise nothing
+# that matters -- the risk lives in the large .mgz volumes. A random slice spans
+# both. Deterministic ordering is worth nothing here; representativeness is.
+if [[ "$LIMIT" -gt 0 ]]; then
+    shuf -n "$LIMIT" "$UNLOCKED" > "${UNLOCKED}.limited"
+    mv "${UNLOCKED}.limited" "$UNLOCKED"
+fi
+N_UNLOCKED=$(wc -l < "$UNLOCKED")
 
 echo "      total index/HEAD divergences : ${N_RAW}"
-echo "      unlocked (120000 -> 100644/755): ${N_UNLOCKED}"
+echo "      unlocked (120000 -> 100644/755): ${N_FOUND}"
 echo "      deletions (reported only)    : ${N_DELETED}"
+[[ "$LIMIT" -gt 0 ]] && echo "      --limit ${LIMIT}: acting on ${N_UNLOCKED} of them only"
 echo
 echo "      other transitions (NOT touched by this script):"
 awk -F'\t' '!($1 ~ /^:120000 10(0644|0755)/ && $1 ~ /T$/) {split($1,a," "); print a[1], a[2], a[5]}' "${WORK}/raw" \
@@ -121,6 +150,13 @@ else
     else
         echo
         echo "[2/4] re-locking ${N_UNLOCKED} path(s) in batches of ${BATCH}..."
+        # How to check by eye: a LOCKED annexed file is a symlink into
+        # .git/annex/objects; an UNLOCKED one is a regular file. So "did it
+        # work" is simply "is it a symlink now". Show a few before/after.
+        echo "      BEFORE (expect regular files, '-rw...'):"
+        head -3 "$UNLOCKED" | while IFS= read -r p; do
+            ls -ld -- "$p" 2>&1 | sed 's/^/        /'
+        done
         # No --force: a genuinely modified file must be refused, not reverted.
         batch_no=0
         failed_batches=0
@@ -144,6 +180,25 @@ else
         if [[ "$REFUSED" -gt 0 ]]; then
             echo "      sample:"
             grep -iE 'cannot|fail|error|modified' "${WORK}/lock.log" | head -10 | sed 's/^/        /'
+        fi
+
+        echo "      AFTER (expect symlinks, 'lrwx... -> ../../.git/annex/objects/...'):"
+        head -3 "$UNLOCKED" | while IFS= read -r p; do
+            ls -ld -- "$p" 2>&1 | sed 's/^/        /'
+        done
+        # The decisive, cheap check: a locked annexed file IS a symlink, so
+        # count how many of the attempted paths are symlinks now. Pure stat --
+        # no hashing, no filters, so this stays fast even at full scale.
+        now_symlink=0; still_regular=0
+        while IFS= read -r p; do
+            if [[ -L "$p" ]]; then now_symlink=$((now_symlink + 1))
+            else still_regular=$((still_regular + 1)); fi
+        done < "$UNLOCKED"
+        echo "      re-locked (symlink now)   : ${now_symlink}/${N_UNLOCKED}"
+        echo "      still a regular file      : ${still_regular}"
+        if [[ "$still_regular" -gt 0 ]]; then
+            echo "      => those ${still_regular} were refused; they have real modifications."
+            echo "         Inspect before forcing anything: git annex info <path>"
         fi
     fi
 fi

@@ -185,9 +185,13 @@ def summarize(path):
         f"  Processes     peak {max(procs):8d}   median {_median(procs):8.0f}",
     ]
     if ranks:
+        # Ranks are assigned over a reverse=True (descending CPU) sort, so
+        # rank 1 is the BUSIEST user. min(ranks) is therefore this account's
+        # heaviest moment, not its lightest -- labelling it "best" inverted the
+        # meaning of the one number this report exists to make defensible.
         lines.append(
-            f"  Rank by CPU   best {min(ranks):8d}   median {_median(ranks):8.0f}"
-            f"   (of ~{max(totals)} users)"
+            f"  Rank by CPU   busiest {min(ranks):5d}   median {_median(ranks):5.0f}"
+            f"   (of ~{max(totals)} users; rank 1 = heaviest user on the node)"
         )
     return "\n".join(lines)
 
