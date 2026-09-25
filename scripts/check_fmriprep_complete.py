@@ -22,6 +22,7 @@ Needs nibabel, which isn't a bids_apps_runner dependency -- run via:
 """
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -57,6 +58,11 @@ def _nvols(path: Path) -> Optional[int]:
 def _preproc_path_for(raw_bold: Path, fmriprep_dir: Path, bids_dir: Path, space: str) -> Path:
     rel_dir = raw_bold.parent.relative_to(bids_dir)  # sub-X[/ses-Y]/func
     stem = raw_bold.name.removesuffix(".nii.gz").removesuffix("_bold")
+    # fMRIPrep COMBINES multi-echo runs, so its output carries no `echo-`
+    # entity even though each raw echo does. Keeping it made every multi-echo
+    # subject look missing -- ds006707 had all 184 runs flagged while the data
+    # was on disk. Other entities (part-mag, dir-AP, run-N) are preserved.
+    stem = re.sub(r"_echo-[0-9]+", "", stem)
     return fmriprep_dir / rel_dir / f"{stem}_space-{space}_desc-preproc_bold.nii.gz"
 
 
@@ -78,8 +84,14 @@ def fmriprep_complete_report(
             raw_files.extend(sorted(subject_dir.glob(f"**/func/*task-{task}*_bold.nii.gz")))
 
         runs = []
+        seen_preproc = set()
         for raw_bold in raw_files:
             preproc = _preproc_path_for(raw_bold, fp_root, bids_root, space)
+            # Several raw echoes collapse onto one combined output; report that
+            # output once rather than once per echo.
+            if str(preproc) in seen_preproc:
+                continue
+            seen_preproc.add(str(preproc))
             if not preproc.exists():
                 runs.append({"raw": str(raw_bold), "preproc": str(preproc), "ok": False, "reason": "missing"})
                 continue
@@ -95,14 +107,35 @@ def fmriprep_complete_report(
             else:
                 runs.append({"raw": str(raw_bold), "preproc": str(preproc), "ok": True, "nvols": proc_nvols})
 
-        complete = bool(runs) and all(r["ok"] for r in runs)
+        # Completeness is "at least one verified scan", NOT "every raw run
+        # processed". Since 3c7d25a (2026-09-21) this megastudy is
+        # cross-sectional -- each subject contributes exactly one scan, so an
+        # unprocessed sibling session is a deliberate choice. Requiring all of
+        # them reported by-design behaviour as data loss (ds004592: "ok=1/2"
+        # for all 27 subjects; ds005339 and ds004466 likewise).
+        #
+        # A run whose output is ABSENT is therefore not an error. A run whose
+        # output EXISTS but is truncated or unreadable still is -- catching
+        # exactly that is why this tool exists, so the relaxation must not
+        # excuse it.
+        verified = [r for r in runs if r["ok"]]
+        corrupt = [r for r in runs if not r["ok"] and r.get("reason") != "missing"]
+        complete = bool(verified) and not corrupt
+
+        if complete:
+            reason = None
+        elif not runs:
+            reason = f"no resting-state raw BOLD found for task(s) {task_labels}"
+        elif corrupt:
+            reason = "; ".join(sorted({r["reason"] for r in corrupt}))
+        else:
+            reason = "no resting-state run has a verified fMRIPrep output"
+
         results[subject] = {
             "complete": complete,
+            "verified_runs": len(verified),
             "runs": runs,
-            "reason": None if complete else (
-                f"no resting-state raw BOLD found for task(s) {task_labels}" if not runs
-                else "at least one resting-state run's fMRIPrep output is missing or truncated"
-            ),
+            "reason": reason,
         }
 
     return results
