@@ -207,3 +207,38 @@ because it's in the same file.
   When extracting a function out of the inline `<script>` per the rule
   above, add a `tests_js/*.test.js` case for it in the same change --
   that's the point of extracting it.
+
+## Pipeline stage handoffs are contracts, not directory checks
+
+This megastudy is a multi-stage pipeline (raw BIDS → MRIQC → fmriprep →
+QA subject-list filtering → connectoflow's fmridenoiser → connectomix),
+split across this repo and `connectoflow-slurm`. Every stage boundary must
+declare, in one place both producer and consumer read, the exact
+artifact(s) that mean "done" -- not exit code 0, not a report file, not a
+directory existing -- and the exact precondition the next stage requires
+before it starts. A consumer must verify its precondition *before*
+submitting work and refuse loudly if it fails (matching the
+`LoginNodeExecutionError` pattern above), rather than submit N array tasks
+that all fail identically. `-d "$dir"` / `.exists()` on a scaffold path
+(e.g. a project's `.datalad` directory, an output clone's presence) is
+*not* a contract check -- it proves the scaffold was created, not that the
+step that populates it ever ran or succeeded.
+
+Two real incidents this pattern would have caught, in this repo alone:
+- `check_fmriprep_complete.py` (fixed 2026-09-25, `c197ae2`) checked every
+  raw candidate resting-state run had output, when the 2026-09-21
+  cross-sectional-design change (`3c7d25a`) meant only the QA-*selected*
+  run ever would -- the checker's contract had silently drifted from what
+  fmriprep's own selection logic actually promised.
+- `build_qa_subject_list.py`'s `--bids-filters-out` (2026-09-21) pinned a
+  subject's selected BOLD run to one session without also telling fmriprep
+  which session to use for anat, and without disabling fmriprep's own
+  session auto-discovery (`--no-track-sessions`) -- the two ends of that
+  handoff each had a different idea of what "this subject's session" meant.
+
+Same principle, mirrored in `connectoflow-slurm`'s own CLAUDE.md: see that
+repo's `cmd_setup`/`cmd_submit` fix (2026-09-28) for the canonical example
+of a `.datalad`-exists check standing in for "inputs were actually
+registered," and the real-execution (no mocking) integration test pattern
+used to pin the fix -- `tests/integration/test_setup_resume_self_heals_inputs.py`
+and `tests/integration/test_submit_refuses_missing_inputs.py` there.
