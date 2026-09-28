@@ -30,25 +30,47 @@
 # entirely: both data/ and derivatives/ clones, confirmed clean and fully
 # pushed to origin before deletion.
 #
-# Everything else (ds000031, ds000256, ds002372, ds003823, ds003849,
-# ds004182, ds004466, ds005127, ds005339, ds005896, ds005901, ds006707,
-# ds007328, ds007522, ds007694) is left untouched: MRIQC has not finished
-# there yet, so pruning non-rest data now would remove context a re-run
-# might still need.
+# 2026-09-28: added ds003849, ds004182, ds005901, ds000256 -- MRIQC has
+# since finished for these (excluded above on 2026-09-10 because it
+# hadn't). Also, for the first time, prunes their fMRIPrep derivatives
+# alongside raw data -- this script never touched derivatives/<ds>/fmriprep
+# at all before, despite fMRIPrep carrying the exact same non-resting-state
+# task output as raw data does. Confirmed real incident: these three
+# datasets had zero per-subject bids_filters files (see
+# build_qa_subject_list.py's 2026-09-28 fix), so fMRIPrep processed every
+# task it found -- real output showed 2-5 unrelated tasks (nback, mid,
+# face, qreact, magictrickwatching) stored per subject.
+#
+# Everything else (ds000031, ds002372, ds003823, ds004466, ds005127,
+# ds005339, ds005896, ds006707, ds007328, ds007522, ds007694) is left
+# untouched: MRIQC has not finished there yet, so pruning non-rest data now
+# would remove context a re-run might still need.
 #
 # Mechanics: raw data/<ds> clones are datalad/git-annex datasets also held
 # on OpenNeuro's S3-PUBLIC remote and this project's "origin" sibling, so
 # per-file removal goes through `datalad remove` (drops annexed content +
 # git rm + save) rather than plain `rm`, matching cleanup_output_data.sh's
-# convention. Full-dataset removal (ds002837, ds006072) is a plain `rm -rf`
-# of the whole clone after confirming it is clean and fully pushed -- there
-# is no git history worth preserving locally once 100% of a clone is being
-# deleted, and both remain recoverable via `datalad clone` from origin.
+# convention. fMRIPrep derivatives clones go through the same `datalad
+# remove` path (also datalad/git-annex datasets, pushed to their own
+# per-dataset output sibling -- see submit_bids_cohort.sh). Full-dataset
+# removal (ds002837, ds006072) is a plain `rm -rf` of the whole clone after
+# confirming it is clean and fully pushed -- there is no git history worth
+# preserving locally once 100% of a clone is being deleted, and both
+# remain recoverable via `datalad clone` from origin.
 #
 # Login-node guard: --live's `datalad remove` calls contact the datalad
 # remote (network I/O), same class of operation cleanup_output_data.sh
 # guards -- see CLAUDE.md's "HPC login node policy". --dry-run (default)
 # only lists local files and sizes, no network I/O, safe anywhere.
+#
+# Clean-check: uses clone_is_clean_fast (git diff-index + ref comparison),
+# not clone_is_clean (`git status`) -- these clones can have a large
+# fraction of unlocked tracked files (confirmed: ds003849/ds005901/
+# ds000256's raw clones are 60-67% unlocked in a func/ sample), and
+# `git status` hangs for hours re-hashing that content. See
+# lib_clone_check.sh's clone_assess_fast docstring for the accepted gap
+# this implies (won't catch an unstaged modification to an already-
+# unlocked file) and why it's fine for this use case.
 #
 # Usage:
 #   scripts/remove_non_rest_data.sh                # dry-run (default)
@@ -96,14 +118,24 @@ total_bytes=0
 # sub-*/**/func/*_task-<KEEPTASK>[_.]* file as "keep"; everything else
 # under func/ in that dataset is removed. anat/, fmap/, dwi-less top-level
 # metadata are never touched.
+#
+# `label` is just for log messages; `path` is the full clone path to prune
+# -- either a raw data/<ds> clone or a derivatives/<ds>/fmriprep clone,
+# both apply equally (2026-09-28: this used to only ever be reconstructed
+# as ${DATA_BASE}/${ds} internally, so fMRIPrep derivatives -- which carry
+# the exact same non-resting-state task output -- were never covered).
+#
+# Uses clone_is_clean_fast, not clone_is_clean: these clones (raw
+# OpenNeuro downloads and fMRIPrep output alike) can have a large fraction
+# of unlocked tracked files, and clone_is_clean's `git status` hangs for
+# hours on that -- see lib_clone_check.sh's clone_assess_fast docstring.
 prune_dataset() {
-    local ds="$1"; shift
+    local label="$1" path="$2"; shift 2
     local -a keep_tasks=("$@")
-    local path="${DATA_BASE}/${ds}"
-    [[ -d "$path" ]] || { log "skip $ds: no such dataset dir"; return; }
+    [[ -d "$path" ]] || { log "skip $label: no such dataset dir"; return; }
 
-    if ! clone_is_clean "$path"; then
-        log "SKIP $ds: not clean (uncommitted=${CLONE_UNCOMMITTED} unpushed=${CLONE_UNPUSHED} broken=${CLONE_BROKEN}${CLONE_BROKEN_MSG:+: $CLONE_BROKEN_MSG})"
+    if ! clone_is_clean_fast "$path"; then
+        log "SKIP $label: not clean (uncommitted=${CLONE_UNCOMMITTED} unpushed=${CLONE_UNPUSHED} broken=${CLONE_BROKEN}${CLONE_BROKEN_MSG:+: $CLONE_BROKEN_MSG})"
         return
     fi
 
@@ -121,7 +153,7 @@ prune_dataset() {
     done < <(find "$path" -mindepth 1 -path '*/func/*' \( -type l -o -type f \) -print0 2>/dev/null)
 
     if [[ ${#to_remove[@]} -eq 0 ]]; then
-        log "$ds: nothing to remove (keep: ${keep_tasks[*]})"
+        log "$label: nothing to remove (keep: ${keep_tasks[*]})"
         return
     fi
 
@@ -134,13 +166,13 @@ prune_dataset() {
     total_bytes=$((total_bytes + bytes))
 
     if $LIVE; then
-        log "$ds: removing ${#to_remove[@]} non-rest file(s) (~$((bytes / 1024 / 1024))MB), keeping [${keep_tasks[*]}]"
+        log "$label: removing ${#to_remove[@]} non-rest file(s) (~$((bytes / 1024 / 1024))MB), keeping [${keep_tasks[*]}]"
         # datalad resolves given paths relative to CWD, not relative to
         # --dataset -- must run from inside the dataset itself.
         (cd "$path" && printf '%s\n' "${to_remove[@]}" | xargs -d '\n' -n 200 \
             "$DATALAD_BIN" remove --dataset "$path" --nocheck -- 2>&1 | sed 's/^/    /')
     else
-        log "[dry-run] $ds: would remove ${#to_remove[@]} non-rest file(s) (~$((bytes / 1024 / 1024))MB), keeping [${keep_tasks[*]}]"
+        log "[dry-run] $label: would remove ${#to_remove[@]} non-rest file(s) (~$((bytes / 1024 / 1024))MB), keeping [${keep_tasks[*]}]"
     fi
 }
 
@@ -153,10 +185,10 @@ remove_dataset_entirely() {
 
     local ok=true
     if [[ -d "$dpath" ]]; then
-        clone_is_clean "$dpath" || { log "SKIP full-delete $ds: data/ not clean (uncommitted=${CLONE_UNCOMMITTED} unpushed=${CLONE_UNPUSHED} broken=${CLONE_BROKEN})"; ok=false; }
+        clone_is_clean_fast "$dpath" || { log "SKIP full-delete $ds: data/ not clean (uncommitted=${CLONE_UNCOMMITTED} unpushed=${CLONE_UNPUSHED} broken=${CLONE_BROKEN})"; ok=false; }
     fi
     if [[ -d "$mpath" ]]; then
-        clone_is_clean "$mpath" || { log "SKIP full-delete $ds: derivatives/mriqc not clean (uncommitted=${CLONE_UNCOMMITTED} unpushed=${CLONE_UNPUSHED} broken=${CLONE_BROKEN})"; ok=false; }
+        clone_is_clean_fast "$mpath" || { log "SKIP full-delete $ds: derivatives/mriqc not clean (uncommitted=${CLONE_UNCOMMITTED} unpushed=${CLONE_UNPUSHED} broken=${CLONE_BROKEN})"; ok=false; }
     fi
     $ok || return
 
@@ -172,19 +204,41 @@ remove_dataset_entirely() {
     fi
 }
 
+# Only runs when this script is executed directly -- sourcing it (as
+# tests do, to exercise prune_dataset/remove_dataset_entirely against
+# synthetic fixtures) must not also kick off a full scan against real
+# production data under $DATA_BASE/$DERIV_BASE.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+
 log "$($LIVE && echo "LIVE run" || echo "DRY-RUN")"
 
-prune_dataset ds002156 rest
-prune_dataset ds003171 restawake
-prune_dataset ds003382 rest
-prune_dataset ds003404 rest
-prune_dataset ds004592 rest1 rest2
-prune_dataset ds005073 rest
-prune_dataset ds005134 rest
-prune_dataset ds005365 rest
-prune_dataset ds005454 rest
-prune_dataset ds005525 rest
-prune_dataset ds006373 rest
+prune_dataset ds002156 "${DATA_BASE}/ds002156" rest
+prune_dataset ds003171 "${DATA_BASE}/ds003171" restawake
+prune_dataset ds003382 "${DATA_BASE}/ds003382" rest
+prune_dataset ds003404 "${DATA_BASE}/ds003404" rest
+prune_dataset ds004592 "${DATA_BASE}/ds004592" rest1 rest2
+prune_dataset ds005073 "${DATA_BASE}/ds005073" rest
+prune_dataset ds005134 "${DATA_BASE}/ds005134" rest
+prune_dataset ds005365 "${DATA_BASE}/ds005365" rest
+prune_dataset ds005454 "${DATA_BASE}/ds005454" rest
+prune_dataset ds005525 "${DATA_BASE}/ds005525" rest
+prune_dataset ds006373 "${DATA_BASE}/ds006373" rest
+
+# 2026-09-28: MRIQC has since finished for these four (excluded above on
+# 2026-09-10 because it hadn't). Also, for the first time, prune their
+# fMRIPrep derivatives too -- never covered before, despite carrying the
+# exact same non-resting-state task output (confirmed: ds003849/ds004182/
+# ds005901 had zero bids_filters files, real output shows 2-5 unrelated
+# tasks processed per subject; ds000256's derivatives are prunable too,
+# though its fMRIPrep run itself is still incomplete as of this writing).
+prune_dataset ds003849 "${DATA_BASE}/ds003849" rest
+prune_dataset ds003849-fmriprep "${DERIV_BASE}/ds003849/fmriprep" rest
+prune_dataset ds004182 "${DATA_BASE}/ds004182" rest
+prune_dataset ds004182-fmriprep "${DERIV_BASE}/ds004182/fmriprep" rest
+prune_dataset ds005901 "${DATA_BASE}/ds005901" rest
+prune_dataset ds005901-fmriprep "${DERIV_BASE}/ds005901/fmriprep" rest
+prune_dataset ds000256 "${DATA_BASE}/ds000256" restbaseline
+prune_dataset ds000256-fmriprep "${DERIV_BASE}/ds000256/fmriprep" restbaseline
 
 remove_dataset_entirely ds002837 "zero resting-state runs (movie-watching task only)"
 remove_dataset_entirely ds006072 "no functional/BOLD data at all (anat+dwi only)"
@@ -195,3 +249,5 @@ if $LIVE; then
 else
     log "[dry-run] ${total_removed} file(s) plus 2 full-dataset removals would run, ~${total_mb}MB reclaimable. Re-run with --live (from an sbatch/salloc allocation) to execute."
 fi
+
+fi  # BASH_SOURCE guard
