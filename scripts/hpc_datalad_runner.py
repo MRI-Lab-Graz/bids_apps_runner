@@ -352,12 +352,17 @@ class BidsAppComputeScriptGenerator:
         quoted_list = _shell_quote(self.subject_list_path)
         # Cross-sectional study design (2026-09-21): a subject contributes
         # exactly one scan, but the BIDS dir on disk may still have several
-        # sessions/runs. build_qa_subject_list.py's --bids-filters-out writes
-        # one <ds>_bids_filters/sub-X.json per multi-candidate subject (the
-        # QA-selected session/run to actually process); this array script
-        # only needs to know where that directory lives -- a subject with no
-        # such file (the common single-scan case) gets no filter at all, so
-        # this is a no-op for every dataset that predates this mechanism.
+        # sessions/runs/tasks. build_qa_subject_list.py's --bids-filters-out
+        # writes one <ds>_bids_filters/sub-X.json for every QA-valid subject
+        # (since 2026-09-28 -- previously only multi-candidate subjects got
+        # one, on the wrong assumption that "nothing to disambiguate" meant
+        # fmriprep's default was already correct; it isn't, fmriprep
+        # processes every task/session it finds regardless -- confirmed via
+        # ds003849/ds004182/ds005901 processing 2-5 unrelated tasks per
+        # subject with zero filter files). This array script only needs to
+        # know where that directory lives; a dataset that predates this
+        # mechanism entirely (no _bids_filters dir at all, or a subject this
+        # script was never rerun for) still falls through safely below.
         filters_dir = Path(self.subject_list_path).parent / f"{self.dataset_id}_bids_filters"
         quoted_filters_dir = _shell_quote(str(filters_dir))
         return f"""
@@ -389,8 +394,9 @@ SUBJECT_LABEL="${{SUBJECT#sub-}}"
 # in the container with a synthetic multi-session subject. Only applied
 # alongside an actual filter file: it also fits this study's cross-sectional
 # design (one scan per subject -- session-tracked outputs/FreeSurfer IDs
-# were never wanted here anyway), but subjects with no filter file (the
-# common single-scan case) get fmriprep's normal default, unchanged.
+# were never wanted here anyway), but a subject with no filter file at all
+# (dataset predates --bids-filters-out, or hasn't been rerun since) gets
+# fmriprep's normal default, unchanged.
 BIDS_FILTER_FILE={quoted_filters_dir}/sub-${{SUBJECT_LABEL}}.json
 APPTAINER_FILTER_BIND=()
 BIDS_FILTER_CLI_ARGS=()

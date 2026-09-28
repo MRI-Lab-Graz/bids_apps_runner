@@ -130,10 +130,23 @@ def test_main_writes_subject_list_and_report(tmp_path, capsys):
     assert report["sub-02"]["qa_valid"] is False
 
 
-def test_main_writes_bids_filter_only_for_multi_session_subjects(tmp_path):
+def test_main_writes_bids_filter_for_every_qa_valid_subject(tmp_path):
+    """2026-09-28 postmortem: a bids_filter file used to be written ONLY for
+    multi-candidate subjects, on the theory that "fmriprep's default is
+    already correct" when there's nothing to disambiguate. That's wrong --
+    fmriprep processes every task/session it finds for a subject regardless
+    of candidate count, so a single-candidate subject with zero filtering
+    still gets every OTHER task in the raw dataset (nback, mid, face, ...)
+    processed too. Confirmed real incident: ds003849/ds004182/ds005901 had
+    zero bids_filters files at all, and their real fMRIPrep output shows
+    2-5 distinct non-resting tasks processed per subject. The task must be
+    pinned for every QA-valid subject, not just ones needing session/run
+    disambiguation.
+    """
     mriqc_dir = tmp_path / "mriqc"
     bids_dir = tmp_path / "bids"
-    # sub-01: single scan, no session/run entity to pin -> no filter file needed
+    # sub-01: single resting-state candidate -- still needs "task" pinned so
+    # fmriprep doesn't also process this subject's other raw BIDS tasks.
     _write_iqm(mriqc_dir, "01", "rest", 1, fd_mean=0.1)
     # sub-02: two sessions -> best one (ses-B) must be pinned; anat lives in both
     _write_iqm(mriqc_dir, "02", "rest", 1, fd_mean=0.3, session="A")
@@ -153,10 +166,12 @@ def test_main_writes_bids_filter_only_for_multi_session_subjects(tmp_path):
     ]
     qa.main()
 
-    assert not (filters_dir / "sub-01.json").exists()
-    filt = json.loads((filters_dir / "sub-02.json").read_text())
-    assert filt["bold"]["session"] == "B"
-    assert filt["bold"]["task"] == "rest"
+    filt1 = json.loads((filters_dir / "sub-01.json").read_text())
+    assert filt1["bold"]["task"] == "rest"
+
+    filt2 = json.loads((filters_dir / "sub-02.json").read_text())
+    assert filt2["bold"]["session"] == "B"
+    assert filt2["bold"]["task"] == "rest"
 
 
 def test_main_requires_bids_dir_with_bids_filters_out(tmp_path, capsys):

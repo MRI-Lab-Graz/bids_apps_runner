@@ -235,8 +235,14 @@ def main() -> None:
         for subject, v in results.items():
             if not v["qa_valid"]:
                 continue
-            if v["n_candidates"] <= 1:
-                continue  # only one candidate scan -- nothing to disambiguate, fmriprep's default is already correct
+            # A filter file is written for EVERY QA-valid subject, not just
+            # ones needing session/run disambiguation: without a "task"
+            # filter, fmriprep processes every task it finds for a subject,
+            # not just the resting-state one this study cares about. Real
+            # incident (2026-09-28): ds003849/ds004182/ds005901 had zero
+            # bids_filters files (all single-candidate subjects), and their
+            # real fMRIPrep output shows 2-5 non-resting tasks processed per
+            # subject as a result.
             sel = v["selected"]
             bold_filter = {"task": sel["task"]}
             if sel["session"] is not None:
