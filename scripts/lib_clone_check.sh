@@ -124,3 +124,61 @@ clone_is_clean() {
     clone_assess "$path"
     [[ "$CLONE_BROKEN" -eq 0 && "$CLONE_UNCOMMITTED" -eq 0 && "$CLONE_UNPUSHED" -eq 0 ]]
 }
+
+# clone_assess_fast: like clone_assess, but never calls `git status`.
+#
+# Real incident (2026-09-28): ds003849/ds005901/ds000256's raw data clones
+# have 60-67% unlocked (materialized, non-symlink) tracked files under
+# func/. `git status` on an unlocked annexed file must re-hash its content
+# through git-annex's smudge/clean filter to tell whether it changed --
+# fine for one file, a multi-hour hang across tens of thousands (the same
+# "keys-DB reconciliation drift" mechanism CLAUDE.md documents for dataset
+# 134, just triggered by unlocked-file volume here rather than accumulated
+# interrupted writes). Sets the same CLONE_* vars as clone_assess, from
+# operations proven fast regardless of repo size (see
+# docs/superpowers/specs/2026-09-09-annex-slurm-design.md's "fast" column):
+#   - CLONE_UNPUSHED: commit-graph comparison against origin/<branch>, same
+#     as clone_assess.
+#   - CLONE_UNCOMMITTED: `git diff-index --cached` (index vs HEAD) only --
+#     catches staged-but-uncommitted changes without touching the working
+#     tree at all.
+#
+# Known, accepted gap: an UNSTAGED modification to an already-unlocked
+# file is invisible to this check -- detecting it is exactly the working-
+# tree content comparison being avoided. Only use this where that gap is
+# acceptable: pipeline-generated output (fMRIPrep derivatives, downloaded
+# raw BIDS data) that is never hand-edited in place after being unlocked,
+# never as a general clone_is_clean replacement.
+clone_assess_fast() {
+    local path="$1"
+    CLONE_BROKEN=0
+    CLONE_BROKEN_MSG=""
+    CLONE_UNCOMMITTED=0
+    CLONE_UNPUSHED=0
+    CLONE_BRANCH=""
+    CLONE_STATUS_OUT=""
+
+    CLONE_BRANCH=$(git -C "$path" symbolic-ref --short -q HEAD 2>/dev/null)
+    if [[ -z "$CLONE_BRANCH" ]]; then
+        CLONE_BROKEN=1
+        CLONE_BROKEN_MSG="cannot resolve current branch (not a repo, or detached HEAD)"
+        return 0
+    fi
+
+    if ! git -C "$path" diff-index --cached --quiet HEAD -- 2>/dev/null; then
+        CLONE_UNCOMMITTED=$(git -C "$path" diff-index --cached --name-only HEAD -- 2>/dev/null | grep -c '.' || true)
+    fi
+
+    if git -C "$path" rev-parse --verify -q "refs/remotes/origin/${CLONE_BRANCH}" >/dev/null 2>&1; then
+        CLONE_UNPUSHED=$(git -C "$path" rev-list --count "origin/${CLONE_BRANCH}..HEAD" 2>/dev/null || echo 0)
+    fi
+    return 0
+}
+
+# Convenience wrapper for clone_assess_fast, matching clone_is_clean's
+# calling convention.
+clone_is_clean_fast() {
+    local path="$1"
+    clone_assess_fast "$path"
+    [[ "$CLONE_BROKEN" -eq 0 && "$CLONE_UNCOMMITTED" -eq 0 && "$CLONE_UNPUSHED" -eq 0 ]]
+}
