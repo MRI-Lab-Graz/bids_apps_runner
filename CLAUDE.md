@@ -1,5 +1,13 @@
 # Working conventions for this repo
 
+## Skills and TDD — use for every session in this repo
+
+- Use the `ponytail` and `superpowers` skills for all work in this repo,
+  not just when a task happens to mention them by name.
+- Use test-driven development (write the failing test first, then the
+  implementation) for all feature and bugfix work here — see the
+  "Testing" section below for how tests are run.
+
 ## ⚠️ Data storage — bulk data goes under /cl_tmp/mrilabgraz, never /usr/people
 
 **All BIDS input data, derivatives, per-run scratch, logs, and subject
