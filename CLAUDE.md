@@ -165,6 +165,28 @@ unless they are wrapped in `srun`/`sbatch`/`salloc`, while deliberately
 leaving the fast object-graph reads and SLURM status commands alone. It
 inspects only the command string, so it is a guardrail, not a sandbox.
 
+### ⚠️ This node is for `sbatch`/`squeue`/`sacct` only -- the hook does not cover everything
+
+The general rule, stated plainly since the hook above is a pattern-matched
+guardrail and *will* miss things: **this login node exists to submit jobs
+and check status, full stop.** Anything that spends real CPU or RAM --
+not just the `git`/`datalad`/`find` cases the hook happens to pattern-match
+-- must run via `srun`/`sbatch`, not directly in this shell.
+
+Confirmed gap (2026-09-28): `scripts/check_fmriprep_complete.py --with
+nibabel` was run directly on the login node several times in one session
+to validate real BOLD output across many subjects -- nibabel loading and
+inspecting real `.nii.gz` volumes, exactly the kind of work this policy
+exists to keep off the login node. The hook let it through because it only
+pattern-matches `git`/`datalad`/`find`-family commands over `/cl_tmp` or
+`/datalad`; it has no idea `uv run --with nibabel <script>` is doing real
+numeric work over real files. This generalizes: any Python invocation that
+touches real data volume -- nibabel, numpy/pandas over actual files,
+anything that isn't trivial metadata -- needs `srun`, whether or not the
+hook happens to catch it. When in doubt, wrap it:
+`srun --partition=hpc --time=00:10:00 --mem=2G <cmd>` for a short check,
+`sbatch <script>` for anything that might run longer or need more memory.
+
 ## Chip away at the monoliths
 
 `templates/index.html` (~7100 lines, most of it one inline `<script>` block)
