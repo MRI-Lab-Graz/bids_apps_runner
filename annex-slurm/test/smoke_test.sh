@@ -107,6 +107,31 @@ for f in sub3/b.txt sub3/c.txt; do
         || { echo "FAIL: concurrent finish lost $f from history" >&2; exit 1; }
 done
 
+# Datasets made by `datalad create` -- every dataset on the server -- use
+# annex.backend=MD5E, not SHA256E. The integrity check must cover that backend
+# too, or it silently degrades to size-only for exactly the datasets this tool
+# is used on.
+git config annex.backend MD5E
+mkdir -p sub4; echo md5content > sub4/m.txt
+"$BIN/annex-slurm-finish" -m "md5e file" sub4/m.txt
+case "$(basename "$(readlink sub4/m.txt)")" in
+    MD5E-*) ;;
+    *) echo "FAIL: fixture did not produce an MD5E key" >&2; exit 1 ;;
+esac
+mobj=$(readlink -f sub4/m.txt)
+mrobj="$d/remote/$(realpath --relative-to="$PWD" "$mobj")"
+chmod u+w "$(dirname "$mrobj")" "$mrobj"
+msize=$(stat -c%s "$mrobj")
+head -c "$msize" /dev/zero | tr '\0' 'X' > "$mrobj"
+if PATH="$skipbin:$PATH" "$BIN/annex-slurm-finish" -m "corrupt md5e remote object" sub4/m.txt 2>"$d/err"; then
+    echo "FAIL: finish accepted a same-size corrupt MD5E remote object" >&2; exit 1
+fi
+grep -q "CHECKSUM MISMATCH" "$d/err" \
+    || { echo "FAIL: MD5E corruption not caught by checksum:" >&2; cat "$d/err" >&2; exit 1; }
+grep -q "size only" "$d/err" && { echo "FAIL: MD5E fell back to a size-only check" >&2; exit 1; }
+cat "$mobj" > "$mrobj"  # repair
+git config --unset annex.backend
+
 # schedule: unlock-if-exists on an already-annexed path, no-op on a new one.
 # Shim sbatch -- real dispatch is SLURM's job, not this test's.
 mkdir sub2; touch sub2/new.txt  # never annexed -- should be silently skipped

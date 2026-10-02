@@ -116,7 +116,7 @@ This is a deliberate workaround for the keys-DB drift on 134, not a preference. 
 3. `git annex setpresentkey --batch` records "this key is present in remote UUID" in the local `git-annex` branch.
 
 **What we gave up, and how it is covered (changed 2026-10-02, tests in `annex-slurm/test/smoke_test.sh`):**
-- **Integrity:** after rsync, each remote object is hashed (`sha256sum` over ssh) and compared with the SHA256/SHA256E key, which is the content hash. This is the check `git annex copy` would have done. Same-size corruption, and rsync skipping a stale same-size/same-mtime object, are now rejected (`CHECKSUM MISMATCH`). Non-SHA256 backends (unused here) fall back to size-only with a warning. The cost is one remote read of every pushed object.
+- **Integrity:** after rsync, each remote object is hashed over ssh (`sha256sum` or `md5sum`) and compared with the key, which is the content hash for SHA256E/SHA256 and MD5E/MD5. This is the check `git annex copy` would have done. Same-size corruption, and rsync skipping a stale same-size/same-mtime object, are now rejected (`CHECKSUM MISMATCH`). MD5E matters: `datalad create` datasets (e.g. our fmriprep outputs) use `annex.backend=MD5E`, and the first version of this check only handled SHA256, so it would have fallen back to size-only on exactly those datasets. Other backends fall back to size-only with a warning. The cost is one remote read of every pushed object.
 - **`setpresentkey` is still an assertion**, but it now runs only after the size and hash checks above pass.
 - **Remote visibility:** after `setpresentkey`, `annex-slurm-finish` pushes the `git-annex` branch, so the server's location log matches its objects. A non-fast-forward fails loudly, with no force.
 - **Layout assumption:** still real. It holds for our repos (same git-annex version, same hash-dir style on both ends). It would break against a special remote or a different hash style.
@@ -136,7 +136,7 @@ For annex-slurm the same limit holds for a different reason. It has no bookkeepi
 
 ### Other limits
 
-- Integration status: the full annex-slurm path is in use for the 134 subregion flow (`.annex-slurm-managed` marker, GUI routes skip the open-jobs DB). `submit_bids_cohort.sh` still uses `datalad slurm-schedule/-finish` for the general cohort path. The goal is a standalone repo.
+- Integration status: annex-slurm is in use for the 134 subregion flow (`.annex-slurm-managed` marker, GUI routes skip the open-jobs DB) and, since 2026-10-02, for **connectoflow's whole cohort path** (`connectoflow-slurm`, `scripts/submit_connectoflow_cohort.sh`). That one is the first end-to-end integration: setup registers one flat dataset per stage on the server's `derivatives` branch, the finish job runs `annex-slurm-finish` per stage and then verifies the server (ref equals HEAD, `git annex find --not --in origin` empty), exiting non-zero otherwise. It was tested with real git/annex/rsync against a local "server" and piloted for real on ds006707 (one subject; both stage refs and the annex content confirmed on `datalad-server`). `submit_bids_cohort.sh` (MRIQC/fMRIPrep/FreeSurfer) still uses `datalad slurm-schedule/-finish`. The goal is a standalone repo.
 
 ## 6. Operational guardrails (HPC policy, in code)
 

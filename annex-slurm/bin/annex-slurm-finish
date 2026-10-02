@@ -32,13 +32,13 @@ case "$remote_url" in
         remote_path="/${remote_url#ssh://*/}"
         rsync_dest="${remote_host}:${remote_path}/"
         stat_remote() { ssh "$remote_host" "stat -c%s '$1'"; }
-        sha256_remote() { ssh "$remote_host" "sha256sum '$1'" | cut -d' ' -f1; }
+        hash_remote() { ssh "$remote_host" "${1}sum '$2'" | cut -d' ' -f1; }  # $1: sha256|md5
         ;;
     *)
         remote_path="$remote_url"
         rsync_dest="${remote_path}/"
         stat_remote() { stat -c%s "$1"; }
-        sha256_remote() { sha256sum "$1" | cut -d' ' -f1; }
+        hash_remote() { "${1}sum" "$2" | cut -d' ' -f1; }  # $1: sha256|md5
         ;;
 esac
 
@@ -147,19 +147,24 @@ while IFS= read -r obj; do
         || { echo "SIZE MISMATCH after rsync: $obj (local=$local_size remote=$remote_size)" >&2; exit 1; }
     # Size alone cannot catch same-size corruption, and rsync -a skips an
     # existing object whose size+mtime match (stale partial transfer).
-    # SHA256/SHA256E keys ARE the content hash, so hash the remote object
+    # SHA256(E)/MD5(E) keys ARE the content hash, so hash the remote object
     # and compare to the key -- the check `git annex copy` would have done.
-    # Other backends (not used here) fall back to size-only, loudly.
+    # MD5E matters: `datalad create` datasets (every dataset on the server) use
+    # annex.backend=MD5E. Other backends fall back to size-only, loudly.
     key=$(basename "$obj")
     case "$key" in
-        SHA256E-*|SHA256-*)
-            want=${key##*--}; want=${want%%.*}
-            got=$(sha256_remote "${remote_path}/${obj}") || got=""
-            [[ "$got" == "$want" ]] \
-                || { echo "CHECKSUM MISMATCH after rsync: $obj (key=$want remote=${got:-unreadable})" >&2; exit 1; }
-            ;;
-        *) echo "WARNING: $key is not a SHA256 key; remote integrity checked by size only" >&2 ;;
+        SHA256E-*|SHA256-*) algo=sha256 ;;
+        MD5E-*|MD5-*)       algo=md5 ;;
+        *)                  algo="" ;;
     esac
+    if [[ -n "$algo" ]]; then
+        want=${key##*--}; want=${want%%.*}
+        got=$(hash_remote "$algo" "${remote_path}/${obj}") || got=""
+        [[ "$got" == "$want" ]] \
+            || { echo "CHECKSUM MISMATCH after rsync: $obj ($algo key=$want remote=${got:-unreadable})" >&2; exit 1; }
+    else
+        echo "WARNING: $key has an unsupported backend; remote integrity checked by size only" >&2
+    fi
 done < "$objfile"
 for k in "${keys[@]}"; do echo "$k $remote_uuid 1"; done | git annex setpresentkey --batch
 # setpresentkey only wrote the location log on the LOCAL git-annex branch;
