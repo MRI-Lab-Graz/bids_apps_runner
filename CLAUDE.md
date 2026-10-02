@@ -65,7 +65,11 @@ config validation on the login node). See
   -s <subject> -o <script.sh> --submit`.
 - Interactive testing that genuinely needs `--local`: get a real
   allocation first (`salloc`/`srun`), which sets `SLURM_JOB_ID`
-  automatically -- don't just run it bare on the login node.
+  automatically -- don't just run it bare on the login node. Example:
+  `salloc --partition=<partition> --time=02:00:00 --mem=8G --cpus-per-task=4`
+  drops you into a shell on an actual compute node for the duration; work
+  there, then `exit` (or let `--time` expire) to release it rather than
+  leaving it idle.
 
 If you're adding a *new* code path that shells out to a container engine
 (`apptainer`/`singularity`/`docker`) or does real data movement
@@ -194,6 +198,14 @@ anything that isn't trivial metadata -- needs `srun`, whether or not the
 hook happens to catch it. When in doubt, wrap it:
 `srun --partition=hpc --time=00:10:00 --mem=2G <cmd>` for a short check,
 `sbatch <script>` for anything that might run longer or need more memory.
+
+If you find yourself running several such commands back-to-back and
+wrapping each individually gets tedious, `salloc` a dedicated interactive
+node instead of reaching for one-off `srun` wraps or working bare on the
+login node -- see the `salloc` example above. It sets `SLURM_JOB_ID`, which
+is what `execute_local()`'s guard and the heavy-command hook both check
+for, so everything (container runs, `datalad`/`git annex` work, nibabel
+checks) is fair game there for the life of the allocation.
 
 ## Chip away at the monoliths
 

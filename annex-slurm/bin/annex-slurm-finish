@@ -12,6 +12,17 @@ message="$2"; shift 2
 paths=("$@")
 [[ ${#paths[@]} -gt 0 ]] || { echo "annex-slurm-finish: need at least one PATH" >&2; exit 1; }
 
+# Serialize finishes per repo: read-HEAD -> commit-tree -> update-ref below
+# is a read-modify-write on the branch. Two at once would build from the same
+# HEAD and one commit would silently drop the other's paths. The lock lives in
+# the repo's own git dir, so it is on whatever shared storage the repo is.
+lockfile="$(cd "$(git rev-parse --git-common-dir)" && pwd)/annex-slurm-finish.lock"
+exec 9>"$lockfile"
+flock -w "${ANNEX_SLURM_LOCK_TIMEOUT:-3600}" 9 || {
+    echo "annex-slurm-finish: could not take lock $lockfile within ${ANNEX_SLURM_LOCK_TIMEOUT:-3600}s -- another finish is running on this repo" >&2
+    exit 1
+}
+
 remote=$(git remote | head -1)
 remote_url=$(git remote get-url "$remote")
 remote_uuid=$(git config --get "remote.${remote}.annex-uuid")
@@ -21,11 +32,13 @@ case "$remote_url" in
         remote_path="/${remote_url#ssh://*/}"
         rsync_dest="${remote_host}:${remote_path}/"
         stat_remote() { ssh "$remote_host" "stat -c%s '$1'"; }
+        sha256_remote() { ssh "$remote_host" "sha256sum '$1'" | cut -d' ' -f1; }
         ;;
     *)
         remote_path="$remote_url"
         rsync_dest="${remote_path}/"
         stat_remote() { stat -c%s "$1"; }
+        sha256_remote() { sha256sum "$1" | cut -d' ' -f1; }
         ;;
 esac
 
@@ -132,7 +145,27 @@ while IFS= read -r obj; do
     remote_size=$(stat_remote "${remote_path}/${obj}") || remote_size=""
     [[ -n "$local_size" && "$local_size" == "$remote_size" ]] \
         || { echo "SIZE MISMATCH after rsync: $obj (local=$local_size remote=$remote_size)" >&2; exit 1; }
+    # Size alone cannot catch same-size corruption, and rsync -a skips an
+    # existing object whose size+mtime match (stale partial transfer).
+    # SHA256/SHA256E keys ARE the content hash, so hash the remote object
+    # and compare to the key -- the check `git annex copy` would have done.
+    # Other backends (not used here) fall back to size-only, loudly.
+    key=$(basename "$obj")
+    case "$key" in
+        SHA256E-*|SHA256-*)
+            want=${key##*--}; want=${want%%.*}
+            got=$(sha256_remote "${remote_path}/${obj}") || got=""
+            [[ "$got" == "$want" ]] \
+                || { echo "CHECKSUM MISMATCH after rsync: $obj (key=$want remote=${got:-unreadable})" >&2; exit 1; }
+            ;;
+        *) echo "WARNING: $key is not a SHA256 key; remote integrity checked by size only" >&2 ;;
+    esac
 done < "$objfile"
 for k in "${keys[@]}"; do echo "$k $remote_uuid 1"; done | git annex setpresentkey --batch
+# setpresentkey only wrote the location log on the LOCAL git-annex branch;
+# push it or the server holds the objects without knowing it does. A
+# non-fast-forward here means the server's branch moved independently --
+# fail loudly rather than force.
+git push origin git-annex || { echo "annex-slurm-finish: could not push git-annex branch (diverged?) -- content is on $remote but its location log is not" >&2; exit 1; }
 
 echo "OK: $(git rev-parse --short "$commit") pushed, ${#paths[@]} object(s) content-verified on $remote."

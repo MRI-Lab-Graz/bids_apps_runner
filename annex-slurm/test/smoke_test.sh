@@ -53,6 +53,60 @@ git diff-tree -r --name-only HEAD^ HEAD | grep -qx 'sub1/result.txt' \
 "$BIN/annex-slurm-finish" -m "re-run on already-symlinked path" sub1/result.txt
 [[ -L sub1/result.txt ]] || { echo "FAIL: re-run left path not a symlink" >&2; exit 1; }
 
+# The remote must learn WHERE the content is, not just receive the bytes:
+# setpresentkey writes the location log to the local git-annex branch, so
+# that branch has to be pushed too or the server holds objects it does not
+# know it has.
+[[ "$(git rev-parse git-annex)" == "$(git -C "$d/remote" rev-parse git-annex)" ]] \
+    || { echo "FAIL: git-annex branch not pushed to remote" >&2; exit 1; }
+git -C "$d/remote" annex whereis --key "$key" | grep -q 'here' \
+    || { echo "FAIL: remote does not know it holds the content" >&2; exit 1; }
+
+# Integrity: a remote object with the right SIZE but wrong CONTENT must be
+# rejected. rsync -a skips files whose size+mtime match, so a same-size
+# corrupt object (stale partial transfer) can survive the copy, and a
+# size-only check would pass it and record it as present. rsync is shimmed
+# to skip the copy so this is deterministic (a real skip depends on mtimes).
+local_obj=$(readlink -f sub1/result.txt)
+robj="$d/remote/$(realpath --relative-to="$PWD" "$local_obj")"
+touch -r "$robj" "$d/mtime.ref"
+chmod u+w "$(dirname "$robj")" "$robj"
+osize=$(stat -c%s "$robj")  # before the redirect below truncates it
+head -c "$osize" /dev/zero | tr '\0' 'X' > "$robj"
+touch -r "$d/mtime.ref" "$robj"
+skipbin="$d/skipbin"; mkdir -p "$skipbin"
+printf '#!/bin/sh\nexit 0\n' > "$skipbin/rsync"; chmod +x "$skipbin/rsync"
+if PATH="$skipbin:$PATH" "$BIN/annex-slurm-finish" -m "corrupt remote object" sub1/result.txt 2>"$d/err"; then
+    echo "FAIL: finish accepted a same-size corrupt remote object" >&2; exit 1
+fi
+grep -q "CHECKSUM MISMATCH" "$d/err" \
+    || { echo "FAIL: corrupt object rejected for the wrong reason:" >&2; cat "$d/err" >&2; exit 1; }
+chmod u+w "$(dirname "$robj")" "$robj"  # rsync -a re-applied the read-only mode
+cat "$local_obj" > "$robj"; touch -r "$d/mtime.ref" "$robj"  # repair for the rest
+
+# Serialization: finish does read-HEAD -> commit-tree -> update-ref, so two
+# at once on one repo would build from the same HEAD and one commit would
+# drop the other's paths. A held lock must block (and time out loudly)...
+lock="$(cd "$(git rev-parse --git-common-dir)" && pwd)/annex-slurm-finish.lock"
+flock "$lock" sleep 4 &
+holder=$!
+sleep 1
+mkdir -p sub3; echo three > sub3/a.txt
+if ANNEX_SLURM_LOCK_TIMEOUT=1 "$BIN/annex-slurm-finish" -m "should not run" sub3/a.txt 2>"$d/err"; then
+    echo "FAIL: finish ran while the lock was held" >&2; exit 1
+fi
+grep -q "lock" "$d/err" || { echo "FAIL: lock timeout not reported" >&2; cat "$d/err" >&2; exit 1; }
+wait "$holder"
+# ...and two concurrent finishes must BOTH land in history.
+echo four > sub3/b.txt; echo five > sub3/c.txt
+"$BIN/annex-slurm-finish" -m "concurrent b" sub3/b.txt & p1=$!
+"$BIN/annex-slurm-finish" -m "concurrent c" sub3/c.txt & p2=$!
+wait "$p1" && wait "$p2" || { echo "FAIL: a concurrent finish errored" >&2; exit 1; }
+for f in sub3/b.txt sub3/c.txt; do
+    git ls-tree -r --name-only HEAD | grep -qx "$f" \
+        || { echo "FAIL: concurrent finish lost $f from history" >&2; exit 1; }
+done
+
 # schedule: unlock-if-exists on an already-annexed path, no-op on a new one.
 # Shim sbatch -- real dispatch is SLURM's job, not this test's.
 mkdir sub2; touch sub2/new.txt  # never annexed -- should be silently skipped
