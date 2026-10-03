@@ -132,6 +132,21 @@ grep -q "size only" "$d/err" && { echo "FAIL: MD5E fell back to a size-only chec
 cat "$mobj" > "$mrobj"  # repair
 git config --unset annex.backend
 
+# Size check (separate from the checksum): a remote object of the WRONG SIZE
+# must be rejected as such. rsync is shimmed to skip, as above.
+mkdir -p sub5; echo sizecheck > sub5/s.txt
+"$BIN/annex-slurm-finish" -m "size check file" sub5/s.txt
+sobj=$(readlink -f sub5/s.txt)
+srobj="$d/remote/$(realpath --relative-to="$PWD" "$sobj")"
+chmod u+w "$(dirname "$srobj")" "$srobj"
+printf 'short' > "$srobj"
+if PATH="$skipbin:$PATH" "$BIN/annex-slurm-finish" -m "wrong-size remote object" sub5/s.txt 2>"$d/err"; then
+    echo "FAIL: finish accepted a remote object of the wrong size" >&2; exit 1
+fi
+grep -q "SIZE MISMATCH" "$d/err" \
+    || { echo "FAIL: wrong-size object rejected for the wrong reason:" >&2; cat "$d/err" >&2; exit 1; }
+cat "$sobj" > "$srobj"  # repair
+
 # schedule: unlock-if-exists on an already-annexed path, no-op on a new one.
 # Shim sbatch -- real dispatch is SLURM's job, not this test's.
 mkdir sub2; touch sub2/new.txt  # never annexed -- should be silently skipped

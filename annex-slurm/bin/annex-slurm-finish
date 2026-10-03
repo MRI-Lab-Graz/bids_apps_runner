@@ -26,19 +26,31 @@ flock -w "${ANNEX_SLURM_LOCK_TIMEOUT:-3600}" 9 || {
 remote=$(git remote | head -1)
 remote_url=$(git remote get-url "$remote")
 remote_uuid=$(git config --get "remote.${remote}.annex-uuid")
+# Run ON the remote with the repo root as $1 and object paths (relative to it)
+# on stdin: prints "size<TAB>hash<TAB>path" per object, hash empty for backends
+# we cannot check. ONE ssh round trip for the whole batch -- a connection per
+# object (two, with the size check) made ~2000 objects take ~3h (2026-10-03).
+verify_script='cd "$1" || exit 1
+while IFS= read -r obj; do
+    sz=$(stat -c%s -- "$obj" 2>/dev/null)
+    case "${obj##*/}" in
+        SHA256E-*|SHA256-*) h=$(sha256sum -- "$obj" 2>/dev/null | cut -d" " -f1) ;;
+        MD5E-*|MD5-*)       h=$(md5sum -- "$obj" 2>/dev/null | cut -d" " -f1) ;;
+        *)                  h="" ;;
+    esac
+    printf "%s\t%s\t%s\n" "$sz" "$h" "$obj"
+done'
 case "$remote_url" in
     ssh://*)
         remote_host="${remote_url#ssh://}"; remote_host="${remote_host%%/*}"
         remote_path="/${remote_url#ssh://*/}"
         rsync_dest="${remote_host}:${remote_path}/"
-        stat_remote() { ssh "$remote_host" "stat -c%s '$1'"; }
-        hash_remote() { ssh "$remote_host" "${1}sum '$2'" | cut -d' ' -f1; }  # $1: sha256|md5
+        verify_remote() { ssh "$remote_host" "bash -c $(printf '%q' "$verify_script") _ $(printf '%q' "$remote_path")"; }
         ;;
     *)
         remote_path="$remote_url"
         rsync_dest="${remote_path}/"
-        stat_remote() { stat -c%s "$1"; }
-        hash_remote() { "${1}sum" "$2" | cut -d' ' -f1; }  # $1: sha256|md5
+        verify_remote() { bash -c "$verify_script" _ "$remote_path"; }
         ;;
 esac
 
@@ -140,15 +152,19 @@ for p in "${paths[@]}"; do
     realpath --relative-to="$repo_root" "$(readlink -f -- "$p")"
 done > "$objfile"
 rsync -aR --files-from="$objfile" . "$rsync_dest"
-while IFS= read -r obj; do
+verified=$(mktemp); trap 'rm -f "$tmpidx" "$objfile" "$verified"' EXIT
+verify_remote < "$objfile" > "$verified" || { echo "VERIFY FAILED: could not read the remote objects" >&2; exit 1; }
+n_obj=$(wc -l < "$objfile"); n_ver=$(wc -l < "$verified")
+[[ "$n_obj" == "$n_ver" ]] \
+    || { echo "VERIFY FAILED: remote reported $n_ver of $n_obj objects" >&2; exit 1; }
+while IFS=$'\t' read -r remote_size remote_hash obj; do
     local_size=$(stat -c%s -- "$obj")
-    remote_size=$(stat_remote "${remote_path}/${obj}") || remote_size=""
     [[ -n "$local_size" && "$local_size" == "$remote_size" ]] \
-        || { echo "SIZE MISMATCH after rsync: $obj (local=$local_size remote=$remote_size)" >&2; exit 1; }
+        || { echo "SIZE MISMATCH after rsync: $obj (local=$local_size remote=${remote_size:-missing})" >&2; exit 1; }
     # Size alone cannot catch same-size corruption, and rsync -a skips an
     # existing object whose size+mtime match (stale partial transfer).
-    # SHA256(E)/MD5(E) keys ARE the content hash, so hash the remote object
-    # and compare to the key -- the check `git annex copy` would have done.
+    # SHA256(E)/MD5(E) keys ARE the content hash, so compare the remote object's
+    # hash to the key -- the check `git annex copy` would have done.
     # MD5E matters: `datalad create` datasets (every dataset on the server) use
     # annex.backend=MD5E. Other backends fall back to size-only, loudly.
     key=$(basename "$obj")
@@ -159,13 +175,12 @@ while IFS= read -r obj; do
     esac
     if [[ -n "$algo" ]]; then
         want=${key##*--}; want=${want%%.*}
-        got=$(hash_remote "$algo" "${remote_path}/${obj}") || got=""
-        [[ "$got" == "$want" ]] \
-            || { echo "CHECKSUM MISMATCH after rsync: $obj ($algo key=$want remote=${got:-unreadable})" >&2; exit 1; }
+        [[ "$remote_hash" == "$want" ]] \
+            || { echo "CHECKSUM MISMATCH after rsync: $obj ($algo key=$want remote=${remote_hash:-unreadable})" >&2; exit 1; }
     else
         echo "WARNING: $key has an unsupported backend; remote integrity checked by size only" >&2
     fi
-done < "$objfile"
+done < "$verified"
 for k in "${keys[@]}"; do echo "$k $remote_uuid 1"; done | git annex setpresentkey --batch
 # setpresentkey only wrote the location log on the LOCAL git-annex branch;
 # push it or the server holds the objects without knowing it does. A
