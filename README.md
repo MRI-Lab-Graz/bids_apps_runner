@@ -243,11 +243,11 @@ The interface fetches the container's `--help` output to surface pipeline-specif
 
 Security defaults:
 
-- The GUI now binds to `127.0.0.1` by default. This is intentional; do not expose it directly on a shared network unless you have an authenticated reverse proxy in front of it.
-- Browser login is enabled by default. Set `PRISM_GUI_PASSWORD` or `PRISM_GUI_PASSWORD_HASH` to control the credential explicitly. If neither is set, the runner prints a generated password for the current process at startup.
-- To override the bind host, set `PRISM_GUI_HOST`. Non-loopback binds require either browser login or `PRISM_GUI_AUTH_TOKEN`. Token-authenticated remote callers must send that token in either `X-Prism-Auth` or `Authorization: Bearer <token>`.
-- The browser UI now attaches CSRF tokens automatically to mutating requests. If you call the POST/DELETE endpoints yourself with a browser session, send `X-CSRF-Token` from the current page token.
-- Set `PRISM_SECRET_KEY` in production-like deployments if you do not want the runner to generate a per-machine local secret file.
+- **Every request needs the per-run access token.** On a shared login node every logged-in user can reach `127.0.0.1`, so loopback is never trusted. At startup the runner prints `http://localhost:<port>/?token=<token>`. Open that URL once and an HttpOnly, `SameSite=Strict` cookie carries the token after that. Each start generates a fresh token; set `PRISM_GUI_AUTH_TOKEN` to pin one. Scripts send it as `X-Prism-Auth: <token>` or `Authorization: Bearer <token>`.
+- The GUI binds to `127.0.0.1` by default (`PRISM_GUI_HOST` overrides). Requests whose `Host` header isn't loopback or the bind host are refused, which blocks DNS rebinding; list extra names (e.g. behind a reverse proxy) in `PRISM_GUI_ALLOWED_HOSTS`, comma-separated.
+- Cookie-authenticated POST/DELETE requests coming from another origin are refused.
+- Optional password login on top: `PRISM_GUI_PASSWORD` or `PRISM_GUI_PASSWORD_HASH`.
+- Set `PRISM_SECRET_KEY` if you do not want the runner to generate a per-machine local secret file.
 
 ### Email notifications for long/detached runs
 

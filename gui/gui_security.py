@@ -33,18 +33,6 @@ def is_loopback_host(host: str) -> bool:
         return False
 
 
-def request_is_loopback(remote_addr: str) -> bool:
-    normalized = str(remote_addr or "").strip().split("%", 1)[0]
-    if not normalized:
-        return False
-    if normalized in _LOOPBACK_HOSTS:
-        return True
-    try:
-        return ipaddress.ip_address(normalized).is_loopback
-    except ValueError:
-        return False
-
-
 def load_or_create_secret_key(data_dir: Path, env_var: str = "PRISM_SECRET_KEY") -> str:
     env_key = (os.environ.get(env_var) or "").strip()
     if env_key:
@@ -165,3 +153,19 @@ def resolve_config_storage_dir(
         return requested
 
     raise ValueError("Config folder must stay inside the runner config directories")
+
+
+def load_or_generate_auth_token(env_var: str = "PRISM_GUI_AUTH_TOKEN") -> str:
+    """Token every request must carry. Generated per run unless pinned via env:
+    loopback is shared by every user on a login node, so it is never trust."""
+    return (os.environ.get(env_var) or "").strip() or secrets.token_urlsafe(32)
+
+
+def host_is_allowed(host_header: str, extra_hosts: set[str]) -> bool:
+    """Host-header allowlist against DNS rebinding (port is ignored)."""
+    host = str(host_header or "").strip().lower()
+    if host.startswith("["):
+        host = host[1 : host.find("]")]
+    elif host.count(":") == 1:
+        host = host.split(":", 1)[0]
+    return is_loopback_host(host) or host in extra_hosts

@@ -1,9 +1,12 @@
 import secrets
 import time
 from typing import Any, Callable
+from urllib.parse import urlencode, urlsplit
 
 from flask import jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
+
+TOKEN_COOKIE = "prism_token"
 
 
 def register_auth_handlers(
@@ -15,19 +18,28 @@ def register_auth_handlers(
     auth_header: str,
     csrf_header: str,
     request_auth_token: Callable[[], str],
-    request_is_loopback: Callable[[str], bool],
+    host_is_allowed: Callable[[str], bool],
     public_paths: set[str],
     index_endpoint: str = "index",
     login_template: str = "login.html",
 ):
-    def has_valid_remote_token() -> bool:
+    def token_matches(provided: str) -> bool:
         configured = auth_token()
-        if not configured:
-            return False
-        provided_token = request_auth_token()
-        return bool(provided_token) and secrets.compare_digest(
-            provided_token, configured
+        return bool(configured and provided) and secrets.compare_digest(
+            provided, configured
         )
+
+    def has_valid_remote_token() -> bool:
+        """Header/Bearer token: never sent by a browser on its own, so it is
+        also proof against CSRF."""
+        return token_matches(request_auth_token())
+
+    def has_valid_cookie_token() -> bool:
+        return token_matches(str(request.cookies.get(TOKEN_COOKIE) or ""))
+
+    def origin_is_foreign() -> bool:
+        origin = request.headers.get("Origin")
+        return bool(origin) and urlsplit(origin).netloc != request.host
 
     def request_wants_json_response() -> bool:
         accept = str(request.headers.get("Accept") or "").lower()
@@ -108,20 +120,39 @@ def register_auth_handlers(
 
     @app.before_request
     def protect_gui_access():
+        if not host_is_allowed(request.host):
+            return jsonify({"error": "Host not allowed"}), 400
+
         if is_public_request_path(request.path):
             return None
 
         if has_valid_remote_token():
             return None
 
-        if not login_enabled() and request_is_loopback(request.remote_addr):
+        # Jupyter-style: /?token=... once, then the cookie carries it.
+        if request.method == "GET" and token_matches(
+            str(request.args.get("token") or "")
+        ):
+            rest = urlencode(
+                [(k, v) for k, v in request.args.items(multi=True) if k != "token"]
+            )
+            response = redirect(request.path + (f"?{rest}" if rest else ""))
+            response.set_cookie(
+                TOKEN_COOKIE, auth_token(), httponly=True, samesite="Strict"
+            )
+            return response
+
+        if has_valid_cookie_token():
+            if request.method not in {"GET", "HEAD", "OPTIONS"} and origin_is_foreign():
+                return jsonify({"error": "Cross-origin request refused"}), 403
             return None
 
         if not login_enabled():
             response = jsonify(
                 {
                     "error": "Unauthorized",
-                    "details": f"Provide {auth_header} or Authorization: Bearer <token>",
+                    "details": "Open the /?token=... URL printed when the GUI started "
+                    f"(scripts: send {auth_header} or Authorization: Bearer <token>).",
                 }
             )
             response.headers["WWW-Authenticate"] = (

@@ -48,12 +48,13 @@ from gui.gui_utility_routes import (
     COHORT_LOG_BASE_DIR,
 )
 from gui.gui_security import (
+    host_is_allowed as _host_is_allowed,
     is_loopback_host as _is_loopback_host,
+    load_or_generate_auth_token as _load_or_generate_auth_token,
     load_gui_password_config,
     load_or_create_secret_key as _load_or_create_secret_key,
     normalize_json_filename as _normalize_json_filename,
     normalize_project_id as _normalize_project_id,
-    request_is_loopback as _request_is_loopback,
     resolve_config_storage_dir as _resolve_config_storage_dir,
     resolve_named_config_path as _resolve_named_config_path,
     resolve_project_dir as _resolve_project_dir,
@@ -148,7 +149,14 @@ PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 GLOBAL_SETTINGS_DIR = DATA_DIR / "configs"
 GLOBAL_SETTINGS_PATH = GLOBAL_SETTINGS_DIR / "global_settings.json"
 GUI_HOST = (os.environ.get("PRISM_GUI_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-GUI_AUTH_TOKEN = (os.environ.get("PRISM_GUI_AUTH_TOKEN") or "").strip()
+GUI_AUTH_TOKEN = _load_or_generate_auth_token()
+# Extra Host-header names to accept besides loopback (comma-separated), e.g.
+# when the GUI sits behind a reverse proxy. Guards against DNS rebinding.
+GUI_ALLOWED_HOSTS = {
+    h.strip().lower()
+    for h in [GUI_HOST, *(os.environ.get("PRISM_GUI_ALLOWED_HOSTS") or "").split(",")]
+    if h.strip()
+}
 GUI_AUTH_HEADER = "X-Prism-Auth"
 CSRF_HEADER = "X-CSRF-Token"
 GUI_LOGIN_CONFIG = load_gui_password_config()
@@ -314,7 +322,7 @@ register_auth_handlers(
     auth_header=GUI_AUTH_HEADER,
     csrf_header=CSRF_HEADER,
     request_auth_token=_request_auth_token,
-    request_is_loopback=_request_is_loopback,
+    host_is_allowed=lambda host: _host_is_allowed(host, GUI_ALLOWED_HOSTS),
     public_paths=PUBLIC_ENDPOINTS,
     index_endpoint="index",
     login_template="login.html",
@@ -1768,13 +1776,6 @@ register_run_routes(
 
 if __name__ == "__main__":
     host = GUI_HOST
-    if not _is_loopback_host(host) and not GUI_AUTH_TOKEN and not GUI_LOGIN_ENABLED:
-        print(
-            "[ERROR] Refusing to bind the GUI to a non-loopback host without PRISM_GUI_AUTH_TOKEN or GUI login",
-            flush=True,
-        )
-        sys.exit(1)
-
     try:
         port = _find_available_port(host)
     except RuntimeError as exc:
@@ -1784,7 +1785,9 @@ if __name__ == "__main__":
     display_host = "localhost" if _is_loopback_host(host) else host
 
     print(f"🌐 Starting BIDS App Runner GUI v{__version__}")
-    print(f"🔗 Open in browser: http://{display_host}:{port}")
+    url = f"http://{display_host}:{port}/?token={GUI_AUTH_TOKEN}"
+    print(f"🔗 Open in browser: {url}")
+    print("   (the token is required: other users on this host share 127.0.0.1)")
     print(f"   (VS Code: use the PORTS panel → globe icon next to port {port})")
     print("💡 Press Ctrl+C to stop the server\n")
     print(f"🚀 Running with Waitress server on {host}:{port}", flush=True)
@@ -1795,15 +1798,13 @@ if __name__ == "__main__":
                 f"🔑 Generated GUI password for this run: {GUI_BOOTSTRAP_PASSWORD}",
                 flush=True,
             )
-    if GUI_AUTH_TOKEN:
-        print(
-            f"🔐 Remote requests must provide {GUI_AUTH_HEADER} or Authorization: Bearer <token>",
-            flush=True,
-        )
+    print(
+        f"🔐 Scripts: send {GUI_AUTH_HEADER}: <token> or Authorization: Bearer <token>",
+        flush=True,
+    )
 
     # Open browser after a short delay so the server is ready to accept connections.
     if _is_loopback_host(host):
-        url = f"http://{display_host}:{port}"
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
 
     if _start_idle_watchdog():

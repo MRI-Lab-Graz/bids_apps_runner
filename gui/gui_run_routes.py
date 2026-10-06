@@ -5,7 +5,6 @@ import platform
 import re
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import uuid
@@ -1156,30 +1155,6 @@ def register_run_routes(
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
-    @app.route("/save_hpc_script", methods=["POST"])
-    def save_hpc_script():
-        data = request.get_json(silent=True) or {}
-        script_content = data.get("script")
-        subject = data.get("subject")
-        output_dir = data.get("output_dir", os.path.join(tempfile.gettempdir(), "hpc_scripts"))
-
-        if not script_content or not subject:
-            return jsonify({"error": "script and subject are required"}), 400
-
-        try:
-            output_path = Path(output_dir) / f"job_{subject}.sh"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(output_path, "w", encoding="utf-8") as handle:
-                handle.write(script_content)
-
-            os.chmod(output_path, 0o755)
-            return jsonify(
-                {"message": f"Script saved to {output_path}", "path": str(output_path)}
-            )
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
-
     @app.route("/submit_hpc_job", methods=["POST"])
     def submit_hpc_job():
         data = request.get_json(silent=True) or {}
@@ -1333,21 +1308,3 @@ def register_run_routes(
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
-    @app.route("/cancel_hpc_job", methods=["POST"])
-    def cancel_hpc_job():
-        data = request.get_json(silent=True) or {}
-        job_id = data.get("job_id")
-
-        if not job_id:
-            return jsonify({"error": "job_id is required"}), 400
-
-        try:
-            cmd = ["scancel", job_id]
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return jsonify({"message": f"Job {job_id} cancelled", "job_id": job_id})
-        except subprocess.CalledProcessError as exc:
-            return jsonify({"error": f"Failed to cancel job: {exc.stderr}"}), 500
-        except FileNotFoundError:
-            return jsonify({"error": "scancel not found - SLURM not available"}), 400
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
