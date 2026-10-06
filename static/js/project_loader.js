@@ -534,13 +534,10 @@ function applyMachineSettingsToRunnerForm(options = {}) {
         }
 
         if (defaultApptainerImage && (!fillOnlyEmpty || !hasConfiguredContainer)) {
-            const hasOption = Array.from(apptainerSelectEl.options).some(
-                (opt) => opt.value === defaultApptainerImage,
-            );
-            if (!hasOption) {
+            if (!selectContainer(defaultApptainerContainer) && !selectContainer(defaultApptainerImage)) {
                 apptainerSelectEl.add(new Option(defaultApptainerImage, defaultApptainerImage));
+                apptainerSelectEl.value = defaultApptainerImage;
             }
-            apptainerSelectEl.value = defaultApptainerImage;
             updateFetchHelpBtnVisibility();
         }
     } else if (resolvedEngine === 'docker') {
@@ -1345,10 +1342,7 @@ async function restoreProjectLoadDetails(cfg, common, loadToken) {
                 const filename = containerPath.substring(containerPath.lastIndexOf('/') + 1);
                 const scanned = await scanContainers(loadToken, { silent: true });
                 if (!scanned || isStaleProjectLoad(loadToken)) return;
-                const selectEl = document.getElementById('container_select');
-                if (selectEl) {
-                    selectEl.value = filename;
-                }
+                selectContainer(containerPath) || selectContainer(filename);
                 await checkAppVersion(loadToken);
             }
         }
@@ -1499,6 +1493,83 @@ function buildContainerOptionEntries(containers) {
     }));
 }
 
+// Pure: the app an image belongs to, from its file name -- the part before
+// the version ("qsiprep/qsiprep_26.0.0.sif" -> "qsiprep",
+// "fastsurfer_bids_cuda-v2.5.4.sif" -> "fastsurfer_bids_cuda").
+function containerAppName(relpath) {
+    const stem = relpath.split('/').pop().replace(/\.(sif|simg)$/i, '');
+    const m = stem.match(/^(.+?)[_-]v?\d+(?:\.\d+)/);
+    return (m ? m[1] : stem).toLowerCase();
+}
+
+function _containerVersionKey(relpath) {
+    const m = relpath.split('/').pop().match(/\d+(?:\.\d+)+/);
+    return m ? m[0].split('.').map(Number) : [];
+}
+
+function _newestFirst(a, b) {
+    const ka = _containerVersionKey(a.value);
+    const kb = _containerVersionKey(b.value);
+    for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+        const d = (kb[i] || 0) - (ka[i] || 0);
+        if (d) return d;
+    }
+    return 0;
+}
+
+// The full scanned catalog; container_select only ever holds one app's slice.
+let _containerCatalog = [];
+
+function _renderContainerVersions(app) {
+    const s = document.getElementById('container_select');
+    s.innerHTML = '';
+    _containerCatalog
+        .filter((e) => e.app === app)
+        .sort(_newestFirst)
+        .forEach((e) => {
+            const file = e.value.split('/').pop();
+            const opt = new Option(e.local ? file : `${file} (not downloaded)`, e.value);
+            opt.dataset.local = e.local ? '1' : '0';
+            s.add(opt);
+        });
+}
+
+// Two-level picker: container_app_select (app) narrows container_select
+// (that app's versions). container_select's value stays the image path
+// relative to container_folder, so everything reading it is unchanged.
+// Keeps the current selection if it survives the rescan.
+function populateContainerSelects(containers) {
+    const previous = document.getElementById('container_select').value;
+    _containerCatalog = buildContainerOptionEntries(containers).map((e) => ({
+        ...e,
+        app: containerAppName(e.value),
+    }));
+    const appSel = document.getElementById('container_app_select');
+    appSel.innerHTML = '';
+    [...new Set(_containerCatalog.map((e) => e.app))].sort().forEach((app) => appSel.add(new Option(app, app)));
+    if (!(previous && selectContainer(previous))) _renderContainerVersions(appSel.value);
+}
+
+// Selects an image by its catalog path, a saved absolute path
+// (container_folder + '/' + path) or a bare file name, switching the app
+// select to match. Returns false if the catalog has no such image.
+function selectContainer(ref) {
+    const folder = (document.getElementById('container_folder').value || '').replace(/\/+$/, '');
+    const entry = _containerCatalog.find(
+        (e) => e.value === ref || `${folder}/${e.value}` === ref || e.value.split('/').pop() === ref,
+    );
+    if (!entry) return false;
+    document.getElementById('container_app_select').value = entry.app;
+    _renderContainerVersions(entry.app);
+    document.getElementById('container_select').value = entry.value;
+    return true;
+}
+
+function onContainerAppChange() {
+    _renderContainerVersions(document.getElementById('container_app_select').value);
+    document.getElementById('container_select').dispatchEvent(new Event('change'));
+}
+
 async function scanContainers(loadToken = null, options = {}) {
     const silent = !!options.silent;
     applyVersionedOutputPaths({ source: 'machine-settings' });
@@ -1522,14 +1593,8 @@ async function scanContainers(loadToken = null, options = {}) {
             return false;
         }
 
-        const s = document.getElementById('container_select');
-        s.innerHTML = '';
+        populateContainerSelects(data.containers);
         if (data.containers && data.containers.length > 0) {
-            buildContainerOptionEntries(data.containers).forEach((entry) => {
-                const opt = new Option(entry.label, entry.value);
-                opt.dataset.local = entry.local ? '1' : '0';
-                s.add(opt);
-            });
             await checkAppVersion(loadToken);
             applyVersionedOutputPaths({ source: 'scan-containers' });
             // Skip during a project/pipeline load restore (loadToken set): the
@@ -1702,7 +1767,11 @@ function _updateFetchHelpBtnOnly() {
     const activeBtn = ref.engine === 'docker' ? dockerBtn : apptainerBtn;
     const inactiveBtn = ref.engine === 'docker' ? apptainerBtn : dockerBtn;
     if (inactiveBtn) inactiveBtn.style.display = 'none';
-    if (activeBtn) activeBtn.style.display = 'block';
+    // A not-yet-downloaded image has no .sif to run --help on; Download
+    // (updateContainerDownloadBtnVisibility) takes this button's place.
+    const selected = document.getElementById('container_select').selectedOptions[0];
+    const remoteOnly = ref.engine !== 'docker' && selected && selected.dataset.local === '0';
+    if (activeBtn) activeBtn.style.display = remoteOnly ? 'none' : 'block';
 }
 
 // Full reactive check, including the stale-options banner recompute
@@ -1747,17 +1816,30 @@ function updateContainerDownloadBtnVisibility() {
     btn.style.display = selected && selected.dataset.local === '0' ? 'block' : 'none';
 }
 
+// Pure: the overall percentage from the last `rsync --info=progress2`
+// line in /fetch_container_status's log_tail, or '' before the first one.
+function containerFetchProgress(logTail) {
+    const all = String(logTail || '').match(/\d+%/g);
+    return all ? all[all.length - 1] : '';
+}
+
 // Fetches the currently selected (remote-only) container from the DataLad
-// server's catalog into container_folder via /fetch_container, then polls
-// /fetch_container_status (same job-id pattern as the TemplateFlow
-// downloader in templates/index.html) until it completes or fails.
+// server's catalog into container_folder via /fetch_container, polls
+// /fetch_container_status, showing progress on the Download button, and
+// once it is on disk selects it and loads its options.
 async function downloadSelectedContainer() {
     const folder = (document.getElementById('container_folder').value || '').trim();
     const name = document.getElementById('container_select').value;
     if (!folder || !name) return;
 
     const btn = document.getElementById('containerDownloadBtn');
-    if (btn) btn.disabled = true;
+    const setBtn = (html, busy) => {
+        if (!btn) return;
+        btn.disabled = busy;
+        btn.innerHTML = html;
+    };
+    const spinner = '<span class="spinner-border spinner-border-sm me-1"></span>';
+    setBtn(`${spinner}Downloading...`, true);
     showStatus(`Downloading ${name} from the DataLad server...`);
 
     try {
@@ -1766,47 +1848,34 @@ async function downloadSelectedContainer() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ folder, name }),
         });
-        const data = await resp.json();
-        if (!resp.ok || data.error) {
-            showStatus(data.error || 'Failed to start download.', true);
-            if (btn) btn.disabled = false;
+        const started = await resp.json();
+        if (!resp.ok || started.error) {
+            showStatus(started.error || 'Failed to start download.', true);
             return;
         }
-        await _pollContainerFetch(data.job_id, name);
+        for (;;) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            const data = await (
+                await fetch(`/fetch_container_status?job_id=${encodeURIComponent(started.job_id)}`)
+            ).json();
+            if (data.status === 'failed') {
+                showStatus(data.error || 'Download failed.', true);
+                return;
+            }
+            if (data.status === 'completed') break;
+            setBtn(`${spinner}Downloading ${containerFetchProgress(data.log_tail)}`, true);
+        }
+        setBtn('Download', false);
+        await scanContainers(null, { silent: true });
+        selectContainer(name);
+        updateFetchHelpBtnVisibility();
+        updateContainerDownloadBtnVisibility();
+        showStatus(`${name} downloaded and ready -- loading its options.`);
+        await fetchAppOptions();
     } catch (e) {
-        showStatus('Failed to start download: ' + e, true);
-        if (btn) btn.disabled = false;
-    }
-}
-
-async function _pollContainerFetch(jobId, name) {
-    const btn = document.getElementById('containerDownloadBtn');
-    for (;;) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        let data;
-        try {
-            const resp = await fetch(`/fetch_container_status?job_id=${encodeURIComponent(jobId)}`);
-            data = await resp.json();
-        } catch (e) {
-            showStatus('Status check failed: ' + e, true);
-            if (btn) btn.disabled = false;
-            return;
-        }
-        if (data.status === 'completed') {
-            showStatus(`Downloaded ${name}.`);
-            if (btn) btn.disabled = false;
-            await scanContainers(null, { silent: true });
-            const s = document.getElementById('container_select');
-            if (s) s.value = name;
-            updateFetchHelpBtnVisibility();
-            updateContainerDownloadBtnVisibility();
-            return;
-        }
-        if (data.status === 'failed') {
-            showStatus(data.error || 'Download failed.', true);
-            if (btn) btn.disabled = false;
-            return;
-        }
+        showStatus('Download failed: ' + e, true);
+    } finally {
+        setBtn('Download', false);
     }
 }
 

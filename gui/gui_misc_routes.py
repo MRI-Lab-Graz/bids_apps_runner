@@ -853,9 +853,12 @@ def register_misc_routes(
 
         def _run():
             log_lines = []
+            print(f"[GUI] Downloading {name} from {ssh_host}...", flush=True)
             try:
+                # progress2 -> one overall "NN%" line; text mode splits its
+                # \r updates into lines, so the GUI can read the last one.
                 proc = subprocess.Popen(
-                    ["rsync", "-a", remote_src, dest],
+                    ["rsync", "-a", "--info=progress2", remote_src, dest],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -874,6 +877,10 @@ def register_misc_routes(
             except Exception as exc:
                 status = "failed"
                 error = str(exc)
+            if status == "completed":
+                print(f"[GUI] Downloaded {name} to {dest}", flush=True)
+            else:
+                print(f"[GUI] Download of {name} failed: {error}", flush=True)
             with _container_jobs_lock:
                 _container_jobs[job_id]["status"] = status
                 _container_jobs[job_id]["error"] = error

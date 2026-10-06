@@ -117,10 +117,32 @@ def test_recording_activity_pushes_the_idle_clock_forward(monkeypatch):
 
 
 def test_status_polling_does_not_count_as_user_activity():
-    for path in sorted(prism_app_runner.SILENT_ENDPOINTS):
+    for path in sorted(prism_app_runner.POLLED_ENDPOINTS):
         assert prism_app_runner._is_user_activity(path) is False, path
 
 
 def test_real_interaction_counts_as_user_activity():
     assert prism_app_runner._is_user_activity("/run_app") is True
     assert prism_app_runner._is_user_activity("/load_project") is True
+
+
+def test_timer_polled_endpoints_do_not_count_as_user_activity():
+    # Every endpoint templates/index.html and static/js/*.js poll on a timer.
+    for path in (
+        "/run_status",
+        "/local_run_readiness",
+        "/cohort/readiness",
+        "/cohort/job_status",
+        "/fetch_container_status",
+        "/templateflow_download_status",
+        "/connect_remote_dataset_status",
+    ):
+        assert prism_app_runner._is_user_activity(path) is False, path
+
+
+def test_requests_are_not_echoed_to_the_terminal(capsys):
+    for method, path in (("GET", "/run_status"), ("POST", "/list_containers")):
+        with prism_app_runner.app.test_request_context(path, method=method):
+            prism_app_runner._track_user_activity()
+
+    assert "[GUI]" not in capsys.readouterr().out

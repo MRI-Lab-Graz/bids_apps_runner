@@ -140,7 +140,7 @@ def test_fetch_container_requires_remote_container_path_configured(tmp_path):
     assert resp.status_code == 400
 
 
-def test_fetch_container_runs_rsync_and_reports_completion(tmp_path, monkeypatch):
+def test_fetch_container_runs_rsync_and_reports_completion(tmp_path, monkeypatch, capsys):
     calls = []
 
     class FakeProc:
@@ -178,3 +178,9 @@ def test_fetch_container_runs_rsync_and_reports_completion(tmp_path, monkeypatch
     assert calls[0][0] == "rsync"
     assert calls[0][-2] == "datalad-server:/datalad/mri/container/mriqc/mriqc_24.0.2.sif"
     assert calls[0][-1] == str(tmp_path / "mriqc" / "mriqc_24.0.2.sif")
+    # Machine-readable progress for the GUI's download indicator.
+    assert "--info=progress2" in calls[0]
+    # Start and finish are the only things worth echoing to the terminal.
+    out = capsys.readouterr().out
+    assert "[GUI] Downloading mriqc/mriqc_24.0.2.sif" in out
+    assert "[GUI] Downloaded mriqc/mriqc_24.0.2.sif" in out

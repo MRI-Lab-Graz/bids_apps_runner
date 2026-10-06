@@ -411,6 +411,12 @@ def compute_node_cmd(cmd, *, time, mem, cpus=1):
     subprocess.run(capture_output=...) or log-file Popen keeps working as-is.
     Killing srun (e.g. a subprocess timeout) cancels the step. Partition:
     PRISM_COMPUTE_PARTITION, else the cluster default.
+
+    Inside the job, .datalad-slurm-venv/bin goes first on PATH. srun hands
+    the job the GUI's PATH, which starts with .appsrunner/bin -- a venv
+    symlinked to the login node's system python3 (3.10). Compute nodes run
+    3.12, so its `datalad` dies with "No module named 'datalad'"
+    (2026-10-06). .datalad-slurm-venv's uv-managed python works on both.
     """
     if not on_bare_slurm_login_node():
         return list(cmd)
@@ -418,7 +424,8 @@ def compute_node_cmd(cmd, *, time, mem, cpus=1):
     partition = (os.environ.get("PRISM_COMPUTE_PARTITION") or "").strip()
     if partition:
         prefix.append(f"--partition={partition}")
-    return prefix + list(cmd)
+    venv_bin = str(Path(__file__).resolve().parents[1] / ".datalad-slurm-venv" / "bin")
+    return prefix + ["bash", "-c", 'PATH="$0:$PATH" exec "$@"', venv_bin] + list(cmd)
 
 
 # Statuses that mean a background job has stopped for good. Anything

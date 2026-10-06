@@ -510,8 +510,8 @@
                                         
                                         <!-- Apptainer Fields -->
                                         <div class="col-md-9" id="apptainer_fields_container">
-                                            <div class="row align-items-end">
-                                                <div class="col-md-6">
+                                            <div class="row align-items-end g-2">
+                                                <div class="col-12">
                                                     <label class="form-label">Apptainer Images Folder (path/to/*.sif)</label>
                                                     <div class="input-group">
                                                         <input type="text" id="container_folder" class="form-control">
@@ -519,9 +519,10 @@
                                                         <button type="button" class="btn btn-primary" onclick="scanContainers()">Scan</button>
                                                     </div>
                                                 </div>
-                                                <div class="col-md-6">
-                                                    <label class="form-label">Select Local Image</label>
+                                                <div class="col-12">
+                                                    <label class="form-label">App / Version</label>
                                                     <div class="input-group" id="container_select_group" style="display:flex;">
+                                                        <select id="container_app_select" class="form-select" style="max-width: 16rem;" onchange="onContainerAppChange()"></select>
                                                         <select id="container_select" class="form-select" onchange="checkAppVersion(); updateFetchHelpBtnVisibility(); updateContainerDownloadBtnVisibility();"></select>
                                                         <button type="button" id="containerDownloadBtn" class="btn btn-outline-primary" style="display:none;" onclick="downloadSelectedContainer()" title="Not yet downloaded from the DataLad server -- fetch it">Download</button>
                                                         <button type="button" id="fetchHelpBtn" class="btn btn-accent" style="display:none;" onclick="fetchAppOptions()">Load Options</button>
@@ -3567,12 +3568,11 @@
                             await scanContainers();
                             
                             // If the container from config is not in the select (e.g. renamed or moved), add it
-                            const s = document.getElementById('container_select');
-                            let exists = Array.from(s.options).some(o => o.value === name);
-                            if (!exists) {
+                            if (!selectContainer(name)) {
+                                const s = document.getElementById('container_select');
                                 s.add(new Option(name + " (not in folder)", name));
+                                s.value = name;
                             }
-                            s.value = name;
                             await checkAppVersion();
                             
                             console.log("Auto-fetching help for loaded container...");

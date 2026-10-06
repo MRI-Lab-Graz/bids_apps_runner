@@ -616,21 +616,25 @@ def check_system_dependencies():
     }
 
 
-SILENT_ENDPOINTS = {
+# Endpoints the frontend polls on a timer. A forgotten browser tab hits
+# these forever, so they must not count as use (see _is_user_activity).
+POLLED_ENDPOINTS = {
     "/get_log",
     "/pilot_estimator_status",
+    "/run_status",
+    "/local_run_readiness",
+    "/cohort/readiness",
+    "/cohort/job_status",
+    "/fetch_container_status",
+    "/templateflow_download_status",
+    "/connect_remote_dataset_status",
 }
 
 
 @app.before_request
-def log_request_info():
-    if request.path not in SILENT_ENDPOINTS:
-        print(
-            f"[GUI] {request.method} {request.path} from {request.remote_addr}",
-            flush=True,
-        )
-    # Feeds the login-node idle cap (see _should_shut_down_now). Timer-driven
-    # status polls deliberately do not count as use.
+def _track_user_activity():
+    # Feeds the login-node idle cap (see _should_shut_down_now). Requests are
+    # not echoed to the terminal: routes that do real work log it themselves.
     if _is_user_activity(request.path):
         _note_request_activity()
 
@@ -1096,17 +1100,19 @@ def get_dwi_native_resolution():
 def get_latest_version_from_dockerhub(repo):
     """Fetch the latest tag from Docker Hub for a given repo."""
     try:
-        url = f"https://registry.hub.docker.com/v2/repositories/{repo}/tags?page_size=10&ordering=last_updated"
+        url = f"https://registry.hub.docker.com/v2/repositories/{repo}/tags?page_size=100&ordering=last_updated"
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
-            data = response.json()
-            # Filter out 'latest' and other non-version tags if possible,
-            # but usually the first one that looks like a version is what we want.
-            tags = [t["name"] for t in data.get("results", [])]
-            for tag in tags:
-                # Basic check to avoid 'latest', 'stable', 'master', etc.
-                if re.search(r"\d+\.\d+", tag):
-                    return tag
+            # Highest *stable* release, not the most recently pushed tag: an
+            # rc (26.1.0rc1) or a backport pushed after the newest release
+            # would otherwise be offered as the "update".
+            stable = [
+                t["name"]
+                for t in response.json().get("results", [])
+                if re.fullmatch(r"v?\d+(\.\d+)+", t["name"])
+            ]
+            if stable:
+                return max(stable, key=lambda t: _numeric_version_key(t.lstrip("v")))
         return None
     except Exception as e:
         print(f"[DEBUG] Error checking Docker Hub for {repo}: {e}")
@@ -1288,13 +1294,13 @@ _IDLE_CHECK_INTERVAL_SECONDS = 5 * 60
 def _is_user_activity(path):
     """Whether a request path represents a person actually using the GUI.
 
-    The status endpoints in SILENT_ENDPOINTS are polled on a timer by
+    The status endpoints in POLLED_ENDPOINTS are polled on a timer by
     templates/index.html. A tab left open on a forgotten laptop would
     otherwise refresh the idle clock indefinitely -- which is how a GUI
     ends up resident for 62 days. Work that is genuinely still running
     keeps the process alive through _job_registries() instead.
     """
-    return path not in SILENT_ENDPOINTS
+    return path not in POLLED_ENDPOINTS
 
 
 def _note_request_activity():

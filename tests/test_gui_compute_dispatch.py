@@ -39,12 +39,35 @@ def test_compute_node_cmd_is_identity_off_login_node(monkeypatch):
 def test_compute_node_cmd_prefixes_srun_on_login_node(monkeypatch):
     monkeypatch.setattr(login_node_hygiene, "on_bare_slurm_login_node", lambda: True)
     monkeypatch.delenv("PRISM_COMPUTE_PARTITION", raising=False)
-    assert login_node_hygiene.compute_node_cmd(
+    cmd = login_node_hygiene.compute_node_cmd(
         ["datalad", "drop", "."], time="00:30:00", mem="4G", cpus=2
-    ) == [
+    )
+    assert cmd[:5] == [
         "srun", "--quiet", "--time=00:30:00", "--mem=4G", "--cpus-per-task=2",
-        "datalad", "drop", ".",
     ]
+    assert cmd[-3:] == ["datalad", "drop", "."]
+
+
+def test_compute_node_cmd_puts_the_portable_venv_first_inside_the_job(monkeypatch):
+    """2026-10-06: cohort setup under srun died with "No module named
+    'datalad'". The GUI's PATH starts with .appsrunner/bin, whose python is
+    a symlink to the login node's /usr/bin/python3 (3.10); compute nodes
+    run 3.12. .datalad-slurm-venv uses a uv-managed python in $HOME and
+    works on both -- it must win inside the job, ahead of the inherited
+    PATH, which must otherwise survive."""
+    monkeypatch.setattr(login_node_hygiene, "on_bare_slurm_login_node", lambda: True)
+    monkeypatch.delenv("PRISM_COMPUTE_PARTITION", raising=False)
+    cmd = login_node_hygiene.compute_node_cmd(
+        ["sh", "-c", 'printf %s "$PATH"'], time="00:01:00", mem="1G"
+    )
+    # Run exactly what srun would run on the node, minus srun's own options.
+    in_job = cmd[5:]
+    out = subprocess.run(
+        in_job, capture_output=True, text=True, check=True,
+        env={"PATH": "/inherited/bin:/usr/bin:/bin"},
+    ).stdout
+    venv_bin = str(Path(login_node_hygiene.__file__).resolve().parents[1] / ".datalad-slurm-venv" / "bin")
+    assert out.split(":") == [venv_bin, "/inherited/bin", "/usr/bin", "/bin"]
 
 
 def test_compute_node_cmd_honors_partition_env(monkeypatch):

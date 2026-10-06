@@ -171,3 +171,34 @@ def test_normalize_project_id_rejects_traversal():
 def test_normalize_json_filename_rejects_path_components():
     with pytest.raises(ValueError):
         prism_app_runner._normalize_json_filename("../../config.json")
+
+
+def test_get_latest_version_from_dockerhub_ignores_prereleases_and_push_order(monkeypatch):
+    # Real pennlinc/qsiprep ordering (2026-10): an rc was pushed after the
+    # stable 26.0.0, which made the GUI flag 26.0.0 as outdated. A backport
+    # pushed last must not win over a higher stable release either.
+    class DummyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "results": [
+                    {"name": "25.2.5"},
+                    {"name": "unstable"},
+                    {"name": "26.1.0rc1"},
+                    {"name": "latest"},
+                    {"name": "26.0.0"},
+                    {"name": "1.1.1"},
+                    {"name": "1.0.0rc1"},
+                ]
+            }
+
+    monkeypatch.setattr(
+        prism_app_runner.requests, "get", lambda *args, **kwargs: DummyResponse()
+    )
+
+    assert (
+        prism_app_runner.get_latest_version_from_dockerhub("pennlinc/qsiprep")
+        == "26.0.0"
+    )
