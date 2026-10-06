@@ -84,3 +84,35 @@ def datalad_url_templates(site: Mapping[str, str], app_name: str) -> dict[str, s
         "input_url_template": f"{host}:/{base}/{{dataset_id}}",
         "output_url_template": f"ssh://{host}/{base}/{{dataset_id}}/derivatives/{app_name}",
     }
+
+
+_ENV_LINE = re.compile(r"^\s*(PRISM_[A-Z0-9_]+)\s*=\s*(.*?)\s*$")
+
+
+def _read_site_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for line in lines:
+        match = _ENV_LINE.match(line)  # comments/blank/foreign keys don't match
+        if not match:
+            continue
+        key, value = match.groups()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values.setdefault(key, value)
+    return values
+
+
+def apply_site_env_files(env: dict[str, str], repo_dir: Path, home: Path) -> None:
+    """Fill `env` from site.env files without overriding anything already set.
+
+    Precedence (first set wins): what is already in `env`, then
+    ~/.config/bids_apps_runner/site.env, then <repo_dir>/site.env. The files
+    are data, not code: only `PRISM_*=value` lines are read, never executed.
+    """
+    for path in (home / ".config" / "bids_apps_runner" / "site.env", repo_dir / "site.env"):
+        for key, value in _read_site_env(path).items():
+            env.setdefault(key, value)

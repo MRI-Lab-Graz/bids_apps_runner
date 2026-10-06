@@ -67,7 +67,6 @@ def load_gui_password_config(
         return {
             "enabled": False,
             "password_hash": "",
-            "bootstrap_password": None,
             "source": "disabled",
         }
 
@@ -76,7 +75,6 @@ def load_gui_password_config(
         return {
             "enabled": True,
             "password_hash": password_hash,
-            "bootstrap_password": None,
             "source": "env-hash",
         }
 
@@ -85,14 +83,12 @@ def load_gui_password_config(
         return {
             "enabled": True,
             "password_hash": generate_password_hash(str(password)),
-            "bootstrap_password": None,
             "source": "env-password",
         }
 
     return {
         "enabled": False,
         "password_hash": "",
-        "bootstrap_password": None,
         "source": "default-disabled",
     }
 

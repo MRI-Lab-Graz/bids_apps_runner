@@ -20,10 +20,9 @@ echo "--------------------------------------------------------"
 echo "  BIDS App Runner GUI - Starting..."
 echo "--------------------------------------------------------"
 
-# Site settings (scratch root, remote DataLad server, data dir) -- see
-# site.env.example. Missing files are fine: defaults are per-user.
-# shellcheck source=scripts/load_site_env.sh
-source "$PROJECT_DIR/scripts/load_site_env.sh" "$PROJECT_DIR"
+# Site settings (scratch root, remote DataLad server, data dir) come from
+# site.env, read by the app itself -- see site.env.example. Missing files are
+# fine: defaults are per-user.
 
 # Run the app. (No password login; access is gated by the per-run token
 # printed below, which is always required.)

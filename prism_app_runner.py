@@ -34,6 +34,18 @@ from typing import Any
 from datetime import datetime
 from pathlib import Path
 
+# scripts/ must be importable BEFORE the gui modules below: several of them
+# import its modules (login_node_hygiene, prism_datalad, ...) at import time.
+# (Tests never noticed when this sat after them -- conftest.py adds it -- but
+# `python prism_app_runner.py` crashed on startup.)
+sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
+
+# Site settings (site.env) must be applied BEFORE the gui modules below are
+# imported: they read their PRISM_* settings at import time.
+from gui.site_config import apply_site_env_files as _apply_site_env_files
+
+_apply_site_env_files(os.environ, Path(__file__).resolve().parent, Path.home())
+
 from gui.gui_auth_routes import register_auth_handlers
 from gui.gui_cohort_routes import register_cohort_routes
 from gui.gui_misc_routes import register_misc_routes
@@ -60,9 +72,6 @@ from gui.gui_security import (
     resolve_project_dir as _resolve_project_dir,
 )
 from version import __version__
-
-# Add scripts directory to path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 
 import login_node_hygiene
 import prism_notify
@@ -154,7 +163,6 @@ CSRF_HEADER = "X-CSRF-Token"
 GUI_LOGIN_CONFIG = load_gui_password_config()
 GUI_LOGIN_ENABLED = bool(GUI_LOGIN_CONFIG.get("enabled"))
 GUI_LOGIN_PASSWORD_HASH = str(GUI_LOGIN_CONFIG.get("password_hash") or "")
-GUI_BOOTSTRAP_PASSWORD = GUI_LOGIN_CONFIG.get("bootstrap_password")
 PUBLIC_ENDPOINTS = {"/health", "/login"}
 
 
@@ -1782,11 +1790,6 @@ if __name__ == "__main__":
     print(f"🚀 Running with Waitress server on {host}:{port}", flush=True)
     if GUI_LOGIN_ENABLED:
         print("🔒 Browser login is enabled", flush=True)
-        if GUI_BOOTSTRAP_PASSWORD:
-            print(
-                f"🔑 Generated GUI password for this run: {GUI_BOOTSTRAP_PASSWORD}",
-                flush=True,
-            )
     print(
         f"🔐 Scripts: send {GUI_AUTH_HEADER}: <token> or Authorization: Bearer <token>",
         flush=True,

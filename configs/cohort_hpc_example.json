@@ -1,0 +1,31 @@
+{
+  "_note": "Reference example for direct multi-dataset CLI runs: copy it, edit every \"TODO...\" value (submit_bids_cohort.sh refuses to run while any remain) and replace YOUR_USER, then `bash scripts/submit_bids_cohort.sh setup -c <your copy>`. The GUI's 'BIDS App Cohort' panel does not read this file: it generates its own per-project config from the loaded project (see prism_app_runner._derive_cohort_config). ALL bulk data -- input clones, derivatives, scratch, logs, subject lists -- belongs on the large shared scratch filesystem (/cl_tmp/YOUR_USER/...), never on the home filesystem, which has no quota for it. The datalad URL templates use an ssh alias from your ~/.ssh/config plus the server's base path (the same values as PRISM_REMOTE_SSH_HOST / PRISM_REMOTE_BASE_PATH in site.env).",
+  "datasets": ["TODO_dataset_id"],
+  "paths": {
+    "shared_input_base": "/cl_tmp/YOUR_USER/data",
+    "shared_output_base": "/cl_tmp/YOUR_USER/derivatives",
+    "scratch_dir": "/cl_tmp/YOUR_USER/scratch",
+    "container": "/cl_tmp/YOUR_USER/containers/mriqc_24.0.2.sif",
+    "log_dir": "/cl_tmp/YOUR_USER/logs/bids_app",
+    "subject_lists_dir": "/cl_tmp/YOUR_USER/logs/subject_lists"
+  },
+  "datalad": {
+    "input_url_template": "TODO_ssh_alias:/TODO/base/path/{dataset_id}",
+    "output_url_template": "ssh://TODO_ssh_alias/TODO/base/path/{dataset_id}/derivatives/mriqc"
+  },
+  "hpc": {
+    "partition": "TODO_partition",
+    "time": "01:00:00",
+    "mem": "8G",
+    "cpus": 2,
+    "max_concurrent": 10,
+    "modules": [],
+    "environment": {}
+  },
+  "bids_app": {
+    "app_name": "mriqc",
+    "analysis_level": "participant",
+    "output_dir_name": "mriqc",
+    "options": []
+  }
+}

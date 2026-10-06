@@ -10,7 +10,8 @@ validation_reports/
 
 # Configuration and datasets
 config.json
-configs/
+configs/*
+!configs/cohort_hpc_example.json
 projects/
 cache/
 data/

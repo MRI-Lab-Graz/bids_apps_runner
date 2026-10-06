@@ -252,7 +252,7 @@ Security defaults:
 ### Setting it up for your site / as another user
 
 Nothing in the code names a lab or a person. Site settings come from environment
-variables, read from `site.env` by `start_gui.sh` (copy [site.env.example](site.env.example);
+variables, read from `site.env` by the app at startup (copy [site.env.example](site.env.example);
 put it in the repo folder, or in `~/.config/bids_apps_runner/site.env` for yourself alone —
 an exported variable beats both). Plain `KEY=VALUE` lines, never executed.
 
