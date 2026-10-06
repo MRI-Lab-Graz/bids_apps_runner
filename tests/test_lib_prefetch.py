@@ -64,6 +64,19 @@ def harness(tmp_path):
     _make_stubs(with_dir, ("sbatch", "datalad"))
     _make_stubs(without_dir, ("datalad",))
 
+    # The library resolves the venv relative to its own location. Source a
+    # copy inside a fake repo that has one, so results don't depend on
+    # whether this checkout happens to have the (gitignored) real venv --
+    # CI never does.
+    fake_repo = tmp_path / "repo"
+    (fake_repo / "scripts").mkdir(parents=True)
+    lib = fake_repo / "scripts" / LIB.name
+    lib.write_text(LIB.read_text())
+    venv_bin = fake_repo / ".datalad-slurm-venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "datalad").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (venv_bin / "datalad").chmod(0o755)
+
     def run(script_body, env=None, with_sbatch=True):
         stub_dir = with_dir if with_sbatch else without_dir
         full_env = {
@@ -74,7 +87,7 @@ def harness(tmp_path):
         full_env.update(env or {})
 
         result = subprocess.run(
-            ["/bin/bash", "-c", f'set -uo pipefail; source "{LIB}"\n{script_body}'],
+            ["/bin/bash", "-c", f'set -uo pipefail; source "{lib}"\n{script_body}'],
             capture_output=True,
             text=True,
             env=full_env,

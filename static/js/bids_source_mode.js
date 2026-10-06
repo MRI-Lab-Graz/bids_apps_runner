@@ -23,13 +23,27 @@
  * with, not the user choosing to abandon it.
  */
 
-var REMOTE_DATASET_ROOT_PREFIX = '/cl_tmp/mrilab/';
+// Where remote studies are cloned locally: a site setting handed over by the
+// page (window.PRISM_SITE.localDatasetBase, from PRISM_LOCAL_DATASET_BASE_DIR /
+// the per-user scratch default) -- not a constant naming one lab's folder.
+// Empty when the page gave none; callers must treat '' as "no remote root"
+// (an empty prefix would otherwise match every folder).
+function remoteDatasetRoot() {
+    const base = (window.PRISM_SITE && window.PRISM_SITE.localDatasetBase) || '';
+    return base ? base.replace(/\/+$/, '') + '/' : '';
+}
 
-// Best-effort default: a bids_folder already under the lab's local clone
+function remoteCloneDirFor(study) {
+    const root = remoteDatasetRoot();
+    return study && root ? root + study : '';
+}
+
+// Best-effort default: a bids_folder already under the local clone
 // root means this project's data came from the remote source; otherwise
 // assume a plain local folder. There's no separate persisted "mode" field.
 function inferBidsSourceMode(bidsFolder) {
-    return (bidsFolder || '').startsWith(REMOTE_DATASET_ROOT_PREFIX) ? 'remote' : 'local';
+    const root = remoteDatasetRoot();
+    return root && (bidsFolder || '').startsWith(root) ? 'remote' : 'local';
 }
 
 function switchBidsSourceMode(mode, userInitiated) {

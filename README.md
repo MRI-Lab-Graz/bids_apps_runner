@@ -249,6 +249,25 @@ Security defaults:
 - Optional password login on top: `PRISM_GUI_PASSWORD` or `PRISM_GUI_PASSWORD_HASH`.
 - Set `PRISM_SECRET_KEY` if you do not want the runner to generate a per-machine local secret file.
 
+### Setting it up for your site / as another user
+
+Nothing in the code names a lab or a person. Site settings come from environment
+variables, read from `site.env` by `start_gui.sh` (copy [site.env.example](site.env.example);
+put it in the repo folder, or in `~/.config/bids_apps_runner/site.env` for yourself alone —
+an exported variable beats both). Plain `KEY=VALUE` lines, never executed.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PRISM_SCRATCH_ROOT` | `/cl_tmp/<you>` | Root for bulk per-run data (never your home folder) |
+| `PRISM_REMOTE_SSH_HOST`, `PRISM_REMOTE_BASE_PATH` | *(off)* | DataLad server (an `~/.ssh/config` alias + base path). Without both, "Remote (SSH)" datasets and cohort setup/submit say how to configure it instead of guessing |
+| `PRISM_LOCAL_DATASET_BASE_DIR` | `$PRISM_SCRATCH_ROOT/datasets` | Where remote studies are cloned |
+| `PRISM_COHORT_LOG_BASE_DIR` | `$PRISM_SCRATCH_ROOT/bids_apps_runner_cohort_logs` | Cohort logs, generated scripts, subject lists |
+| `PRISM_DATA_DIR` | `~/.bids_apps_runner` | Projects, settings, secret key — never shared between users |
+
+A **shared install** (one checkout many people run) works: each user gets their own data dir
+and token, so projects and the secret key are never shared. A checkout that already holds its
+own `projects/` keeps using it.
+
 ### Email notifications for long/detached runs
 
 The GUI can send completion/failure emails when a run finishes, even if the browser is closed.

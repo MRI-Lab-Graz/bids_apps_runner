@@ -404,6 +404,23 @@ def on_bare_slurm_login_node():
     return _on_bare_slurm_login_node()
 
 
+def compute_node_cmd(cmd, *, time, mem, cpus=1):
+    """`cmd`, run via `srun` when this is a bare login node; unchanged otherwise.
+
+    srun passes stdout/stderr/exit code straight through, so a caller's
+    subprocess.run(capture_output=...) or log-file Popen keeps working as-is.
+    Killing srun (e.g. a subprocess timeout) cancels the step. Partition:
+    PRISM_COMPUTE_PARTITION, else the cluster default.
+    """
+    if not on_bare_slurm_login_node():
+        return list(cmd)
+    prefix = ["srun", "--quiet", f"--time={time}", f"--mem={mem}", f"--cpus-per-task={cpus}"]
+    partition = (os.environ.get("PRISM_COMPUTE_PARTITION") or "").strip()
+    if partition:
+        prefix.append(f"--partition={partition}")
+    return prefix + list(cmd)
+
+
 # Statuses that mean a background job has stopped for good. Anything
 # else -- including a job dict with no status at all -- counts as still
 # running, so an unrecognised job shape can never license a shutdown.

@@ -15,6 +15,8 @@ from typing import Callable
 
 from flask import jsonify, render_template, request
 
+import login_node_hygiene
+
 # In-memory registry of async TemplateFlow download jobs
 _tf_jobs: dict[str, dict] = {}
 _tf_jobs_lock = threading.Lock()
@@ -149,7 +151,8 @@ def register_misc_routes(
 
         try:
             result = subprocess.run(
-                cmd,
+                # Walks (optionally nibabel-loads) every output file: real I/O.
+                login_node_hygiene.compute_node_cmd(cmd, time="02:00:00", mem="4G"),
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
@@ -265,9 +268,15 @@ def register_misc_routes(
                 # bypasses the runscript entirely and invokes the given
                 # command directly, which is more reliable in that case.
                 action = "exec" if explicit_help_args else "run"
-                cmd = [apptainer_bin, action, "--containall", container, *help_args]
+                # A container run, so never on the login node (CLAUDE.md).
+                cmd = login_node_hygiene.compute_node_cmd(
+                    [apptainer_bin, action, "--containall", container, *help_args],
+                    time="00:05:00",
+                    mem="4G",
+                )
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            # Includes srun scheduling latency on a login node.
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             output = result.stdout + result.stderr
 
             usage_lines = []

@@ -296,3 +296,44 @@ describe('previewCohortConfig', () => {
         expect(url).toContain('batch_size=20');
     });
 });
+
+describe('toggleCohortPanel', () => {
+    // The datalad-slurm "open jobs" check is gone with datalad-slurm itself:
+    // annex-slurm keeps no bookkeeping DB (SLURM's own squeue/sacct is the
+    // only job state), so there is nothing stuck to detect or close.
+    beforeEach(() => {
+        // Includes the old open-jobs panel markup: with it present the old
+        // code reaches fetch(); without it the check bails out early and this
+        // test could not tell old from new.
+        document.body.insertAdjacentHTML('beforeend', `
+            <div id="cohortPanelBody" style="display:none;"></div>
+            <span id="cohortPanelIcon"></span>
+            <div id="cohortJobsPanel"><span id="cohortJobsBadge"></span>
+                <div id="cohortJobsDetail"></div><button id="cohortCloseJobsBtn"></button></div>`);
+    });
+
+    it('checks storage sync when opened, and never asks about datalad-slurm jobs', async () => {
+        window.fetch = vi.fn().mockResolvedValue({ json: () => Promise.resolve({}) });
+
+        toggleCohortPanel();
+        await Promise.resolve();
+
+        const urls = window.fetch.mock.calls.map((c) => String(c[0]));
+        expect(urls.some((u) => u.startsWith('/cohort/check_storage_sync'))).toBe(true);
+        expect(urls.some((u) => u.includes('open_jobs'))).toBe(false);
+    });
+
+    it('no longer defines the open-jobs functions', () => {
+        expect(typeof window.checkCohortOpenJobs).toBe('undefined');
+        expect(typeof window.closeCohortOpenJobs).toBe('undefined');
+    });
+});
+
+describe('_cohortSetDone', () => {
+    it('shows the final status without throwing (no leftover open-jobs call)', () => {
+        expect(() => _cohortSetDone('completed', 'submit')).not.toThrow();
+        expect(document.getElementById('cohortBadge').textContent).toBe('completed');
+        expect(document.getElementById('cohortStatusMsg').textContent).toBe('submit finished');
+        expect(document.getElementById('cohortSubmitBtn').disabled).toBe(false);
+    });
+});

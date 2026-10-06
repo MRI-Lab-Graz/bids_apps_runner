@@ -53,3 +53,6 @@ coverage.xml
 # is a new inode number every time, so a literal filename entry (as this used
 # to be) only ever matches the one that already happened.
 .nfs*
+
+# Site settings (lab-specific; copy site.env.example)
+site.env

@@ -1,6 +1,6 @@
 /**
  * Cohort panel: multi-subject SLURM array job submission via the
- * datalad-slurm workflow (scripts/submit_bids_cohort.sh /
+ * annex-slurm workflow (scripts/submit_bids_cohort.sh /
  * scripts/hpc_datalad_runner.py), driven through the /cohort/* routes in
  * gui/gui_cohort_routes.py.
  *
@@ -23,102 +23,7 @@ function toggleCohortPanel() {
     body.style.display = open ? 'none' : 'block';
     icon.style.transform = open ? '' : 'rotate(180deg)';
     if (!open) {
-        checkCohortOpenJobs();
         checkCohortStorageSync();
-    }
-}
-
-let _cohortOpenJobsCheck = { checking: false, error: null, openJobs: [] };
-
-async function checkCohortOpenJobs() {
-    const panel = document.getElementById('cohortJobsPanel');
-    const badge = document.getElementById('cohortJobsBadge');
-    const detail = document.getElementById('cohortJobsDetail');
-    const closeBtn = document.getElementById('cohortCloseJobsBtn');
-    if (!panel || !lastProjectId) { if (panel) panel.style.display = 'none'; return; }
-
-    panel.style.display = 'block';
-    panel.className = 'alert alert-secondary py-2 px-3 small mb-3';
-    _cohortOpenJobsCheck.checking = true;
-    badge.className = 'badge bg-secondary';
-    badge.textContent = 'Checking...';
-    detail.textContent = '';
-    closeBtn.style.display = 'none';
-
-    const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
-    const params = new URLSearchParams({
-        project_id: lastProjectId,
-        pipeline_id: currentPipelineId || '',
-        max_concurrent: maxConcurrent,
-    });
-
-    let data;
-    try {
-        const resp = await fetch(`/cohort/check_open_jobs?${params}`);
-        data = await resp.json();
-    } catch (err) {
-        _cohortOpenJobsCheck = { checking: false, error: 'Request failed: ' + err, openJobs: [] };
-        badge.className = 'badge bg-danger';
-        badge.textContent = 'Error';
-        detail.textContent = _cohortOpenJobsCheck.error;
-        return;
-    }
-
-    _cohortOpenJobsCheck.checking = false;
-    _cohortOpenJobsCheck.error = data.error || null;
-    _cohortOpenJobsCheck.openJobs = data.open_jobs || [];
-
-    if (data.error) {
-        badge.className = 'badge bg-secondary';
-        badge.textContent = 'Unknown';
-        detail.textContent = data.error;
-        return;
-    }
-
-    if (_cohortOpenJobsCheck.openJobs.length === 0) {
-        panel.className = 'alert alert-success py-2 px-3 small mb-3';
-        badge.className = 'badge bg-success';
-        badge.textContent = 'Clear';
-        detail.textContent = 'No stuck datalad-slurm jobs for this dataset.';
-        return;
-    }
-
-    const closeable = _cohortOpenJobsCheck.openJobs.filter(
-        (j) => j.status !== 'RUNNING' && j.status !== 'PENDING'
-    );
-    panel.className = 'alert alert-warning py-2 px-3 small mb-3';
-    badge.className = 'badge bg-warning text-dark';
-    badge.textContent = `${_cohortOpenJobsCheck.openJobs.length} open`;
-    detail.innerHTML = 'Unfinished datalad-slurm job(s) will block Submit for overlapping subjects: '
-        + _cohortOpenJobsCheck.openJobs.map(
-            (j) => `<code>${escapeHtml(j.job_id)}</code> (${escapeHtml(j.status)})`
-        ).join(', ');
-    if (closeable.length > 0) {
-        closeBtn.style.display = 'inline-flex';
-    }
-}
-
-async function closeCohortOpenJobs() {
-    const closeBtn = document.getElementById('cohortCloseJobsBtn');
-    closeBtn.disabled = true;
-    const maxConcurrent = document.getElementById('cohort_max_concurrent').value || 50;
-    try {
-        const resp = await fetch('/cohort/close_open_jobs', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                project_id: lastProjectId,
-                pipeline_id: currentPipelineId || '',
-                max_concurrent: maxConcurrent,
-            }),
-        });
-        const data = await resp.json();
-        logHPC(data.output || (data.ok ? 'Closed failed datalad-slurm jobs.' : 'Failed to close jobs.'), !data.ok);
-    } catch (err) {
-        logHPC('Request failed: ' + err, true);
-    } finally {
-        closeBtn.disabled = false;
-        checkCohortOpenJobs();
     }
 }
 
@@ -374,7 +279,6 @@ function _cohortSetDone(status, command) {
         ? 'badge bg-secondary' : 'badge bg-danger';
     badge.textContent = status;
     msg.textContent   = `${command} finished`;
-    checkCohortOpenJobs();
 }
 
 async function runCohort(command) {

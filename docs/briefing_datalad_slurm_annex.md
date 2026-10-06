@@ -36,17 +36,13 @@ Scope: the DataLad / SLURM / container / push-back mechanics. The OpenNeuro mega
    - Build the subject list from the pre-clone.
    - **Prefetch once, sequentially**, only this cohort's subjects and only the datatypes the app needs (`app_profiles.py` `required_datatypes`). This is never done in array tasks. It is dispatched to a compute node when launched from a login node (`lib_prefetch.sh`).
    - Check the output clone against `origin/derivatives`: fast-forward if behind, refuse if diverged.
-   - Generate the array script, then schedule it.
-3. **Batching:** the cohort is split into sequential batches (`hpc.batch_size`, default 10). Each batch has its own array job and finish job, so a slow or failed finish costs one batch, not the whole study. The next batch is submitted from the previous batch's finish job (`_continue-*-batch`). It is not pre-scheduled with `--dependency`, because datalad-slurm's open-job DB forbids overlapping scheduled batches.
-4. **finish job** (`--dependency=afterany`, 4 CPUs, 8 GB, 12 h):
-   - `incremental_datalad_save.sh`: commit and push per subject or timepoint, with parallel annex hashing (`-J 4`) and `--push-every N`. This avoids one monolithic `Save` that can OOM or time out and leave outputs staged but uncommitted.
-   - `datalad slurm-finish --commit-failed-jobs`. This (and not `--close-failed-jobs`) keeps the real output of a TIMEOUT'd task instead of abandoning it as untracked.
-   - `datalad push --to origin` with `DATALAD_SSH_MULTIPLEX__CONNECTIONS=false`. Reason: the stale cross-node SSH ControlMaster socket under the NFS-shared `~/.cache/datalad/sockets/`.
-5. **Post-push verification** (a contract, not an exit code):
-   - `git ls-remote origin refs/heads/<branch>` must equal the local HEAD.
-   - `git annex find --not --in origin` must be empty. Without this, the ref can land while the content did not.
-   - No uncommitted paths may remain after finish.
-   - Failure triggers an ntfy push notification.
+   - Generate the array script, then schedule it with `annex_schedule_batch` (`lib_annex_paths.sh`): `annex-slurm-schedule` unlocks only the *existing* output of this batch's subjects (plus loose dataset-root files) — explicit paths, never the whole tree — and submits with `sbatch --parsable`.
+3. **Batching:** the cohort is split into sequential batches (`hpc.batch_size`, default 10). Each batch has its own array job and finish job, so a slow or failed finish costs one batch, not the whole study. The next batch is submitted from the previous batch's finish job (`_continue-*-batch`). It is not pre-scheduled with `--dependency`: annex-slurm supports strictly sequential batches only, because a batch's unlock must not race the previous batch's commit.
+4. **finish job** (`--dependency=afterany`, 4 CPUs, 8 GB, 12 h) runs `scripts/annex_cohort_finish.sh` (2026-10, replacing `incremental_datalad_save.sh` + `slurm-finish` + `datalad push`, all of which compare index against worktree and hang on drifted repos):
+   - Per subject / timepoint it lists the not-yet-annexed files with `find` (a filesystem listing, no git) and commits them through `annex-slurm-finish` in chunks. Because the job is `afterany`, a TIMEOUT'd task's partial output is committed too, not abandoned as untracked. An interruption costs one chunk; re-running resumes (committed files are symlinks and are skipped).
+   - `--root-files` / `--extra PATH` add the loose dataset-root reports, the array's own SLURM logs (`.slurm_logs/<ds>`) and `subregion_results/`.
+   - `annex-slurm-finish` pushes the branch and the `git-annex` branch and checksum-verifies every object on the remote (see §5).
+5. **The completion contract** (a re-scan, not an exit code): `annex_cohort_finish.sh` exits 0 only if a final `find` still finds **no regular (unannexed) file** under any listed subject — the check that would have caught the 132 empty commits. Failure triggers an ntfy push notification. The end-to-end test under a real scheduler is `annex-slurm/test/cohort_flow_e2e.sh`.
 
 ## 3. Container integration
 
@@ -136,7 +132,7 @@ For annex-slurm the same limit holds for a different reason. It has no bookkeepi
 
 ### Other limits
 
-- Integration status: annex-slurm is in use for the 134 subregion flow (`.annex-slurm-managed` marker, GUI routes skip the open-jobs DB) and, since 2026-10-02, for **connectoflow's whole cohort path** (`connectoflow-slurm`, `scripts/submit_connectoflow_cohort.sh`). That one is the first end-to-end integration: setup registers one flat dataset per stage on the server's `derivatives` branch, the finish job runs `annex-slurm-finish` per stage and then verifies the server (ref equals HEAD, `git annex find --not --in origin` empty), exiting non-zero otherwise. It was tested with real git/annex/rsync against a local "server" and piloted for real on ds006707 (one subject; both stage refs and the annex content confirmed on `datalad-server`). `submit_bids_cohort.sh` (MRIQC/fMRIPrep/FreeSurfer) still uses `datalad slurm-schedule/-finish`. The goal is a standalone repo.
+- Integration status: annex-slurm is in use for the 134 subregion flow (`.annex-slurm-managed` marker) and, since 2026-10-02, for **connectoflow's whole cohort path** (`connectoflow-slurm`, `scripts/submit_connectoflow_cohort.sh`). That one is the first end-to-end integration: setup registers one flat dataset per stage on the server's `derivatives` branch, the finish job runs `annex-slurm-finish` per stage and then verifies the server (ref equals HEAD, `git annex find --not --in origin` empty), exiting non-zero otherwise. It was tested with real git/annex/rsync against a local "server" and piloted for real on ds006707 (one subject; both stage refs and the annex content confirmed on `datalad-server`). `submit_bids_cohort.sh` (MRIQC/fMRIPrep/FreeSurfer) moved to annex-slurm on 2026-10-06: schedule via `annex_schedule_batch`, finish via `scripts/annex_cohort_finish.sh`, and the GUI's open-jobs panel/routes were removed (no DB to close). Validated end to end under a real scheduler by `annex-slurm/test/cohort_flow_e2e.sh`; **not yet run on a real production cohort** — pilot one subject (`submit --pilot`) first. The goal is a standalone repo.
 
 ## 6. Operational guardrails (HPC policy, in code)
 
@@ -149,7 +145,7 @@ For annex-slurm the same limit holds for a different reason. It has no bookkeepi
 
 1. §1 diagram, then `hpc_datalad_runner.py` output: show that the generated script has no git calls.
 2. `./scripts/submit_bids_cohort.sh submit -c <config> --dry-run`.
-3. The finish-job template in `submit_bids_cohort.sh` (incremental save → slurm-finish → push → verification block).
+3. The finish-job template in `submit_bids_cohort.sh` and `scripts/annex_cohort_finish.sh` (find → annex-slurm-finish in chunks → re-scan contract).
 4. The §4 table, then `annex-slurm/bin/annex-slurm-finish` read top to bottom.
 5. The fromkey no-op story and `annex-slurm/test/smoke_test.sh`.
 6. Q&A: concurrency, upstreaming datalad-slurm patches (`patches/`, `scripts/patches/`), packaging as a standalone repo.

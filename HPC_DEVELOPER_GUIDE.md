@@ -308,7 +308,7 @@ module avail
 bids_apps_runner/
 ├── scripts/
 │   ├── prism_runner.py           # Main entry point
-│   ├── submit_bids_cohort.sh     # SLURM/datalad-slurm cohort orchestration
+│   ├── submit_bids_cohort.sh     # SLURM/annex-slurm cohort orchestration
 │   ├── hpc_datalad_runner.py     # SLURM compute-script generation
 │   ├── check_app_output.py       # Output validation
 │   └── install.sh                # Setup script
@@ -316,7 +316,7 @@ bids_apps_runner/
 ├── configs/
 │   ├── config_example.json       # Template
 │   ├── config_hpc.json           # HPC template
-│   └── cohort_hpc_example.json   # HPC + DataLad (datalad-slurm) template
+│   └── cohort_hpc_example.json   # HPC + DataLad (annex-slurm) template
 │
 ├── docs/
 │   ├── HPC_QUICK_REFERENCE.md

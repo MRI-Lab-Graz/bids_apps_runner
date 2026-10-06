@@ -43,10 +43,10 @@ from gui.gui_run_routes import register_run_routes
 from gui.gui_system_routes import register_system_routes
 from gui.gui_utility_routes import (
     register_utility_routes,
-    REMOTE_DATASET_SSH_HOST,
-    REMOTE_DATASET_BASE_PATH,
+    SITE,
     COHORT_LOG_BASE_DIR,
 )
+from gui.site_config import datalad_url_templates, pick_data_dir
 from gui.gui_security import (
     host_is_allowed as _host_is_allowed,
     is_loopback_host as _is_loopback_host,
@@ -126,20 +126,12 @@ else:
 
 
 def _get_data_dir():
-    try:
-        test_file = BASE_DIR / ".write_test"
-        test_file.touch()
-        test_file.unlink()
-        return BASE_DIR
-    except (PermissionError, OSError):
-        if platform.system() == "Darwin":
-            data_dir = (
-                Path.home() / "Library" / "Application Support" / "BIDSAppsRunner"
-            )
-        else:
-            data_dir = Path.home() / ".bids_apps_runner"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        return data_dir
+    # Per-user unless this checkout already holds its own projects/ (see
+    # gui/site_config.py:pick_data_dir) -- a shared, group-writable install
+    # must not make every user share one projects folder and secret key.
+    data_dir = pick_data_dir(BASE_DIR, os.environ, Path.home(), platform.system())
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
 
 
 DATA_DIR = _get_data_dir()
@@ -327,6 +319,12 @@ register_auth_handlers(
     index_endpoint="index",
     login_template="login.html",
 )
+
+
+@app.context_processor
+def _inject_site_for_frontend():
+    # Read at request time so the page always reflects the live site config.
+    return {"prism_site": {"localDatasetBase": SITE["local_dataset_base_dir"]}}
 
 
 def _write_global_settings_doc(doc):
@@ -806,16 +804,7 @@ def _derive_cohort_config(runtime_cfg, *, project_dir, max_concurrent=50, batch_
             "log_dir": str(cohort_log_dir),
             "subject_lists_dir": str(cohort_log_dir / "subject_lists"),
         },
-        "datalad": {
-            "input_url_template": (
-                f"{REMOTE_DATASET_SSH_HOST}:{REMOTE_DATASET_BASE_PATH}/{{dataset_id}}"
-            ),
-            "output_url_template": (
-                f"ssh://{REMOTE_DATASET_SSH_HOST}"
-                f"/{REMOTE_DATASET_BASE_PATH.lstrip('/')}"
-                f"/{{dataset_id}}/derivatives/{app_name}"
-            ),
-        },
+        "datalad": datalad_url_templates(SITE, app_name),
         "hpc": {
             "partition": hpc.get("partition"),
             "time": hpc.get("time"),

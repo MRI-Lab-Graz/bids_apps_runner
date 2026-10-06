@@ -10,23 +10,42 @@ from typing import Any, Callable
 
 from flask import jsonify, request
 
+from gui.site_config import load_site_config, remote_configured
+
 # Clone jobs are stored here by clone_id so the GUI can poll for status.
 _clone_jobs: dict[str, dict[str, Any]] = {}
 _clone_jobs_lock = threading.Lock()
 
-# Hardwired lab DataLad server: one lab, one server, one base path for now.
+# Site settings come from the environment (see gui/site_config.py and
+# site.env.example), with defaults rooted at the current user's scratch --
+# nothing here names a particular lab or person. The DataLad server is not
+# assumed: with no PRISM_REMOTE_SSH_HOST/PRISM_REMOTE_BASE_PATH the remote-
+# dataset features say how to configure it instead of guessing.
 # REMOTE_DATASET_SSH_HOST must match a Host entry in ~/.ssh/config (it carries
 # the right User/IdentityFile and matches the known_hosts key) -- the bare
-# short hostname (e.g. "it035016") only resolves/verifies in an interactive
-# shell with a DNS search domain; non-interactive SSH needs the configured alias.
-REMOTE_DATASET_SSH_HOST = "datalad-server"
-REMOTE_DATASET_BASE_PATH = "/datalad/mri/MRI-Lab_Repository"
-LOCAL_DATASET_BASE_DIR = "/cl_tmp/mrilab"
+# short hostname only resolves/verifies in an interactive shell with a DNS
+# search domain; non-interactive SSH needs the configured alias.
+SITE = load_site_config()
+REMOTE_DATASET_SSH_HOST = SITE["remote_ssh_host"]
+REMOTE_DATASET_BASE_PATH = SITE["remote_base_path"]
+LOCAL_DATASET_BASE_DIR = SITE["local_dataset_base_dir"]
 # Cohort array-job logs, generated array scripts, and subject lists are
 # per-run bulk data (CLAUDE.md: never under /usr/people, whose home-folder
 # filesystem has no quota for this) -- unlike the small per-project JSON
-# bookkeeping under resolve_project_dir(), which stays on /usr/people.
-COHORT_LOG_BASE_DIR = "/cl_tmp/mrilabgraz/bids_apps_runner_cohort_logs"
+# bookkeeping under resolve_project_dir(), which stays in the data dir.
+COHORT_LOG_BASE_DIR = SITE["cohort_log_base_dir"]
+_REMOTE_NOT_CONFIGURED = (
+    "No remote DataLad server configured: set PRISM_REMOTE_SSH_HOST (an ssh alias "
+    "from ~/.ssh/config) and PRISM_REMOTE_BASE_PATH, e.g. in site.env "
+    "(see site.env.example), then restart the GUI."
+)
+
+
+def _remote_is_configured() -> bool:
+    # Read the module constants at call time so tests/overrides can change them.
+    return remote_configured(
+        {"remote_ssh_host": REMOTE_DATASET_SSH_HOST, "remote_base_path": REMOTE_DATASET_BASE_PATH}
+    )
 _STUDY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -164,11 +183,14 @@ def register_utility_routes(
 
     @app.route("/list_remote_studies", methods=["GET"])
     def list_remote_studies():
-        """List study folders on the lab's (hardwired) DataLad server.
+        """List study folders on the configured DataLad server.
 
         Response:
           studies – sorted list of directory names under REMOTE_DATASET_BASE_PATH
         """
+        if not _remote_is_configured():
+            return jsonify({"error": _REMOTE_NOT_CONFIGURED}), 400
+
         import prism_datalad  # lazy - scripts/ is on sys.path at runtime
 
         try:
@@ -188,11 +210,13 @@ def register_utility_routes(
 
     @app.route("/check_datalad_ssh", methods=["GET"])
     def check_datalad_ssh():
-        """Quick SSH reachability probe for the lab's DataLad server.
+        """Quick SSH reachability probe for the configured DataLad server.
 
         Returns {"ok": true} or {"ok": false, "error": "..."} — always 200
         so the client can distinguish network failure from server error.
         """
+        if not _remote_is_configured():
+            return jsonify({"ok": False, "error": _REMOTE_NOT_CONFIGURED})
         try:
             result = subprocess.run(
                 [
@@ -228,7 +252,7 @@ def register_utility_routes(
 
     @app.route("/connect_remote_dataset", methods=["POST"])
     def connect_remote_dataset():
-        """Clone (metadata only) a study from the lab's DataLad server, so it
+        """Clone (metadata only) a study from the configured DataLad server, so it
         can be used as a local BIDS Dataset Folder. File content is not
         downloaded here -- it's fetched on demand later, per subject, when
         the BIDS app run/SLURM job actually touches that subject's data.
@@ -240,6 +264,9 @@ def register_utility_routes(
         Response:
           clone_id  – poll /connect_remote_dataset_status?clone_id=<id> for progress
         """
+        if not _remote_is_configured():
+            return jsonify({"error": _REMOTE_NOT_CONFIGURED}), 400
+
         data = request.get_json(silent=True) or {}
         study = (data.get("study") or "").strip()
 

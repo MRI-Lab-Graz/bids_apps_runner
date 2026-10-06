@@ -1113,8 +1113,13 @@ def register_run_routes(
             from gui.gui_utility_routes import (
                 LOCAL_DATASET_BASE_DIR,
                 REMOTE_DATASET_SSH_HOST,
+                _remote_is_configured,
             )
-            if bids_folder and str(bids_folder).startswith(LOCAL_DATASET_BASE_DIR):
+            if (
+                _remote_is_configured()
+                and bids_folder
+                and str(bids_folder).startswith(LOCAL_DATASET_BASE_DIR)
+            ):
                 lines += [
                     "# Verify DataLad SSH connectivity before starting",
                     f'ssh -o BatchMode=yes -o ConnectTimeout=10 {REMOTE_DATASET_SSH_HOST} exit || {{',

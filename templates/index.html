@@ -1301,7 +1301,7 @@
                         <div id="cohortPanelBody" class="card-body" style="display:none;">
                             <p class="text-muted small mb-3">
                                 Runs this project's BIDS app as a SLURM array job (one task per subject) using
-                                <code>datalad-slurm</code> (or <code>annex-slurm</code> for datasets opted into it)
+                                <code>annex-slurm</code>
                                 for git-safe parallel execution. Container, flags,
                                 folders, and SLURM resources are the <strong>same settings</strong> as Local/single-job
                                 execution above — nothing is configured twice. Edit them there, then Setup → Submit here.
@@ -1346,18 +1346,6 @@
                                 <i class="fas fa-eye me-1"></i>Preview derived config
                             </button>
                             <pre id="cohortConfigPreview" class="utility-log" style="display:none; max-height:300px; overflow-y:auto;"></pre>
-
-                            <div id="cohortJobsPanel" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <strong>DataLad-Slurm Jobs</strong>
-                                    <span id="cohortJobsBadge" class="badge bg-secondary">Checking...</span>
-                                </div>
-                                <div id="cohortJobsDetail" class="mt-2"></div>
-                                <button type="button" class="btn btn-sm btn-outline-danger mt-2" id="cohortCloseJobsBtn"
-                                        onclick="closeCohortOpenJobs()" style="display:none;">
-                                    <i class="fas fa-broom me-1"></i>Close failed jobs
-                                </button>
-                            </div>
 
                             <div id="cohortStoragePanel" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none;">
                                 <div class="d-flex justify-content-between align-items-center">
@@ -1852,7 +1840,7 @@
          pattern as project_loader.js/cohort_panel.js above. -->
     <script src="{{ url_for('static', filename='js/pipeline_form_sync.js') }}"></script>
     <!-- Cohort panel (multi-subject SLURM array submission via
-         datalad-slurm) -- same pattern as project_loader.js above: reads
+         annex-slurm) -- same pattern as project_loader.js above: reads
          shared `var`-declared state (lastProjectId, currentPipelineId) from
          the inline script below. See its own header comment. -->
     <script src="{{ url_for('static', filename='js/cohort_panel.js') }}"></script>
@@ -1867,6 +1855,7 @@
          state (_bidsSourceMode, _remoteStudiesLoaded) from the inline script
          below. See its own header comment for the mixed local/remote bug this
          fixes. -->
+    <script>window.PRISM_SITE = {{ prism_site|tojson }};</script>
     <script src="{{ url_for('static', filename='js/bids_source_mode.js') }}"></script>
     <!-- Generalized section-header accordion builder (fold/collapse behavior
          for the Run App page) -- fully self-contained, no shared state with
@@ -5858,8 +5847,8 @@
                     : '<option value="">No studies found</option>';
                 // Restore study selection from bids_folder if it matches the remote clone pattern
                 const savedBids = (document.getElementById('bids_folder').value || '').trim();
-                const remotePrefix = '/cl_tmp/mrilab/';
-                if (savedBids.startsWith(remotePrefix)) {
+                const remotePrefix = remoteDatasetRoot();
+                if (remotePrefix && savedBids.startsWith(remotePrefix)) {
                     const studyName = savedBids.slice(remotePrefix.length).split('/')[0];
                     if (studyName && studies.includes(studyName)) {
                         select.value = studyName;
@@ -5876,7 +5865,7 @@
 
         function updateRemoteCloneDirPreview() {
             const study = document.getElementById('remote_dataset_study').value;
-            const cloneDir = study ? `/cl_tmp/mrilab/${study}` : '';
+            const cloneDir = remoteCloneDirFor(study);
             document.getElementById('remote_dataset_clone_dir').value = cloneDir;
             // Keep bids_folder in sync — path is deterministic from study name,
             // so save/validation always has the right value even before cloning.

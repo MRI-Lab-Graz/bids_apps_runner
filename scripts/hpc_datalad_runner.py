@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-HPC DataLad Runner - Generate SLURM compute scripts for the datalad-slurm workflow
+HPC DataLad Runner - Generate SLURM compute scripts for the annex-slurm workflow
 
 Generates SLURM job scripts that contain *no* datalad/git calls at all. Git
 provenance (input retrieval, output recording, push) is handled outside the
-job by the `datalad-slurm` extension (`datalad slurm-schedule` /
-`datalad slurm-finish`, see submit_bids_cohort.sh): SLURM jobs only do
+job by annex-slurm (`annex-slurm-schedule` before, `annex_cohort_finish.sh`
+after; see submit_bids_cohort.sh): SLURM jobs only do
 compute, reading from an already-cloned, already-fetched input dataset and
 writing into an already-cloned output dataset. This avoids per-job git
 operations entirely instead of serializing them with flock.
@@ -219,7 +219,7 @@ class BidsAppComputeScriptGenerator:
     dataset and writes into an already-cloned output dataset; both clones are
     expected to already exist (see submit_bids_cohort.sh `setup`). Git
     provenance (retrieval, commit, push) happens outside the job via
-    `datalad slurm-schedule` / `datalad slurm-finish`.
+    `annex-slurm-schedule` / `annex_cohort_finish.sh`.
 
     Workflow per array task:
       1. Resolve subject from list file via $SLURM_ARRAY_TASK_ID
@@ -285,7 +285,7 @@ class BidsAppComputeScriptGenerator:
         shared_output_base + dataset_id + output_dir_name composition
         otherwise (the same composition submit_bids_cohort.sh's own
         resolve_output_clone() computes in bash). Used by both _header()
-        (to place SBATCH log files inside it, so datalad-slurm can save
+        (to place SBATCH log files inside it, so the finish job can commit
         them for provenance -- see _header()'s comment) and _workdirs()
         (as OUT_DIR), so the two can never disagree about where the
         output dataset actually is -- unlike paths.get("output_dir", "")
@@ -311,14 +311,13 @@ class BidsAppComputeScriptGenerator:
         max_concurrent = int(self.hpc.get("max_concurrent", 50))
         array_spec = f"0-{self.n_subjects - 1}%{max_concurrent}"
 
-        # datalad-slurm's own bookkeeping (get_slurm_output_files in the
-        # datalad-slurm package) reads back the SBATCH --output/--error paths
-        # via `scontrol show job` and expects them to live *inside* the
-        # dataset it's scheduling from, so it can save them for provenance
-        # alongside the job's declared outputs. Pointing them at a location
-        # outside the dataset (e.g. this repo's own logs/ folder) makes
-        # `datalad slurm-finish` fail with "path not underneath the reference
-        # dataset" for every log file, aborting before it can push. Use a
+        # The SBATCH --output/--error paths must live *inside* the output
+        # dataset: the finish job (annex_cohort_finish.sh --extra
+        # .slurm_logs/<ds>) commits them alongside the job's real output.
+        # (The old datalad-slurm flow read these paths back via `scontrol
+        # show job` and failed with "path not underneath the reference
+        # dataset" for every log file outside the dataset, aborting before
+        # it could push -- the same placement rule, a different consumer.) Use a
         # dedicated subdirectory of the *actual* resolved output dataset
         # instead -- always, not only when an explicit paths.output_dir
         # override happens to be set (real incident: every dataset in a
@@ -507,7 +506,7 @@ echo "Container runtime: ${APPTAINER_BIN} ($(command -v "${APPTAINER_BIN}")), $(
         input/output dataset working copies (no per-task clone): multiple
         array tasks write to distinct sub-XXX/ subdirectories of the same
         output clone concurrently, which is safe because nothing here ever
-        touches git -- that happens later, once, via `datalad slurm-finish`.
+        touches git -- that happens later, once, via annex_cohort_finish.sh.
         Only the scratch/tmp directory is per-task, matching what SLURM
         already isolates per job.
         """
@@ -931,7 +930,7 @@ class SubregionSegmentationScriptGenerator:
     def _resolve_output_dir(self) -> str:
         """See BidsAppComputeScriptGenerator._resolve_output_dir() -- same
         rationale (must match _workdirs()'s OUT_DIR, not just an explicit
-        override, so datalad-slurm's SBATCH log tracking actually lands
+        override, so the SBATCH logs actually land inside the dataset and are committed
         inside the dataset). This class's OUT_DIR doubles as FreeSurfer's
         SUBJECTS_DIR, so unlike the BIDS-app composition there's no
         output_dir_name suffix here.
@@ -1393,12 +1392,12 @@ def generate_script(
 def submit_job(script_path: str, dry_run: bool = False) -> Optional[str]:
     """Submit a plain SLURM job script directly via sbatch.
 
-    NOTE: this bypasses `datalad-slurm` -- it submits the compute script as
+    NOTE: this bypasses annex-slurm -- it submits the compute script as
     a regular SLURM job with no provenance recording. Outputs written by the
     job will never be committed/pushed unless something else later runs
-    `datalad slurm-finish` for it. Production cohort runs should go through
-    `submit_bids_cohort.sh submit` (which wraps the script in
-    `datalad slurm-schedule` and chains a `datalad slurm-finish` job).
+    `annex_cohort_finish.sh` for it. Production cohort runs should go through
+    `submit_bids_cohort.sh submit` (which schedules the script via
+    `annex-slurm-schedule` and chains an `annex_cohort_finish.sh` job).
 
     Args:
         script_path: Path to the job script
@@ -1435,7 +1434,7 @@ def submit_job(script_path: str, dry_run: bool = False) -> Optional[str]:
 def main():
     """CLI interface for the HPC DataLad runner."""
     parser = argparse.ArgumentParser(
-        description="Generate plain SLURM compute scripts for the datalad-slurm workflow"
+        description="Generate plain SLURM compute scripts for the annex-slurm workflow"
     )
     parser.add_argument(
         "-c", "--config", required=True, help="Path to JSON config file"
@@ -1445,7 +1444,7 @@ def main():
         "--submit",
         action="store_true",
         help="Submit the script directly via sbatch after generation "
-        "(bypasses datalad-slurm; prefer submit_bids_cohort.sh for real runs)",
+        "(bypasses annex-slurm; prefer submit_bids_cohort.sh for real runs)",
     )
     parser.add_argument(
         "--dry-run",

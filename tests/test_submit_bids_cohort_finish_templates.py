@@ -8,116 +8,98 @@ def _source() -> str:
     return SCRIPT.read_text()
 
 
-class TestFinishJobsCommitFailedJobs:
-    """Regression test for the close-open-jobs data-loss bug (2026-09-01,
-    megastudy_openneuro mriqc): a finish job dependency-chained with
-    `afterany` runs `datalad slurm-finish` even when some array elements
-    TIMEOUT'd rather than COMPLETED. Without --commit-failed-jobs,
-    datalad_slurm's finish_cmd() takes the branch that removes the job's
-    DB entry and returns WITHOUT ever calling Save on the declared
-    outputs (see .datalad-slurm-venv/.../datalad_slurm/finish.py), so any
-    real output a timed-out array element produced is silently abandoned
-    as untracked. --commit-failed-jobs falls through to the same Save
-    call the normal all-COMPLETED path uses, so it must be present on
-    every `slurm-finish --slurm-job-id` invocation in the generated
-    finish-job templates, not just the close_open_jobs GUI route.
+def _code_lines(source: str) -> str:
+    """Source without comment-only lines (the comments deliberately explain
+    the old flow and still name its commands)."""
+    return "\n".join(l for l in source.splitlines() if not l.lstrip().startswith("#"))
+
+
+def _call(region: str, marker: str = 'annex_cohort_finish.sh"') -> str:
+    """The invocation containing `marker`, including continuation lines (the
+    heredoc source escapes the line-continuation backslash as two)."""
+    lines = region.splitlines()
+    start = next(
+        (i for i, l in enumerate(lines) if marker in l and not l.lstrip().startswith("#")),
+        None,
+    )
+    assert start is not None, f"no call containing {marker}"
+    end = start
+    while lines[end].rstrip().endswith("\\"):
+        end += 1
+    return "\n".join(lines[start : end + 1])
+
+
+class TestCohortRunsOnAnnexSlurmNotTheOldFlow:
+    """The cohort schedule/finish path used `slurm-schedule -o .` and
+    `slurm-finish` (the datalad-slurm extension), then `git status` to check
+    for leftovers. All of them compare index against worktree and hang on
+    repos with git-annex keys-DB drift (dataset 134;
+    docs/superpowers/specs/2026-09-09-annex-slurm-design.md). The generated
+    jobs and the submit script itself must use annex-slurm instead.
     """
 
-    def test_array_finish_job_uses_commit_failed_jobs(self):
+    def test_no_datalad_slurm_commands_are_executed(self):
+        code = _code_lines(_source())
+        assert "slurm-schedule" not in code.replace("annex-slurm-schedule", "")
+        assert "slurm-finish" not in code.replace("annex-slurm-finish", "")
+
+    def test_finish_jobs_never_run_git_status(self):
+        assert "git status" not in _code_lines(_source())
+
+    def test_old_verification_blocks_are_gone(self):
         source = _source()
-        match = re.search(
-            r'\$DATALAD_BIN"\s+slurm-finish\s+.*--slurm-job-id "\$\{job_id\}"[^\n]*',
-            source,
-        )
-        assert match, "could not find the array finish job's slurm-finish call"
-        assert "--commit-failed-jobs" in match.group(0)
+        assert "uncommitted_check_block" not in source
+        assert "push_verification_block" not in source
 
-    def test_subregion_finish_job_uses_commit_failed_jobs(self):
+    def test_array_is_scheduled_via_annex_schedule_batch_with_root_files(self):
         source = _source()
-        match = re.search(
-            r'\$DATALAD_BIN"\s+slurm-finish\s+.*--slurm-job-id "\$\{subregion_job_id\}"[^\n]*',
-            source,
-        )
-        assert match, "could not find the subregion finish job's slurm-finish call"
-        assert "--commit-failed-jobs" in match.group(0)
+        region = source[source.find("schedule_one_batch() {") :]
+        call = _call(region, "annex_schedule_batch \"$output_clone\"")
+        assert '"$subj_list" "$array_script"' in call
+        assert "--root-files" in call
+
+    def test_subregion_array_is_scheduled_via_annex_schedule_batch(self):
+        source = _source()
+        region = source[
+            source.find("schedule_one_subregion_batch() {") : source.find("schedule_one_batch() {")
+        ]
+        call = _call(region, "annex_schedule_batch \"$output_clone\"")
+        assert '"$timepoint_list" "$subregion_array_script"' in call
+        assert '--extra "subregion_results"' in call
+
+    def test_submit_script_has_no_private_copy_of_the_unlock_and_job_id_logic(self):
+        code = _code_lines(_source())
+        assert "annex-slurm/bin/annex-slurm-schedule" not in code
+        executed = "\n".join(l for l in code.splitlines() if "echo" not in l)
+        assert re.search(r"--parsable\b", executed) is None  # sacct's --parsable2 is fine
 
 
-class TestFinishJobsRunIncrementalSaveFirst:
-    """The hybrid finish-job design: slurm-finish's own Save call has been
-    the single point of failure across every incident this session dug up
-    (the --close-failed-jobs early-return, a >12h monolithic save blowing
-    wallclock, and project 134's whole-dataset unlock-with-no-matching-
-    -relock). Running scripts/incremental_datalad_save.sh first -- per-
-    subject, checkpointed, resumable -- means slurm-finish's own Save call
-    then runs against an already-clean tree (a fast no-op), so it's left
-    doing only what it's actually good at: the provenance commit and
-    closing the datalad-slurm DB entry. This keeps slurm-schedule's
-    conflicting-outputs guard and the run-record, while removing the
-    monolithic-save failure mode.
+class TestFinishJobsRunAnnexCohortFinish:
+    """The finish jobs commit through scripts/annex_cohort_finish.sh, which
+    lists each subject's unannexed files with `find` and hands them to
+    annex-slurm-finish, then re-scans: done means nothing is left unannexed.
     """
 
-    def test_array_finish_job_runs_incremental_save_before_slurm_finish(self):
+    def test_array_finish_commits_the_batch_subjects_plus_shared_outputs(self):
         source = _source()
-        incr_pos = source.find("incremental_datalad_save.sh", source.find("schedule_one_batch() {"))
-        finish_pos = source.find('--slurm-job-id "${job_id}"')
-        assert incr_pos != -1, "array finish job template does not call incremental_datalad_save.sh"
-        assert incr_pos < finish_pos, "incremental_datalad_save.sh must run BEFORE slurm-finish"
+        call = _call(source[source.find("schedule_one_batch() {") :])
+        assert '-d "${output_clone}"' in call
+        assert '-s "${subj_list}"' in call
+        assert "--root-files" in call
+        assert '--extra ".slurm_logs/${ds}"' in call
 
-    def test_subregion_finish_job_runs_incremental_save_before_slurm_finish(self):
+    def test_subregion_finish_commits_the_batch_timepoints_plus_results(self):
         source = _source()
-        incr_pos = source.find(
-            "incremental_datalad_save.sh", source.find("schedule_one_subregion_batch() {")
+        call = _call(
+            source[source.find("schedule_one_subregion_batch() {") : source.find("schedule_one_batch() {")]
         )
-        finish_pos = source.find('--slurm-job-id "${subregion_job_id}"')
-        assert incr_pos != -1, "subregion finish job template does not call incremental_datalad_save.sh"
-        assert incr_pos < finish_pos, "incremental_datalad_save.sh must run BEFORE slurm-finish"
+        assert '-d "${output_clone}"' in call
+        assert '-s "${timepoint_list}"' in call
+        assert '--extra "subregion_results"' in call
+        assert '--extra ".slurm_logs/${ds}"' in call
 
-    def test_array_finish_incremental_save_uses_the_array_subject_list(self):
-        source = _source()
-        array_region = source[source.find("schedule_one_batch() {") :]
-        match = re.search(r'incremental_datalad_save\.sh"[^\n]*', array_region)
-        assert match, "could not find the array finish job's incremental_datalad_save.sh invocation"
-        assert '-d "${output_clone}"' in match.group(0)
-        assert '-s "${subj_list}"' in match.group(0)
-
-
-class TestFinishJobsGuaranteeAProvenanceCommit:
-    """Verified against the installed datalad source (datalad/core/local/
-    save.py:619-633): once incremental_datalad_save.sh has committed
-    everything, the tree is fully clean, and slurm-finish's own
-    Save.__call__ on an empty `paths_by_ds` yields status='notneeded' and
-    creates ZERO commits -- the `[DATALAD SLURM RUN]` provenance record
-    this call exists to write would silently never be created. datalad_slurm's
-    remove_from_database() (finish.py:561-572) does a hard DELETE with no
-    archival, so that job's entire history would be lost from git, not
-    merely reduced -- contradicting this whole design's point of keeping
-    slurm-finish around for its provenance commit. A marker file written
-    just before slurm-finish (within the -o . output scope, after the
-    incremental save) guarantees Save always has a real, non-empty diff to
-    attach the provenance message to.
-    """
-
-    def test_array_finish_writes_a_marker_before_slurm_finish(self):
-        source = _source()
-        array_region = source[source.find("schedule_one_batch() {") :]
-        marker_pos = array_region.find("finish-marker-")
-        incr_pos = array_region.find("incremental_datalad_save.sh")
-        finish_pos = array_region.find('--slurm-job-id "${job_id}"')
-        assert marker_pos != -1, "array finish job template does not write a provenance marker"
-        assert incr_pos < marker_pos < finish_pos, (
-            "marker must be written after the incremental save and before slurm-finish"
-        )
-
-    def test_subregion_finish_writes_a_marker_before_slurm_finish(self):
-        source = _source()
-        region = source[source.find("schedule_one_subregion_batch() {") :]
-        marker_pos = region.find("finish-marker-")
-        incr_pos = region.find("incremental_datalad_save.sh")
-        finish_pos = region.find('--slurm-job-id "${subregion_job_id}"')
-        assert marker_pos != -1, "subregion finish job template does not write a provenance marker"
-        assert incr_pos < marker_pos < finish_pos, (
-            "marker must be written after the incremental save and before slurm-finish"
-        )
+    def test_finish_jobs_do_not_depend_on_the_old_provenance_marker(self):
+        assert "finish-marker-" not in _code_lines(_source())
 
 
 class TestGeneratedScriptPathsAreAppNamespaced:
@@ -163,28 +145,6 @@ class TestGeneratedScriptPathsAreAppNamespaced:
         array_script_pos = region.find("local array_script=")
         assert resolve_pos != -1 and array_script_pos != -1
         assert resolve_pos < array_script_pos
-
-
-class TestUncommittedCheckIsShared:
-    """The post-finish 'uncommitted change(s) remain' check was hand-copied
-    verbatim into both the array-finish and subregion-finish heredocs.
-    push_verification_block() (same file) already establishes the pattern
-    for sharing a verification snippet across both templates via
-    $(push_verification_block) -- the uncommitted check should follow it
-    instead of existing as two independently-maintained copies.
-    """
-
-    def test_uncommitted_check_message_defined_once(self):
-        source = _source()
-        occurrences = source.count("uncommitted change(s) remain after slurm-finish")
-        assert occurrences == 1, (
-            f"expected the uncommitted-check message to be defined once in a "
-            f"shared block, found it {occurrences} times"
-        )
-
-    def test_both_templates_reference_the_shared_block(self):
-        source = _source()
-        assert source.count("$(uncommitted_check_block)") == 2
 
 
 class TestWholeDatasetCompleteNotification:

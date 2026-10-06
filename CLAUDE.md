@@ -71,6 +71,14 @@ config validation on the login node). See
   there, then `exit` (or let `--time` expire) to release it rather than
   leaving it idle.
 
+**GUI routes** that shell out to real work (container runs, `datalad`,
+`git annex`, `check_app_output.py` walks, the cohort setup/submit script)
+wrap the command in `login_node_hygiene.compute_node_cmd(cmd, time=...,
+mem=...)`: on a bare login node it becomes `srun ... cmd` (stdout, stderr
+and exit code pass through, so callers don't change); elsewhere it is a
+no-op. Partition: `PRISM_COMPUTE_PARTITION`, else the cluster default.
+Pinned by `tests/test_gui_compute_dispatch.py`.
+
 If you're adding a *new* code path that shells out to a container engine
 (`apptainer`/`singularity`/`docker`) or does real data movement
 (`datalad get`/`push`, `git annex get`/`copy`) outside of an already
@@ -206,6 +214,23 @@ login node -- see the `salloc` example above. It sets `SLURM_JOB_ID`, which
 is what `execute_local()`'s guard and the heavy-command hook both check
 for, so everything (container runs, `datalad`/`git annex` work, nibabel
 checks) is fair game there for the life of the allocation.
+
+## Cohort schedule/finish runs on annex-slurm (2026-10-06), not datalad-slurm
+
+`submit_bids_cohort.sh` unlocks a batch's *existing* output with
+`annex_schedule_batch` (`scripts/lib_annex_paths.sh`: explicit paths, never
+the whole tree) and commits through the dependent finish job's
+`scripts/annex_cohort_finish.sh` (per subject: `find` the not-yet-annexed
+files -> `annex-slurm-finish` in chunks -> re-scan). **Never put
+`slurm-schedule`, `slurm-finish`, `datalad save`/`status` or `git status` in a
+finish template or GUI route** -- they compare index against worktree and hang
+on repos with keys-DB drift; `tests/test_submit_bids_cohort_finish_templates.py`
+pins this. The completion contract is the re-scan (exit 0 only if no regular,
+unannexed file is left under any listed subject), not a tool's exit code.
+The GUI has no "open jobs" panel any more: annex-slurm has no bookkeeping DB,
+`squeue`/`sacct` is the only job state. Real-scheduler test:
+`sbatch annex-slurm/test/cohort_flow_e2e.sh` (see its header). Not yet run on
+a production cohort -- pilot one subject (`submit --pilot`) first.
 
 ## Chip away at the monoliths
 

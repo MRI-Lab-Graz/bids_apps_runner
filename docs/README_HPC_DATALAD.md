@@ -3,26 +3,31 @@
 ## Overview
 
 `submit_bids_cohort.sh` runs any BIDS app (fMRIPrep, QSIPrep, MRIQC, ...) across one or more
-datasets on a SLURM cluster, with DataLad managing dataset provenance. It's built around the
-[`datalad-slurm`](https://github.com/knuedd/datalad-slurm) extension
-(see also the [DataLad handbook chapter on SLURM](https://handbook.datalad.org/en/latest/beyond_basics/101-174-slurm.html)),
-which keeps every datalad/git operation **outside** the parallel SLURM job:
+datasets on a SLURM cluster, with git-annex/DataLad datasets holding the data. It's built
+around **annex-slurm** (`annex-slurm/bin/`, design in
+`docs/superpowers/specs/2026-09-09-annex-slurm-design.md`), which keeps every git operation
+**outside** the parallel SLURM job:
 
 - SLURM array jobs are plain compute scripts (apptainer only) -- they never touch git.
-- `datalad slurm-schedule` runs once, before submission, to declare each subject's output
-  path and submit the array job via `sbatch` itself.
-- `datalad slurm-finish` runs once, after the array completes, to commit every subject's
-  output in a single commit; a `datalad push` follows.
+- `annex-slurm-schedule` runs once, before submission: it unlocks only the *existing* output
+  of this batch's subjects (explicit paths, never the whole tree) and submits the array job.
+- A dependent finish job runs `scripts/annex_cohort_finish.sh` once the array completes: per
+  subject it finds the not-yet-annexed files with `find`, commits them through
+  `annex-slurm-finish` (which pushes and checksum-verifies every object on the server), then
+  re-scans and fails unless nothing is left unannexed.
 
 This avoids the classic problem of many parallel jobs each cloning/branching/pushing a shared
 git-annex dataset (lock contention, races, "concurrent git access" warnings) -- there's simply
-no git happening while jobs run.
+no git happening while jobs run. It also never runs `git status`/`git diff`/`datalad save`:
+those compare the index against the working tree and hang on large repos with git-annex
+keys-DB drift, which is why this replaced the earlier `datalad-slurm` extension.
 
 ### Prerequisites
 
-- `datalad` and the [`datalad-slurm`](https://github.com/knuedd/datalad-slurm) extension
-  (not on PyPI: `pip install git+https://github.com/knuedd/datalad-slurm.git`)
-- `jq`, `python3`, `sbatch`/`squeue` (SLURM), SSH access to your DataLad server for setup
+- `datalad` (setup/prefetch only) and a working `git-annex` -- the repo's
+  `.datalad-slurm-venv` provides one that runs on login *and* compute nodes (see the header of
+  `scripts/submit_bids_cohort.sh`; the `datalad-slurm` extension itself is no longer needed)
+- `jq`, `python3`, `sbatch`/`squeue` (SLURM), SSH + `rsync` access to your DataLad server
 - `apptainer` (or another container runtime your config's `paths.container` expects)
 
 ## Config (`configs/cohort_hpc_example.json` schema)
@@ -87,10 +92,14 @@ prefetches (`datalad get`) all discovered subjects so array tasks never need to.
 
 **`submit`**: builds a subject list, generates the plain compute script
 (`hpc_datalad_runner.py --array-mode`), then:
-1. `datalad slurm-schedule -o sub-001 -o sub-002 ... sbatch <script>` from inside the output
-   clone -- one explicit, non-overlapping `-o` per subject (wildcards are rejected).
+1. `annex-slurm-schedule -o sub-001 -o sub-002 ... -- --parsable <script>` from inside the
+   output clone -- unlocks the batch subjects' existing output (explicit paths) and submits.
 2. Submits a dependent finish job (`--dependency=afterany:<job_id>`) that runs
-   `datalad slurm-finish && datalad push --to origin` once the array completes.
+   `scripts/annex_cohort_finish.sh` once the array completes: commit + push + verify per
+   subject, loose dataset-root files and the array's own SLURM logs included.
+
+Batches (`batch_size`) run strictly one after another: each batch's finish job schedules the
+next. Overlapping batches are out of scope for annex-slurm.
 
 Both job IDs (array + finish) are recorded in `logs/submission_<timestamp>.log`.
 
@@ -100,32 +109,37 @@ Both job IDs (array + finish) are recorded in `logs/submission_<timestamp>.log`.
 
 `hpc_datalad_runner.py -s sub-001 -o job.sh` generates the same kind of plain script as a
 one-task array (`--array=0-0`); there's no separate single-subject code path. To actually run
-it through the datalad-slurm pipeline rather than a bare `sbatch`, schedule it the same way
-`submit_bids_cohort.sh` does:
+it through the annex-slurm pipeline rather than a bare `sbatch`, schedule and finish it the
+same way `submit_bids_cohort.sh` does (on a compute node -- `salloc`/`srun` -- not the login
+node):
 
 ```bash
 cd /shared/derivatives/dataset_001/fmriprep
-datalad slurm-schedule -o sub-001 -m "fmriprep sub-001" sbatch job.sh
+printf 'sub-001\n' > /shared/lists/sub-001.txt
+annex-slurm/bin/annex-slurm-schedule -o sub-001 -- --parsable job.sh
 # later, once it's done:
-datalad slurm-finish && datalad push --to origin
+scripts/annex_cohort_finish.sh -d "$PWD" -s /shared/lists/sub-001.txt -m "fmriprep sub-001"
 ```
 
-`hpc_datalad_runner.py --submit` (plain `sbatch`, no `datalad slurm-schedule`) exists only for
-testing the compute script itself -- outputs from a job submitted that way are never recorded
-in the dataset.
+`hpc_datalad_runner.py --submit` (plain `sbatch`, no unlock/finish) exists only for testing
+the compute script itself -- outputs from a job submitted that way are never committed to the
+dataset.
 
 ## Troubleshooting
 
-### `datalad slurm-schedule` refuses with "conflicting outputs"
+### A finish job failed, or output is still unannexed afterwards
 
-Another scheduled-but-not-yet-finished job already declared one of your `-o` paths. Run
-`datalad slurm-finish --list-open-jobs` in the output clone to see what's still open.
+`annex_cohort_finish.sh` is idempotent: committed files are symlinks and are skipped, so just
+re-run it (same `-d`/`-s`) on a compute node. It fails loudly -- naming the files -- if a re-scan
+still finds regular (unannexed) files after the finish tool returned, and it keeps going past
+one failing subject, reporting all of them at the end. Job state is `squeue`/`sacct`; there is
+no bookkeeping database to close.
 
-### `datalad slurm-finish` says jobs are "not complete"
+### Submit says a subject "has no output"
 
-It checks `sacct` for every array task. If some tasks failed, re-run with
-`--close-failed-jobs` (drops them without committing) or `--commit-failed-jobs` (commits
-whatever they did write). Pending/running tasks must finish first -- it won't wait for you.
+The finish job skips a name with no entries at the dataset root (the array task failed before
+writing anything) with a warning, not an error. Check the array's logs in
+`.slurm_logs/<dataset>/`.
 
 ### Permission denied on push
 
@@ -141,6 +155,5 @@ Raise `hpc.mem` / `hpc.cpus` in the config and regenerate.
 ## References
 
 - [DataLad Documentation](https://handbook.datalad.org/)
-- [DataLad SLURM chapter](https://handbook.datalad.org/en/latest/beyond_basics/101-174-slurm.html)
-- [`datalad-slurm` extension](https://github.com/knuedd/datalad-slurm)
+- annex-slurm design: `docs/superpowers/specs/2026-09-09-annex-slurm-design.md`
 - [SLURM Documentation](https://slurm.schedmd.com/)

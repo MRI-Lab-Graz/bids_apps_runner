@@ -4,10 +4,13 @@
 # Orchestrate any BIDS app across multiple datasets on a SLURM/DataLad HPC.
 # Works with fMRIPrep, QSIPrep, MRIQC, or any other BIDS-app container.
 #
-# Two-phase workflow, built on the `datalad-slurm` extension
-# (https://github.com/knuedd/datalad-slurm) so that no datalad/git
-# operations ever happen inside a parallel SLURM job -- only in this
-# script, sequentially, before and after submission.
+# Two-phase workflow, built on annex-slurm (annex-slurm/bin/, design:
+# docs/superpowers/specs/2026-09-09-annex-slurm-design.md) so that no
+# datalad/git operations ever happen inside a parallel SLURM job -- only in
+# this script before submission and in the chained finish job after it.
+# annex-slurm replaced the `datalad-slurm` extension (2026-10): that flow's
+# datalad unlock/status/save/slurm-finish all compare index against worktree
+# and hang on repos with git-annex keys-DB drift (dataset 134).
 # ──────────────────
 # Phase 1 – setup (run once, needs DataLad + network access)
 #   • Pre-clones every dataset to shared HPC storage (fast subsequent clones;
@@ -21,13 +24,14 @@
 #     runs once, sequentially, before scheduling
 #   • Generates a plain SLURM array job script per dataset (via
 #     hpc_datalad_runner.py) -- the script itself contains no datalad/git calls
-#   • `datalad slurm-schedule`s the array job (-o . -- the whole output
-#     dataset, not per-subject; see schedule_one_batch's own comment on
-#     output_flags for why), submits via sbatch itself); records job IDs
-#     in submission.log
+#   • `annex-slurm-schedule`s the array job: unlocks only the existing output
+#     of THIS batch's subjects (plus loose dataset-root files) -- explicit
+#     paths, never the whole tree -- then sbatches it; records job IDs in
+#     submission.log
 #   • Chains a dependent finish job (--dependency=afterany) that runs
-#     `datalad slurm-finish` (one commit covering the whole array) + push,
-#     once the array completes
+#     annex_cohort_finish.sh once the array completes: per subject, commits
+#     the not-yet-annexed output via annex-slurm-finish (content-verified push),
+#     then re-scans and fails unless nothing is left unannexed
 #
 # Usage
 # ─────
@@ -45,21 +49,17 @@
 #
 #   IMPORTANT -- run `submit`/`submit-subregions` somewhere that survives a
 #   dropped connection: nohup ./scripts/submit_bids_cohort.sh submit ... \
-#     > submit.log 2>&1 & disown   (or a tmux/screen session). The
-#   `datalad slurm-schedule -o .` call this script makes runs synchronously,
-#   in this process, and unlocks the ENTIRE output dataset before it submits
-#   anything -- confirmed real incident (2026-09-02, 134_subregions): an
-#   interactive `submit-subregions` got killed when the login-node session
-#   ended, mid-`slurm-schedule`, before it had dispatched any array or
-#   finish job. That left 142,592 files unlocked (symlink -> regular file,
-#   content unchanged) with no finish job in existence to ever re-lock
-#   them -- recovered with `git annex lock .` (safe: same content either
-#   way), but only after the wall-clock time to notice and re-diagnose it.
-#   This is a DIFFERENT failure window than the one incremental_datalad_save.sh
-#   (see schedule_one_batch's finish-job template) already protects against:
-#   that one covers interruption once the finish job is running/re-locking
-#   per subject; a plain nohup/tmux is what covers the scheduling call itself,
-#   before any job exists to do the re-locking.
+#     > submit.log 2>&1 & disown   (or a tmux/screen session; the GUI runs
+#   it under srun on a login node). The annex-slurm-schedule call this
+#   script makes runs synchronously, in this process, and unlocks the
+#   batch's existing output before it submits anything. That window is now
+#   seconds (explicit paths) instead of hours (the old whole-dataset unlock --
+#   confirmed real incident, 2026-09-02, 134_subregions: a killed
+#   `submit-subregions` left 142,592 files unlocked with no finish job in
+#   existence to ever re-annex them), but an interrupted submit can still
+#   leave the batch's subjects unlocked with no job to re-annex them; the
+#   next `submit` run's finish job (annex_cohort_finish.sh) commits them,
+#   since it finds every still-unannexed file by filesystem scan.
 #
 # Options
 #   -c CONFIG      Path to config JSON  (default: configs/cohort_hpc_example.json)
@@ -77,22 +77,21 @@
 # ─────────────
 #   • jq             (JSON parsing)
 #   • python3        (hpc_datalad_runner.py)
-#   • datalad        (available via module or PATH)
-#   • datalad-slurm   extension (pip install git+https://github.com/knuedd/datalad-slurm.git;
-#                      not on PyPI -- provides slurm-schedule/slurm-finish)
+#   • datalad        (available via module or PATH; setup/prefetch only)
 #   • sbatch         (SLURM, only needed for submit phase)
-#   • ssh access to the DataLad server (only needed for setup phase)
+#   • ssh + rsync access to the DataLad server (setup, and annex-slurm-finish's
+#     content push)
 #   • .datalad-slurm-venv at the repo root -- a dedicated venv pinned to a
 #     uv-managed portable Python (not a symlink to the system python3), used
-#     only by the dependent "finish" job. Compute nodes on a cluster can run
-#     a different system python3 than the login node, which silently breaks
-#     any venv/uv-tool install that just symlinks to system python (both
-#     .appsrunner and a plain `uv tool install git-annex` hit this). Set up
-#     once with:
+#     for the working git-annex on login AND compute nodes. Compute nodes on
+#     a cluster can run a different system python3 than the login node, which
+#     silently breaks any venv/uv-tool install that just symlinks to system
+#     python (both .appsrunner and a plain `uv tool install git-annex` hit
+#     this). Set up once with:
 #       uv python install 3.10
 #       uv venv --python 3.10 .datalad-slurm-venv
-#       uv pip install --python .datalad-slurm-venv/bin/python datalad git-annex \
-#         git+https://github.com/knuedd/datalad-slurm.git
+#       uv pip install --python .datalad-slurm-venv/bin/python datalad git-annex
+#     (the name is historical; the datalad-slurm extension is no longer needed)
 #
 # Edit the TODO values in your config JSON before running.
 
@@ -104,6 +103,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # node -- see CLAUDE.md and tests/test_lib_prefetch.py.
 # shellcheck source=lib_prefetch.sh
 source "${SCRIPT_DIR}/lib_prefetch.sh"
+# Which dataset-root entries belong to a subject (what to unlock before an
+# array job, what to commit after) -- shared with annex_cohort_finish.sh.
+# shellcheck source=lib_annex_paths.sh
+source "${SCRIPT_DIR}/lib_annex_paths.sh"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -146,79 +149,13 @@ check_todos() {
     fi
 }
 
-# Emits the shell text (evaluated at job-runtime on the compute node, not
-# here) that verifies a finish job's `datalad push --to origin` actually
-# landed -- both the finish-job heredocs below (cmd_submit and
-# submit_subregion_segmentation) interpolate this via `$(push_verification_block)`
-# so the check can't drift out of sync between the two call sites.
-#
-# `datalad push` can exit 0 without the push having actually landed: a
-# rejected git ref update (real incident 2026-07-29 -- "remote rejected
-# (branch is currently checked out)" against 129/freesurfer, which sat
-# unpushed for days before anyone noticed) or a partial annexed-content
-# transfer failure are both surfaced only in datalad's own JSON result
-# stream, never as a nonzero process exit, so `set -e` never catches them.
-# This independently confirms (a) the remote ref for the current branch now
-# equals local HEAD via a live but cheap (metadata-only, no data transfer)
-# `git ls-remote`, and (b) every annexed file datalad believes it pushed is
-# actually present on origin via `git annex find --not --in origin`.
-#
-# Uses a quoted heredoc (<<'BLOCK') so none of its $vars expand here --
-# they're meant to stay literal text, to be evaluated later when the
-# generated finish script actually runs on the compute node (the same
-# effect the two call sites already get from hand-escaping \$uncommitted
-# etc. in their own unquoted <<EOF heredocs).
-push_verification_block() {
-    cat <<'BLOCK'
-# Verify the push actually landed on the remote -- datalad push can exit 0
-# without it really landing (see push_verification_block() in
-# submit_bids_cohort.sh for why).
-current_branch=$(git symbolic-ref --short HEAD)
-local_head=$(git rev-parse HEAD)
-remote_head=$(DATALAD_SSH_MULTIPLEX__CONNECTIONS=false timeout 30 git ls-remote origin "refs/heads/${current_branch}" 2>/dev/null | cut -f1)
-if [[ "$remote_head" != "$local_head" ]]; then
-    echo "ERROR: push did not land -- local HEAD (${local_head}) != origin/${current_branch} (${remote_head:-unreachable}). The commit exists locally but the datalad server does not have it." >&2
-    exit 1
-fi
-
-missing_content=$(git annex find --not --in origin 2>/dev/null | head -20)
-if [[ -n "$missing_content" ]]; then
-    echo "ERROR: annexed content missing from origin after push (git ref landed, but file content did not). First 20 missing files:" >&2
-    echo "$missing_content" >&2
-    exit 1
-fi
-BLOCK
-}
-
-# Verify a real commit actually happened after `slurm-finish
-# --commit-failed-jobs`. Shared between the array-finish and
-# subregion-finish templates the same way push_verification_block() is,
-# instead of being hand-copied into both.
-#
-# --commit-failed-jobs (not --close-failed-jobs -- see the call site's own
-# comment for why that distinction matters) already makes datalad_slurm
-# commit whatever output a TIMEOUT'd/CANCELLED array element produced
-# before removing its DB entry, and that removal already runs after the
-# save (scripts/patches/datalad_slurm_finish_db_removal_order.patch,
-# applied to .datalad-slurm-venv). So this check is now a safety net for
-# genuine anomalies (disk full, a git-annex hash failure) rather than the
-# routine occurrence it used to be when only --close-failed-jobs was used.
-# Confirmed real incident this originally guarded against: two separate
-# "COMPLETED" finish jobs for a 150-subject FreeSurfer cohort never
-# committed anything at all. Reported upstream:
-# https://github.com/knuedd/datalad-slurm/issues/97. Fail loudly here
-# instead of reporting false success, so normal job-failure monitoring
-# (email, cmd_status) catches it rather than it going unnoticed.
-uncommitted_check_block() {
-    cat <<'BLOCK'
-uncommitted=$(git status --porcelain | wc -l)
-if [[ "$uncommitted" -gt 0 ]]; then
-    echo "ERROR: ${uncommitted} uncommitted change(s) remain after slurm-finish -- the real commit likely never happened (see datalad-slurm's known premature-DB-removal issue). Uncommitted paths:" >&2
-    git status --short | head -30 >&2
-    exit 1
-fi
-BLOCK
-}
+# (The post-finish "did the push land?" and "anything left uncommitted?"
+# checks that used to live here as shared heredoc blocks are gone: they were
+# built on `git ls-remote`/`git annex find --not --in` and `git status`, the
+# last of which hangs on repos with git-annex keys-DB drift. annex-slurm-finish
+# now verifies the pushed ref and every object's checksum on the remote
+# itself, and annex_cohort_finish.sh's final re-scan is the "nothing left
+# uncommitted" contract -- see scripts/annex_cohort_finish.sh.)
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 COMMAND="${1:-help}"
@@ -489,11 +426,10 @@ submit_subregion_segmentation() {
 # Schedule one subregion segmentation array+concat+finish job trio for a
 # batch of timepoints (or, when batch_idx is empty, every timepoint in one
 # shot -- the pre-batching behavior). Mirrors schedule_one_batch's chaining
-# pattern: once THIS batch's finish job actually commits+pushes (closing its
-# DB entry), it invokes `submit_bids_cohort.sh _continue-subregion-batch` for
-# the next batch, if any -- see schedule_one_batch's own header comment for
-# why this can't just be pre-scheduled up front with SBATCH --dependency
-# (the same datalad-slurm `-o .` open-job conflict applies here).
+# pattern: once THIS batch's finish job has committed + pushed + verified, it
+# invokes `submit_bids_cohort.sh _continue-subregion-batch` for the next
+# batch, if any -- see schedule_one_batch's own header comment for why this
+# can't just be pre-scheduled up front with SBATCH --dependency.
 schedule_one_subregion_batch() {
     local ds="$1" output_clone="$2" timepoint_list="$3" main_finish_job_id="$4" \
           commit_prefix="$5" batch_idx="$6" next_timepoint_list="$7" submission_log="$8"
@@ -528,7 +464,7 @@ schedule_one_subregion_batch() {
 
     if $DRY_RUN; then
         echo "[DRY-RUN] Generate+schedule subregion array${batch_label} (${SUBREGION_STRUCTURES[*]}, ${SUBREGION_MODE}) for ${n_timepoints} timepoint(s), ${dependency_desc}"
-        echo "[DRY-RUN]   then sbatch a dependent finish job: datalad slurm-finish && datalad push --to origin"
+        echo "[DRY-RUN]   then sbatch a dependent finish job: annex_cohort_finish.sh (commit + push + verify per timepoint)"
         $has_next && echo "[DRY-RUN]   finish job would then chain subregion batch $((batch_idx + 1)) from ${next_timepoint_list}"
         return 0
     fi
@@ -549,55 +485,24 @@ schedule_one_subregion_batch() {
 
     mkdir -p "${LOG_DIR_BASE}/${ds}" "${output_clone}/.slurm_logs/${ds}"
 
-    # Scope -o to just this batch's own timepoints (plus subregion_results/,
-    # the concat job's cross-subject output dir -- see this function's own
-    # header comment on why that needs covering too) instead of the whole
-    # dataset. Unlike the main BIDS-app array (schedule_one_batch,
-    # output_flags=(-o .)), segment_subregions itself writes only inside
-    # each timepoint's own SUBJECTS_DIR entry (confirmed against
-    # hpc_datalad_runner.py's SubregionSegmentationScriptGenerator: no
-    # dataset-root report files the way mriqc/fMRIPrep write) -- there's no
-    # "loose files elsewhere" case forcing -o . the way there is for that
-    # array. Unlocking ~10 directories instead of the whole ~142K-file tree
-    # turns the vulnerable "unlocked with no job to re-lock it if this gets
-    # killed" window from hours into seconds -- confirmed real incident
-    # (2026-09-07/08, 134_subregions): three separate `-o .` attempts here
-    # each failed differently (dropped session, stale SSH hang, then the
-    # recovery lock job itself timing out at 8h) before ever reaching sbatch.
-    local -a subregion_output_flags=(-o "subregion_results") subregion_timepoints
-    mapfile -t subregion_timepoints < "$timepoint_list"
-    local tp
-    for tp in "${subregion_timepoints[@]}"; do
-        [[ -n "$tp" ]] && subregion_output_flags+=(-o "$tp")
-    done
-
-    local subregion_stdout subregion_exit subregion_job_id subregion_stderr_file
-    subregion_stderr_file=$(mktemp)
-    subregion_exit=0
-    # DATALAD_SSH_MULTIPLEX__CONNECTIONS=false: same rationale as the push
-    # call sites below (stale cross-node SSH control socket under the
-    # NFS-shared ~/.cache/datalad/sockets/ hanging instead of failing fast).
-    subregion_stdout=$(DATALAD_SSH_MULTIPLEX__CONNECTIONS=false datalad -C "$output_clone" -f json slurm-schedule \
-        "${subregion_output_flags[@]}" \
-        -m "${commit_prefix}Subregion segmentation (${SUBREGION_STRUCTURES[*]}, ${SUBREGION_MODE}) for ${ds}${batch_label}" \
-        sbatch "$subregion_array_script" 2>"$subregion_stderr_file") || subregion_exit=$?
-    local subregion_stderr
-    subregion_stderr=$(cat "$subregion_stderr_file"); rm -f "$subregion_stderr_file"
-    if [[ $subregion_exit -ne 0 ]]; then
-        local subregion_reason
-        subregion_reason=$(printf '%s\n%s\n' "$subregion_stdout" "$subregion_stderr" \
-            | jq -r 'select(.message) | .message' 2>/dev/null | tail -1)
-        warn "[$ds] datalad slurm-schedule (subregions) failed${batch_label}${subregion_reason:+: $subregion_reason}"
-        return 1
-    fi
-
-    subregion_job_id=$(printf '%s\n' "$subregion_stdout" \
-        | jq -r 'select(.action=="slurm-schedule") | .slurm_run_info.slurm_job_id // empty' \
-        | tail -1)
-    if [[ -z "$subregion_job_id" ]]; then
-        warn "[$ds] Could not determine SLURM job id from subregion slurm-schedule output${batch_label}"
-        return 1
-    fi
+    # Unlock only this batch's own timepoints (plus subregion_results/, the
+    # concat job's cross-subject output dir -- see this function's own header
+    # comment on why that needs covering too), never the whole dataset.
+    # segment_subregions writes only inside each timepoint's own SUBJECTS_DIR
+    # entry (confirmed against hpc_datalad_runner.py's
+    # SubregionSegmentationScriptGenerator: no dataset-root report files the
+    # way mriqc/fMRIPrep write), so no --root-files here. Unlocking ~10
+    # directories instead of the whole ~142K-file tree turns the vulnerable
+    # "unlocked with no job to re-annex it if this gets killed" window from
+    # hours into seconds -- confirmed real incident (2026-09-07/08,
+    # 134_subregions): three separate whole-dataset unlock attempts each
+    # failed differently (dropped session, stale SSH hang, then the recovery
+    # lock job itself timing out at 8h) before ever reaching sbatch. Prints
+    # the job id; see annex_schedule_batch in lib_annex_paths.sh.
+    local subregion_job_id
+    subregion_job_id=$(annex_schedule_batch "$output_clone" "$timepoint_list" "$subregion_array_script" \
+        --extra "subregion_results") \
+        || { warn "[$ds] Scheduling the subregion array failed${batch_label}"; return 1; }
     log "[$ds] Scheduled subregion segmentation array job ${subregion_job_id}${batch_label} (${n_timepoints} timepoints, ${dependency_desc})"
 
     # Concatenate per-timepoint volume outputs into cohort-wide CSVs
@@ -608,13 +513,11 @@ schedule_one_subregion_batch() {
     # segment_subregions (the tool this pipeline actually runs) writes plain
     # "label value" files with no header straight into <subject>/mri/, so
     # that script finds nothing against this tool's real output (confirmed
-    # against the FS 8.2 image's own source). A plain (non-array) sbatch job,
-    # not routed through its own `datalad slurm-schedule` -- the array job's
-    # own "-o ." already covers the whole output_clone tree, so slurm-finish
-    # below picks up these new results/ files the same way it already picks
-    # up files array TASKS wrote (slurm-schedule declares scope, not who
-    # writes within it). Writes into output_clone/subregion_results/, kept
-    # in the dataset next to the raw per-subject output.
+    # against the FS 8.2 image's own source). A plain (non-array) sbatch job
+    # that needs no unlock of its own: subregion_results/ is already in the
+    # array's unlock scope above, and the finish job below commits it via
+    # --extra "subregion_results". Writes into output_clone/subregion_results/,
+    # kept in the dataset next to the raw per-subject output.
     local results_dir="${output_clone}/subregion_results"
     local concat_script="${scripts_dir}/${ds}_bids_subregions_${SUBREGION_MODE}${job_name_suffix}_concat.sh"
     cat > "$concat_script" <<EOF
@@ -663,10 +566,10 @@ EOF
     local continue_block=""
     if $has_next; then
         continue_block="
-# This subregion batch's outputs are committed and pushed above -- its DB
-# entry is now closed, so the next subregion batch's slurm-schedule can go
-# ahead. Chained from here rather than pre-scheduled up front; see
-# schedule_one_batch()'s header comment in submit_bids_cohort.sh for why.
+# This subregion batch's outputs are committed, pushed and verified above, so
+# the next subregion batch's unlock can go ahead. Chained from here rather
+# than pre-scheduled up front; see schedule_one_batch()'s header comment in
+# submit_bids_cohort.sh for why.
 bash \"${REPO_DIR}/scripts/submit_bids_cohort.sh\" _continue-subregion-batch \\
     --config \"${CONFIG}\" -d \"${ds}\" --batch-idx $((batch_idx + 1)) \\
     --submission-log \"${submission_log}\" --commit-prefix \"${commit_prefix}\""
@@ -704,30 +607,17 @@ _notify_failure() {
 }
 trap _notify_failure ERR
 export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
-DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
-# Commit + push per timepoint BEFORE slurm-finish -- see the matching
-# comment on the main finish job template in cmd_submit for why the
-# monolithic slurm-finish Save call is the failure mode this avoids.
-"${REPO_DIR}/scripts/incremental_datalad_save.sh" -d "${output_clone}" -s "${timepoint_list}" -J 4 --push-every 10
-# Guarantee slurm-finish's own Save call below always has something to
-# commit -- see the matching comment on the main finish job template in
-# cmd_submit for why an empty diff would otherwise silently lose this
-# job's entire provenance record, not just skip a redundant save.
-echo "${subregion_job_id} \$(date -Iseconds)" > ".slurm_logs/${ds}/finish-marker-${subregion_job_id}.txt"
-# --commit-failed-jobs (not --close-failed-jobs): see the matching comment
-# on the main finish job template in cmd_submit for why that distinction
-# is what actually keeps a TIMEOUT'd concat job's real output from being
-# silently abandoned as untracked.
-"\$DATALAD_BIN" slurm-finish --commit-failed-jobs --slurm-job-id "${subregion_job_id}" -m "${commit_prefix}Finish subregion segmentation job ${subregion_job_id} for ${ds}${batch_label}"
-# See the matching comment on the main finish job template in cmd_submit for
-# why this push forces DATALAD_SSH_MULTIPLEX__CONNECTIONS=false (stale
-# cross-node SSH control socket under the NFS-shared ~/.cache/datalad/sockets/).
-DATALAD_SSH_MULTIPLEX__CONNECTIONS=false "\$DATALAD_BIN" push --to origin
-
-$(uncommitted_check_block)
-
-$(push_verification_block)
+# Commit + push through annex-slurm -- see the matching comment on the main
+# finish job template in schedule_one_batch for why never \`slurm-finish\`,
+# \`datalad save\` or \`git status\`. The scope is this batch's own timepoints
+# plus subregion_results/ (the concat job's cross-subject output). Like the
+# main finish job it is dependency-chained with "afterany", so a TIMEOUT'd
+# concat/array element's partial output is committed rather than abandoned,
+# and it only exits 0 once a re-scan finds nothing left unannexed.
+"${REPO_DIR}/scripts/annex_cohort_finish.sh" -d "${output_clone}" -s "${timepoint_list}" \\
+    -m "${commit_prefix}Subregion segmentation job ${subregion_job_id} for ${ds}${batch_label}" \\
+    --extra "subregion_results" --extra ".slurm_logs/${ds}"
 ${continue_block}
 EOF
     chmod +x "$subregion_finish_script"
@@ -1051,24 +941,19 @@ _subregion_batch_timepoint_list() {
 # reduces to the pre-batching behavior byte-for-byte in that case, same
 # filenames included).
 #
-# Batches are NOT pre-scheduled up front with SBATCH --dependency. Confirmed
-# directly against datalad-slurm's own source
-# (datalad_slurm/schedule.py::check_output_conflict): `datalad slurm-schedule
-# -o .` refuses to declare new outputs against a dataset while *any* prior
-# job's outputs are still open (not yet slurm-finish'd) -- SBATCH
-# --dependency only delays when a job *runs* on the cluster, it does nothing
-# to delay the slurm-schedule call itself, which happens synchronously at
-# submit time. (This is also why submit_subregion_segmentation's own
-# concurrent -o . schedule, fired right after the main array below, is
-# explicitly best-effort/likely-to-conflict with a documented manual
-# fallback -- same constraint, pre-dating this batching feature.)
+# Batches are NOT pre-scheduled up front with SBATCH --dependency: scheduling
+# unlocks the batch's existing output (annex-slurm-schedule), and annex-slurm
+# supports strictly sequential batches only -- overlapping ones are out of
+# scope in its design (docs/superpowers/specs/2026-09-09-annex-slurm-design.md),
+# because a batch's unlock must not race the previous batch's commit.
+# (Under the old datalad-slurm flow this was forced by its open-job conflict
+# rule instead; the chaining itself is unchanged.)
 #
-# So instead this chains itself: once THIS batch's finish job actually
-# commits (closing its DB entry), it invokes `submit_bids_cohort.sh
-# _continue-batch` for the next one, if any -- see the "continue_block"
-# below and cmd_continue_batch. That only ever runs from inside an
-# already-`sbatch`-dispatched finish job, on a real compute node, so it
-# never touches the HPC login-node policy.
+# So this chains itself: once THIS batch's finish job has committed, pushed
+# and verified, it invokes `submit_bids_cohort.sh _continue-batch` for the
+# next one, if any -- see the "continue_block" below and cmd_continue_batch.
+# That only ever runs from inside an already-`sbatch`-dispatched finish job,
+# on a real compute node, so it never touches the HPC login-node policy.
 #
 # Sets _SCHEDULED_ARRAY_JOB_ID / _SCHEDULED_FINISH_JOB_ID on success.
 # Returns 1 (with a [WARN]) on failure -- callers decide what that means:
@@ -1116,62 +1001,29 @@ schedule_one_batch() {
         return 1
     fi
 
-    # Declare the whole dataset as output ("-o ." is an explicit, documented
-    # special case in `datalad slurm-schedule --help`, not a forbidden
-    # wildcard glob like "-o sub-*"). Per-subject -o flags only cover each
-    # subject's own subdirectory -- BIDS apps commonly also write loose
-    # report files at the dataset root, which per-subject flags would miss.
-    # This call unlocks the WHOLE dataset synchronously, right here, before
-    # anything is submitted -- see this file's own header comment ("run
-    # somewhere that survives a dropped connection") for why an interrupted
-    # caller can leave that unlock stuck with no job left to re-lock it.
-    local -a output_flags=(-o .)
-
     if $DRY_RUN; then
-        echo "[DRY-RUN] (cd ${output_clone} && datalad -f json slurm-schedule ${output_flags[*]} -m '...' sbatch ${array_script})"
-        echo "[DRY-RUN]   then sbatch a dependent finish job: datalad slurm-finish && datalad push --to origin"
+        echo "[DRY-RUN] (cd ${output_clone} && annex-slurm-schedule <unlock existing output of ${n_subjects} subject(s) + loose root files> -- --parsable ${array_script})"
+        echo "[DRY-RUN]   then sbatch a dependent finish job: annex_cohort_finish.sh (commit + push + verify per subject)"
         $has_next && echo "[DRY-RUN]   finish job would then chain batch $((batch_idx + 1)) from ${next_subj_list}"
         _SCHEDULED_ARRAY_JOB_ID="DRY-RUN"
         _SCHEDULED_FINISH_JOB_ID="DRY-RUN"
         return 0
     fi
 
-    # Ensure log dir exists before slurm-schedule writes its env.json there,
-    # and pre-create the array job's own SBATCH --output/--error location,
-    # which lives *inside* the output dataset (see hpc_datalad_runner.py) so
-    # datalad-slurm can save those logs as part of the job's provenance.
+    # Ensure log dir exists, and pre-create the array job's own SBATCH
+    # --output/--error location, which lives *inside* the output dataset (see
+    # hpc_datalad_runner.py) so the finish job commits those logs with the
+    # rest of the output.
     mkdir -p "${LOG_DIR_BASE}/${ds}" "${output_clone}/.slurm_logs/${ds}"
 
-    # stdout/stderr captured separately, and `|| schedule_exit=$?` directly
-    # on the assignment -- both required for set -e safety and accurate
-    # error reporting, see the matching comment historically kept on this
-    # exact call in cmd_submit (now here).
-    local schedule_stdout schedule_stderr schedule_exit job_id schedule_stderr_file
-    schedule_stderr_file=$(mktemp)
-    schedule_exit=0
-    # DATALAD_SSH_MULTIPLEX__CONNECTIONS=false -- see the matching comment on
-    # schedule_one_subregion_batch's own slurm-schedule call (same rationale,
-    # same confirmed incident).
-    schedule_stdout=$(DATALAD_SSH_MULTIPLEX__CONNECTIONS=false datalad -C "$output_clone" -f json slurm-schedule \
-        "${output_flags[@]}" \
-        -m "${commit_prefix}${APP_NAME} array for ${ds}${batch_label} (${n_subjects} subjects)" \
-        sbatch "$array_script" 2>"$schedule_stderr_file") || schedule_exit=$?
-    schedule_stderr=$(cat "$schedule_stderr_file"); rm -f "$schedule_stderr_file"
-    if [[ $schedule_exit -ne 0 ]]; then
-        local schedule_reason
-        schedule_reason=$(printf '%s\n%s\n' "$schedule_stdout" "$schedule_stderr" \
-            | jq -r 'select(.message) | .message' 2>/dev/null | tail -1)
-        warn "[$ds] datalad slurm-schedule failed${batch_label}${schedule_reason:+: $schedule_reason}"
-        return 1
-    fi
-
-    job_id=$(printf '%s\n' "$schedule_stdout" \
-        | jq -r 'select(.action=="slurm-schedule") | .slurm_run_info.slurm_job_id // empty' \
-        | tail -1)
-    if [[ -z "$job_id" ]]; then
-        warn "[$ds] Could not determine SLURM job id from slurm-schedule output${batch_label}"
-        return 1
-    fi
+    # Unlocks only the existing output this batch's array will overwrite (the
+    # batch's subjects + the loose root-level files BIDS apps rewrite) --
+    # explicit paths, never the whole tree -- then sbatches; prints the job id.
+    # See annex_schedule_batch in lib_annex_paths.sh. `||` on the assignment
+    # keeps set -e from killing the whole submit before the warning below.
+    local job_id
+    job_id=$(annex_schedule_batch "$output_clone" "$subj_list" "$array_script" --root-files) \
+        || { warn "[$ds] Scheduling the array failed${batch_label}"; return 1; }
     log "[$ds] ${commit_prefix}Scheduled array job ${job_id}${batch_label} (${n_subjects} subjects)"
 
     local module_load_line=""
@@ -1194,10 +1046,9 @@ schedule_one_batch() {
     local continue_block=""
     if $has_next; then
         continue_block="
-# This batch's outputs are committed and pushed above -- its DB entry is now
-# closed, so the next batch's slurm-schedule can go ahead. Chained from here
-# rather than pre-scheduled up front; see schedule_one_batch()'s own comment
-# in submit_bids_cohort.sh for why.
+# This batch's outputs are committed, pushed and verified above, so it is
+# safe to unlock the next batch's. Chained from here rather than pre-scheduled
+# up front; see schedule_one_batch()'s own comment in submit_bids_cohort.sh.
 bash \"${REPO_DIR}/scripts/submit_bids_cohort.sh\" _continue-batch \\
     --config \"${CONFIG}\" -d \"${ds}\" --batch-idx $((batch_idx + 1)) \\
     --submission-log \"${submission_log}\" --commit-prefix \"${commit_prefix}\""
@@ -1240,8 +1091,8 @@ set -euo pipefail
 ${module_load_line}
 # Best-effort ntfy push on failure (see scripts/notify_ntfy.sh -- silently
 # no-ops if configs/ntfy.conf isn't set up). Catches anything below that
-# exits non-zero: slurm-finish itself, the uncommitted-check, or
-# push_verification_block's own checks.
+# exits non-zero: a failed annex-slurm-finish chunk, or annex_cohort_finish.sh's
+# final re-scan finding files that are still not annexed.
 _notify_failure() {
     echo "finish job for ${ds}${batch_label} failed at line \$LINENO" >&2
     "${REPO_DIR}/scripts/notify_ntfy.sh" "Cohort finish FAILED: ${ds}" \
@@ -1249,90 +1100,27 @@ _notify_failure() {
         high x >/dev/null 2>&1 || true
 }
 trap _notify_failure ERR
-# Use the dedicated datalad-slurm venv's own datalad entry point (pinned to
-# a uv-managed portable Python 3.10) instead of .appsrunner -- compute nodes
-# on this cluster can have a different system python3 than the login node
-# (observed 3.12 vs 3.10), which silently breaks a venv that just symlinks
-# to system python. Must call the venv's bin/datalad script directly (not
-# \`python -m datalad\`, which uses a different, more limited entry point
-# that doesn't recognize e.g. \`-f json\`). Also prepend its bin/ to PATH so
-# datalad picks up the venv's git-annex, not the system/uv-tool one (which
-# has the same node-dependent-python-version problem).
+# Compute nodes here can run a different system python3 than the login node
+# (observed 3.12 vs 3.10), and the system/uv-tool git-annex shares that
+# problem -- the dedicated venv holds the only git-annex that works on both.
 export PATH="${REPO_DIR}/.datalad-slurm-venv/bin:\$PATH"
-DATALAD_BIN="${REPO_DIR}/.datalad-slurm-venv/bin/datalad"
 cd "${output_clone}"
-# --slurm-job-id must be explicit: datalad-slurm's finish_cmd(), when called
-# without one, processes EVERY still-open job in the dataset's bookkeeping DB
-# (datalad_slurm/finish.py's get_scheduled_commits()), not just this array.
-# Confirmed real incident: job 5578842's finish swept in three stale open-job
-# entries left over from an earlier unrelated pilot run and none of the four
-# jobs it then tried to finish -- including this one -- ended up committed,
-# tripping the uncommitted-check below. Scoping to this array's own job_id
-# keeps a finish job's blast radius limited to the array it was dispatched for.
-#
-# Commit + push the array's real output per-subject BEFORE slurm-finish ever
-# touches it. Every incident this codebase's comments document traces back
-# to the same thing: slurm-finish's own Save call trying to commit the
-# WHOLE dataset in one atomic step. That step is the single point of
-# failure -- interrupted mid-save (job 5505212), tripped by
-# --close-failed-jobs's early return, or (project 134, 2026-08-13) simply
-# never running after a downstream step failed, leaving slurm-schedule's
-# "-o ." unlock of the entire dataset with no matching re-lock for three
-# weeks. incremental_datalad_save.sh commits per subject, checkpointed and
-# resumable, so an interruption here costs at most one subject, not the
-# cohort. Note this covers interruption once the finish job is running --
-# a DIFFERENT, still-open window is the scheduling call itself (this file's
-# own output_flags=(-o .) comment above / this file's header comment), which
-# hasn't dispatched a finish job yet for incremental save to even run in.
-# By the time slurm-finish runs below, the tree is already clean,
-# so its own Save call only has to do what it's actually good for: closing
-# the datalad-slurm DB entry (keeping slurm-schedule's conflicting-outputs
-# guard working).
-"${REPO_DIR}/scripts/incremental_datalad_save.sh" -d "${output_clone}" -s "${subj_list}" -J 4 --push-every 10
-#
-# Guarantee slurm-finish's own Save call actually commits something.
-# Verified against the installed datalad source
-# (datalad/core/local/save.py:619-633): Save.__call__ on an already-clean
-# tree (empty paths_by_ds) yields status='notneeded' and creates ZERO
-# commits -- meaning the [DATALAD SLURM RUN] provenance record this whole
-# call exists to write would silently never be created once the
-# incremental save above has already cleaned the tree, which is now the
-# common case. datalad_slurm's remove_from_database() (finish.py:561-572)
-# does a hard DELETE with no archival, so that job's entire history would
-# be lost from git, not merely a redundant save skipped. This marker file
-# (inside the -o . output scope) guarantees a real, non-empty diff for
-# Save to attach the provenance message to.
-echo "${job_id} \$(date -Iseconds)" > ".slurm_logs/${ds}/finish-marker-${job_id}.txt"
-#
-# --commit-failed-jobs must be here too, not just on the GUI's manual
-# close_open_jobs route: this finish job is dependency-chained with
-# "afterany" (not "afterok"), so it runs even when some array elements
-# TIMEOUT'd rather than COMPLETED. Without it, datalad_slurm's finish_cmd()
-# removes the job's DB entry and returns without ever calling Save on the
-# declared outputs -- any real output a timed-out element produced is then
-# silently abandoned as untracked. Confirmed real incident (2026-09-01,
-# megastudy_openneuro mriqc): see gui_cohort_routes.py's close_open_jobs
-# docstring for the incident this same flag fixes on the manual-close path.
-# The incremental save above already committed the real output, and the
-# marker file above guarantees this call still has the provenance-record
-# commit to make -- so this is now a cheap, small commit, not a repeat of
-# the heavy lifting, but never a true no-op.
-"\$DATALAD_BIN" slurm-finish --commit-failed-jobs --slurm-job-id "${job_id}" -m "${commit_prefix}Finish ${APP_NAME} array job ${job_id} for ${ds}${batch_label}"
-# Disable datalad's SSH connection multiplexing for this push. Finish jobs
-# land on whichever compute node the scheduler/pick_idle_node picks, but
-# \$HOME (and its datalad control-socket cache under ~/.cache/datalad/sockets/)
-# is NFS-shared across all of them -- a control socket a previous finish job
-# created on a *different* node is a dead reference on this one, and
-# connecting to it can hang indefinitely instead of failing fast (confirmed
-# real incident: two separate pushes for the 129/freesurfer output dataset
-# hung for hours at an identical near-zero byte count before this was found).
-# DATALAD_SSH_MULTIPLEX__CONNECTIONS=false forces a plain, direct-per-call
-# SSH connection instead, sidestepping the shared/stale-socket risk entirely.
-DATALAD_SSH_MULTIPLEX__CONNECTIONS=false "\$DATALAD_BIN" push --to origin
-
-$(uncommitted_check_block)
-
-$(push_verification_block)
+# Commit + push this array's output through annex-slurm, never through
+# \`slurm-finish\`/\`datalad save\`/\`git status\`: all of them compare index
+# against worktree and hang on repos with git-annex keys-DB drift (dataset
+# 134, docs/superpowers/specs/2026-09-09-annex-slurm-design.md).
+# annex_cohort_finish.sh lists each subject's not-yet-annexed files with
+# \`find\`, commits them per subject in chunks (an interruption costs one
+# chunk; a re-run resumes where it stopped), content-verifies every object
+# on the remote, and only exits 0 once a re-scan finds nothing unannexed.
+# This finish job is dependency-chained with "afterany", so it also runs
+# when some array elements TIMEOUT'd -- whatever those wrote is committed
+# too, never silently abandoned as untracked. --root-files catches the loose
+# report files BIDS apps write next to the subject directories; the array's
+# own SLURM logs live inside the dataset (see hpc_datalad_runner.py).
+"${REPO_DIR}/scripts/annex_cohort_finish.sh" -d "${output_clone}" -s "${subj_list}" \\
+    -m "${commit_prefix}${APP_NAME} array ${job_id} for ${ds}${batch_label}" \\
+    --root-files --extra ".slurm_logs/${ds}"
 
 "${REPO_DIR}/scripts/notify_ntfy.sh" "Cohort finish OK: ${ds}" "${ds}${batch_label} committed + pushed: array job ${job_id}, ${n_subjects} subjects (commit \$(git rev-parse --short HEAD))." default white_check_mark >/dev/null 2>&1 || true
 ${continue_block}

@@ -17,7 +17,7 @@ See [README_HPC_DATALAD.md](README_HPC_DATALAD.md) for the full workflow and con
 ./scripts/submit_bids_cohort.sh submit -c configs/cohort_hpc_example.json --dry-run
 ```
 
-Prints the subject-list build, the generated-script command, the `datalad slurm-schedule`
+Prints the subject-list build, the generated-script command, the `annex-slurm-schedule`
 invocation, and the dependent finish-job submission -- without touching the cluster or the
 dataset.
 
@@ -47,11 +47,13 @@ python3 scripts/hpc_datalad_runner.py \
   -o scripts/generated/sub-001.sh
 
 cd /shared/derivatives/dataset_001/fmriprep
-datalad slurm-schedule -o sub-001 -m "fmriprep sub-001 (ad hoc)" \
-  sbatch /path/to/scripts/generated/sub-001.sh
+printf 'sub-001\n' > /shared/subject_lists/sub-001.txt
+/path/to/repo/annex-slurm/bin/annex-slurm-schedule -o sub-001 -- --parsable \
+  /path/to/scripts/generated/sub-001.sh
 
-# once SLURM shows it COMPLETED:
-datalad slurm-finish && datalad push --to origin
+# once SLURM shows it COMPLETED (on a compute node: salloc/srun, not the login node):
+/path/to/repo/scripts/annex_cohort_finish.sh -d "$PWD" \
+  -s /shared/subject_lists/sub-001.txt -m "fmriprep sub-001 (ad hoc)"
 ```
 
 ## Example 6: Inspect the generated compute script
@@ -65,22 +67,20 @@ python3 scripts/hpc_datalad_runner.py \
 ```
 
 The script contains no `datalad`/`git` calls -- only module loads, scratch setup, an
-`apptainer exec`, and cleanup. All provenance recording happens in `submit_bids_cohort.sh`
-via `datalad slurm-schedule`/`datalad slurm-finish`, not in the job.
+`apptainer exec`, and cleanup. All committing happens in `submit_bids_cohort.sh`'s scheduling
+step (`annex-slurm-schedule`) and the dependent finish job (`annex_cohort_finish.sh`), not in
+the job.
 
 ## Example 7: Recovering from a failed subject
 
 ```bash
-# Check sacct/squeue for the failing array task, fix the underlying issue, then either:
+# Check sacct/squeue for the failing array task and the log in .slurm_logs/<dataset>/.
+# The finish job (afterany) already committed whatever the other subjects -- and the failed
+# one, partially -- managed to write. There is no job database to close.
 
-# (a) close it out without committing its (partial/broken) output:
-cd /shared/derivatives/dataset_001/fmriprep
-datalad slurm-finish --close-failed-jobs
-
-# (b) or commit whatever it did manage to write:
-datalad slurm-finish --commit-failed-jobs
-
-# Then re-run just that subject (Example 5) and schedule/finish it on its own.
+# Fix the underlying issue, then re-run just that subject (Example 5): schedule it, and
+# finish it on its own. annex_cohort_finish.sh is idempotent -- already-annexed files are
+# skipped -- so re-running it after a failed finish job is always safe.
 ```
 
 ## Example 8: Minimal vs. production config

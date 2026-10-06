@@ -7,9 +7,9 @@ pathlib2>=2.3.0; python_version<"3.4"
 # For DataLad integration (HPC version)
 # Note: DataLad requires system-level git and git-annex
 datalad>=0.16.0; sys_platform!="win32"
-# datalad-slurm extension (not on PyPI — install via):
-#   pip install git+https://github.com/knuedd/datalad-slurm.git
-# Already bundled in the venv; see scripts/install.sh for setup notes.
+# The cohort flow uses annex-slurm (annex-slurm/bin/, plain bash + git-annex);
+# the datalad-slurm extension is no longer needed. A working git-annex comes
+# from the repo's .datalad-slurm-venv -- see scripts/submit_bids_cohort.sh.
 
 # GUI Dependencies
 flask>=2.3.0

@@ -18,8 +18,10 @@
 # reachable via a normal `datalad get` even though the bytes may already be on
 # origin. The real files are still sitting untouched in the working tree here
 # (confirmed present, non-broken, real content), so this is a re-save, not a
-# re-run: scripts/incremental_datalad_save.sh commits + pushes them one
-# subject at a time (idempotent -- anything already clean is skipped).
+# re-run: scripts/annex_cohort_finish.sh commits + pushes them one subject at
+# a time via annex-slurm-finish (idempotent -- anything already annexed is
+# skipped). (Originally written against incremental_datalad_save.sh, since
+# removed: its save step hangs on this dataset.)
 
 set -uo pipefail
 
@@ -34,11 +36,10 @@ echo "Dataset:    $DATASET_DIR"
 echo "Subjects:   $SUBJECT_LIST ($(wc -l < "$SUBJECT_LIST") entries)"
 echo "========================================"
 
-"${REPO_DIR}/scripts/incremental_datalad_save.sh" \
+"${REPO_DIR}/scripts/annex_cohort_finish.sh" \
     -d "$DATASET_DIR" \
     -s "$SUBJECT_LIST" \
-    -J 4 \
-    --push-every 10
+    -m "Recover subregion output (job 5665591 empty-commit incident)"
 
 echo
 echo "Finished:   $(date)"

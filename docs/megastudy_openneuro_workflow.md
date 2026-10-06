@@ -16,8 +16,7 @@ to the GUI later.
 | Tool / thing | Where | Notes |
 |---|---|---|
 | `datalad`, `git-annex` | HPC login node | Already installed here (`~/.local/bin`) |
-| `datalad-slurm` extension | HPC login node | `pip install git+https://github.com/knuedd/datalad-slurm.git` (not on PyPI) |
-| `.datalad-slurm-venv` | repo root | Dedicated venv pinned to a portable Python — see `scripts/submit_bids_cohort.sh` header comment for setup |
+| `.datalad-slurm-venv` | repo root | Dedicated venv pinned to a portable Python, holding the git-annex that works on login *and* compute nodes (name is historical; the datalad-slurm extension is no longer used) — see `scripts/submit_bids_cohort.sh` header comment for setup |
 | `jq` | HPC login node | JSON parsing in `submit_bids_cohort.sh` |
 | `sbatch` / `squeue` / `sacct` | HPC login node | SLURM |
 | SSH alias `datalad-server` | `~/.ssh/config` | Must carry the right `User`/`IdentityFile` — see `gui/gui_utility_routes.py:22`. Same alias the GUI's remote-dataset browsing already uses |
@@ -195,7 +194,7 @@ To narrow to a single dataset instead of all 31, add `-d`:
 ```
 
 One SLURM array job per dataset (subjects as array indices), plus one
-dependent `slurm-finish` + push job per dataset, chained via
+dependent finish job (`annex_cohort_finish.sh`: commit + push + verify) per dataset, chained via
 `--dependency=afterany`. `-d <dataset_id>` (repeatable) scopes to specific
 datasets; `--resume` skips datasets whose subject list/job script already
 exist; `--dry-run` previews without executing.

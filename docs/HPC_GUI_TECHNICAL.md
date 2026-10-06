@@ -284,7 +284,7 @@ app_gui.py
 ## Related Files
 
 - `hpc_datalad_runner.py` - SLURM compute-script generation backend
-- `submit_bids_cohort.sh` - SLURM/datalad-slurm cohort orchestration (setup/submit/status)
+- `submit_bids_cohort.sh` - SLURM/annex-slurm cohort orchestration (setup/submit/status)
 - `cohort_hpc_example.json` - Example config
 - `README_HPC_DATALAD.md` - Full documentation
 - `HPC_QUICK_REFERENCE.md` - Command reference

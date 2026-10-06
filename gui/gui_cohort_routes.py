@@ -12,6 +12,8 @@ from typing import Any, Callable
 
 from flask import jsonify, request
 
+import login_node_hygiene
+
 _cohort_jobs: dict[str, Any] = {}
 _cohort_jobs_lock = threading.Lock()
 
@@ -25,15 +27,38 @@ def _datalad_subprocess_env() -> dict:
     return env
 
 
+# Known-state commands only -- never `git status`/`diff`: those compare
+# index vs. worktree and hang on repos with git-annex keys-DB drift (134,
+# see CLAUDE.md). `ls-files --others` lists untracked paths without running
+# any annex filter; rev-list only walks the object graph. One script, so
+# one srun on a login node.
+_GIT_SYNC_SCRIPT = r"""
+set -o pipefail
+cd "$1" || exit 1
+branch=$(git symbolic-ref --short -q HEAD)
+# The .annex-slurm-managed marker is untracked by design (134 carries one).
+untracked=$(git ls-files --others --exclude-standard -- . ':!.annex-slurm-managed' | wc -l) || exit 1
+unpushed=0
+if [ -n "$branch" ] && git rev-parse --verify -q "refs/remotes/origin/$branch" >/dev/null; then
+    unpushed=$(git rev-list --count "origin/$branch..HEAD") || exit 1
+fi
+printf '%s\t%s\t%s\n' "$branch" "$untracked" "$unpushed"
+"""
+
+
 def _git_sync_status(path: str) -> dict[str, Any]:
     """Whether a git-annex/datalad clone at `path` is fully synced to its
-    origin remote: clean working tree, nothing committed locally that
-    hasn't made it to `refs/remotes/origin/<branch>`. Deliberately does no
-    network I/O (no `git fetch`) -- it only compares against the
-    remote-tracking ref left behind by the last successful push, the same
-    no-network property scripts/check_output_sync.sh already relies on
-    (see that script's own rationale comment) so this check can never hang
-    the way a live push/fetch can. Returns
+    origin remote: no untracked output left behind, nothing committed
+    locally that hasn't made it to `refs/remotes/origin/<branch>`.
+    Deliberately does no network I/O (no `git fetch`) -- it only compares
+    against the remote-tracking ref left behind by the last successful
+    push, the same no-network property scripts/check_output_sync.sh relies on.
+
+    "uncommitted" counts untracked paths only: edits to already-tracked
+    unlocked files can't be seen without a worktree comparison, which is
+    exactly what hangs. annex-slurm-finish commits explicit paths, and the
+    drop this gates refuses on its own to drop content with no verified
+    remote copy. Runs via srun on a bare login node. Returns
     {ok, branch, uncommitted, unpushed, error}.
     """
     result: dict[str, Any] = {
@@ -47,52 +72,26 @@ def _git_sync_status(path: str) -> dict[str, Any]:
         result["error"] = "Not a git repository."
         return result
 
+    cmd = login_node_hygiene.compute_node_cmd(
+        ["bash", "-c", _GIT_SYNC_SCRIPT, "git-sync", path], time="00:15:00", mem="2G"
+    )
     try:
-        status = subprocess.run(
-            ["git", "-C", path, "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        if status.returncode != 0:
-            error_text = (status.stderr or status.stdout).strip().splitlines()
-            result["error"] = (
-                f"broken or unreadable git repository: {error_text[0] if error_text else ''}"
-            )
-            return result
-        result["uncommitted"] = len([line for line in status.stdout.splitlines() if line])
-
-        branch_proc = subprocess.run(
-            ["git", "-C", path, "symbolic-ref", "--short", "-q", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        branch = branch_proc.stdout.strip() or None
-        result["branch"] = branch
-
-        if branch:
-            ref_check = subprocess.run(
-                ["git", "-C", path, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{branch}"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if ref_check.returncode == 0:
-                count_proc = subprocess.run(
-                    ["git", "-C", path, "rev-list", "--count", f"origin/{branch}..HEAD"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                result["unpushed"] = int((count_proc.stdout or "0").strip() or 0)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     except subprocess.TimeoutExpired:
         result["error"] = "Timed out checking git status."
         return result
+    if proc.returncode != 0:
+        error_text = (proc.stderr or proc.stdout).strip().splitlines()
+        result["error"] = (
+            f"broken or unreadable git repository: {error_text[0] if error_text else ''}"
+        )
+        return result
 
-    result["ok"] = (
-        result["error"] is None and result["uncommitted"] == 0 and result["unpushed"] == 0
-    )
+    branch, untracked, unpushed = (proc.stdout.rstrip("\n").split("\t") + ["", "0", "0"])[:3]
+    result["branch"] = branch or None
+    result["uncommitted"] = int(untracked or 0)
+    result["unpushed"] = int(unpushed or 0)
+    result["ok"] = result["uncommitted"] == 0 and result["unpushed"] == 0
     return result
 
 
@@ -125,7 +124,8 @@ def _pipeline_completeness_status(cohort_cfg: dict[str, Any], base_dir: Path) ->
         cmd.extend(["--sessions", ",".join(expected_sessions)])
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=600, cwd=str(base_dir)
+            login_node_hygiene.compute_node_cmd(cmd, time="00:15:00", mem="4G"),
+            capture_output=True, text=True, timeout=900, cwd=str(base_dir),
         )
     except subprocess.TimeoutExpired:
         return {
@@ -163,26 +163,6 @@ def _pipeline_completeness_status(cohort_cfg: dict[str, Any], base_dir: Path) ->
         "stats": pipeline_result.get("stats"),
         "error": None,
     }
-
-
-def _parse_open_slurm_jobs(stdout: str) -> list[dict[str, str]]:
-    """Parse the plain-text table `datalad slurm-finish --list-open-jobs`
-    prints, e.g.:
-        The following jobs are open:
-
-        slurm-job-id   slurm-job-status
-        5352559        FAILED
-    """
-    jobs = []
-    for line in stdout.splitlines():
-        parts = line.split()
-        if len(parts) != 2:
-            continue
-        job_id, status = parts
-        if job_id.lower() == "slurm-job-id":
-            continue
-        jobs.append({"job_id": job_id, "status": status})
-    return jobs
 
 
 def _run_cohort_async(job_id: str, cmd: list[str], log_file: Path) -> None:
@@ -427,210 +407,6 @@ def register_cohort_routes(
         gpu_warning = app_profiles.check_gpu_request_feasible(cohort_cfg.get("hpc", {}))
         return jsonify({"config": cohort_cfg, "gpu_warning": gpu_warning})
 
-    @app.route("/cohort/check_open_jobs", methods=["GET"])
-    def cohort_check_open_jobs():
-        """Report any datalad-slurm jobs left open (unfinished) in this
-        project's output dataset -- e.g. a crashed slurm-finish job leaves
-        the previous slurm-schedule's outputs permanently claimed, which
-        makes every subsequent `datalad slurm-schedule` fail with a cryptic
-        "conflicting outputs" error until someone closes it out manually.
-        """
-        project_id = (request.args.get("project_id") or "").strip()
-        pipeline_id = (request.args.get("pipeline_id") or "").strip()
-        max_concurrent = request.args.get("max_concurrent")
-
-        cohort_cfg, error_response = _build_cohort_config(
-            project_id, pipeline_id, max_concurrent
-        )
-        if error_response:
-            return error_response
-
-        output_dir = cohort_cfg["paths"]["output_dir"]
-        result: dict[str, Any] = {
-            "dataset": cohort_cfg["datasets"][0],
-            "output_dir": output_dir,
-            "open_jobs": [],
-            "error": None,
-        }
-
-        if not (Path(output_dir) / ".datalad").is_dir():
-            result["error"] = "Output dataset not cloned yet -- run Setup first."
-            return jsonify(result)
-
-        # annex-slurm-managed datasets (see annex-slurm/README, docs/
-        # superpowers/specs/2026-09-09-annex-slurm-design.md) keep no
-        # bookkeeping DB -- SLURM's own squeue/sacct is the only "what's
-        # running" state. Calling `datalad slurm-finish --list-open-jobs`
-        # here would hang the same way `git status` does on these repos
-        # (see lib_clone_check.sh's matching marker check) and, even bounded
-        # by the timeout below, leaves an orphaned git-annex filter-process
-        # behind -- confirmed real incident, 2026-09-10.
-        if (Path(output_dir) / ".annex-slurm-managed").is_file():
-            result["error"] = (
-                "annex-slurm-managed dataset: no bookkeeping DB to list. "
-                "Check job status directly via squeue/sacct."
-            )
-            return jsonify(result)
-
-        try:
-            proc = subprocess.run(
-                ["datalad", "slurm-finish", "--list-open-jobs"],
-                cwd=output_dir,
-                capture_output=True,
-                text=True,
-                timeout=20,
-                env=_datalad_subprocess_env(),
-            )
-            result["open_jobs"] = _parse_open_slurm_jobs(proc.stdout)
-        except subprocess.TimeoutExpired:
-            result["error"] = "Timed out checking datalad-slurm job status."
-        except FileNotFoundError:
-            result["error"] = "datalad executable not found."
-
-        return jsonify(result)
-
-    @app.route("/cohort/close_open_jobs", methods=["POST"])
-    def cohort_close_open_jobs():
-        """Close failed/cancelled datalad-slurm jobs so a new slurm-schedule
-        stops being rejected for "conflicting outputs". Never touches
-        pending or running jobs (datalad-slurm itself refuses to).
-
-        Scopes each close to its own --slurm-job-id rather than one bulk
-        `slurm-finish --commit-failed-jobs` call. Without --slurm-job-id,
-        slurm-finish processes EVERY still-open job in the dataset's
-        bookkeeping DB, not just the ones this dataset's operator actually
-        wants closed -- confirmed real incident (134_subregions, job
-        5611881/5612206): an unscoped call swept in an ancient unrelated
-        open-job entry, which failed to commit and took the entire call
-        down with it (241,531 "uncommitted" files), leaving even the
-        intended job un-closed. Same root cause as the main finish path's
-        --slurm-job-id fix; see that call site's comment. Closing one job
-        id at a time means a single bad legacy entry can only fail its own
-        close, not the whole batch.
-
-        Uses --commit-failed-jobs, NOT --close-failed-jobs. Read literally,
-        both flags sound like they'd do the same thing for a FAILED/CANCELLED
-        job, but datalad_slurm's finish_cmd() treats them very differently:
-        --close-failed-jobs alone removes the job's DB entry and returns
-        immediately, *never* calling Save on the job's declared outputs. For
-        a TIMEOUT'd array job where some elements genuinely completed and
-        wrote real output before timing out, that output is then silently
-        abandoned as untracked -- confirmed real incident (2026-09-01,
-        megastudy_openneuro mriqc): 5 datasets closed cleanly per this
-        route's own scoping fix, yet each left 2-11 untracked paths behind,
-        because --close-failed-jobs never attempted to save them.
-        --commit-failed-jobs instead falls through to the same Save.__call__
-        the normal (all-COMPLETED) finish path uses, committing whatever
-        output exists before removing the DB entry, and DB removal already
-        runs after that save (scripts/patches/
-        datalad_slurm_finish_db_removal_order.patch, applied to
-        .datalad-slurm-venv). It implies close_failed_jobs, so passing both
-        flags together is redundant.
-        """
-        data = request.get_json(silent=True) or {}
-        project_id = (data.get("project_id") or "").strip()
-        pipeline_id = (data.get("pipeline_id") or "").strip()
-        max_concurrent = data.get("max_concurrent")
-
-        cohort_cfg, error_response = _build_cohort_config(
-            project_id, pipeline_id, max_concurrent
-        )
-        if error_response:
-            return error_response
-
-        output_dir = cohort_cfg["paths"]["output_dir"]
-        if not (Path(output_dir) / ".datalad").is_dir():
-            return (
-                jsonify({"ok": False, "error": "Output dataset not cloned yet -- run Setup first."}),
-                400,
-            )
-
-        # See the matching check in cohort_check_open_jobs -- annex-slurm-
-        # managed datasets have no bookkeeping DB and nothing to close.
-        if (Path(output_dir) / ".annex-slurm-managed").is_file():
-            return jsonify({
-                "ok": True,
-                "output": "annex-slurm-managed dataset: no bookkeeping DB, nothing to close. "
-                          "Check job status directly via squeue/sacct.",
-            })
-
-        try:
-            list_proc = subprocess.run(
-                ["datalad", "slurm-finish", "--list-open-jobs"],
-                cwd=output_dir,
-                capture_output=True,
-                text=True,
-                timeout=20,
-                env=_datalad_subprocess_env(),
-            )
-        except subprocess.TimeoutExpired:
-            return jsonify({"ok": False, "error": "Timed out listing open jobs."}), 504
-
-        closeable = [
-            j
-            for j in _parse_open_slurm_jobs(list_proc.stdout)
-            if j["status"] not in ("RUNNING", "PENDING")
-        ]
-        if not closeable:
-            return jsonify({"ok": True, "output": "No closeable (failed/cancelled) open jobs found."})
-
-        # Wall-clock budget for the whole loop, not just each subprocess call.
-        # --commit-failed-jobs (unlike the --close-failed-jobs this replaced)
-        # can now involve a real `datalad save` of a stale job's leftover
-        # output, so each of these calls is no longer a cheap metadata-only
-        # op -- with enough stale jobs, a naive "attempt every one" loop can
-        # tie up one of this GUI's few synchronous worker threads for
-        # minutes, and risks a browser/reverse-proxy timeout cutting the
-        # request off mid-slurm-finish -- the exact interrupted-mid-finish
-        # failure mode this whole fix exists to avoid, just reintroduced via
-        # the HTTP layer instead of SLURM wallclock. Stop and report what's
-        # left instead; re-POSTing the route picks up where this left off,
-        # since already-closed jobs won't be in --list-open-jobs anymore.
-        BUDGET_SECONDS = 240
-        start = time.monotonic()
-
-        output_lines = []
-        all_ok = True
-        for i, job in enumerate(closeable):
-            if time.monotonic() - start > BUDGET_SECONDS:
-                remaining = len(closeable) - i
-                output_lines.append(
-                    f"--- stopped after {BUDGET_SECONDS}s budget: {remaining} job(s) "
-                    "not attempted -- re-run to continue ---"
-                )
-                all_ok = False
-                break
-
-            job_id = job["job_id"]
-            try:
-                proc = subprocess.run(
-                    [
-                        "datalad",
-                        "slurm-finish",
-                        "--commit-failed-jobs",
-                        "--slurm-job-id",
-                        job_id,
-                        "-m",
-                        f"Close stale failed/cancelled job {job_id}",
-                    ],
-                    cwd=output_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    env=_datalad_subprocess_env(),
-                )
-            except subprocess.TimeoutExpired:
-                all_ok = False
-                output_lines.append(f"--- job {job_id}: TIMED OUT ---")
-                continue
-            all_ok = all_ok and proc.returncode == 0
-            output_lines.append(
-                f"--- job {job_id} ({'ok' if proc.returncode == 0 else 'FAILED'}) ---\n"
-                + (proc.stdout or "") + (proc.stderr or "")
-            )
-
-        return jsonify({"ok": all_ok, "output": "\n".join(output_lines)})
-
     @app.route("/cohort/check_storage_sync", methods=["GET"])
     def cohort_check_storage_sync():
         """Read-only: reports whether this project's output clone is fully
@@ -685,8 +461,7 @@ def register_cohort_routes(
         structure stays intact, so a later run can `datalad get` again
         without a full re-clone. Gated on the output clone being fully
         synced, re-verified here server-side rather than trusting an
-        earlier GET check -- unlike close_open_jobs (which only closes
-        already-dead jobs), this is destructive if wrong.
+        earlier GET check -- this is destructive if wrong.
         """
         data = request.get_json(silent=True) or {}
         project_id = (data.get("project_id") or "").strip()
@@ -761,11 +536,13 @@ def register_cohort_routes(
                 continue
             try:
                 proc = subprocess.run(
-                    ["datalad", "drop", "-d", path, "-r", "."],
+                    login_node_hygiene.compute_node_cmd(
+                        ["datalad", "drop", "-d", path, "-r", "."], time="00:30:00", mem="4G"
+                    ),
                     cwd=path,
                     capture_output=True,
                     text=True,
-                    timeout=1800,
+                    timeout=2400,  # 30 min srun limit + scheduling latency
                     env=_datalad_subprocess_env(),
                 )
                 results[label] = {
@@ -827,6 +604,13 @@ def register_cohort_routes(
             cmd.append("--resume")
         if pilot:
             cmd.append("--pilot")
+        # setup/submit clone, save, prefetch and slurm-schedule: real work.
+        # In the allocation run_prefetch sees SLURM_JOB_ID and runs inline.
+        # `status` is sacct only and a dry run only prints -- both stay here.
+        if command != "status" and not dry_run:
+            cmd = login_node_hygiene.compute_node_cmd(
+                cmd, time="2-00:00:00", mem="8G", cpus=2
+            )
 
         with _cohort_jobs_lock:
             _cohort_jobs[job_id] = {
